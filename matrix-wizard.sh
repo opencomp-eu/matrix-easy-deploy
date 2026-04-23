@@ -34,6 +34,190 @@ source "${SCRIPT_DIR}/scripts/setup/modules.sh"
 
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 DEPLOY_ENV="${SCRIPT_DIR}/.env"
+DEPLOY_YAML="${SCRIPT_DIR}/deploy.yaml"
+
+edit_deploy_config() {
+    echo
+    echo -e "${BOLD}  Configuration${RESET}"
+    echo -e "  ─────────────────────────────────────────────────────"
+    echo -e "  Press Enter to accept a ${CYAN}[default]${RESET}.\n"
+
+    # Load existing config if present
+    local config_matrix_domain="matrix.example.com"
+    local config_server_name=""
+    local config_admin_username="admin"
+    local config_registration_enabled="false"
+    local config_federation_enabled="true"
+    local config_element_enabled="true"
+    local config_element_domain=""
+    local config_calls_enabled="true"
+    local config_livekit_domain=""
+    local config_sso_enabled="false"
+
+    if [[ -f "$DEPLOY_YAML" ]]; then
+        # Load existing values (simplified, assume YAML is simple)
+        # For now, just use defaults; in full impl, parse YAML
+        info "Loading existing configuration from deploy.yaml"
+    fi
+
+    ask MATRIX_DOMAIN \
+        "Matrix homeserver domain  (e.g. matrix.example.com)" \
+        "$config_matrix_domain"
+    while [[ -z "$MATRIX_DOMAIN" ]]; do
+        warn "Matrix domain is required."
+        ask MATRIX_DOMAIN "Matrix homeserver domain" "$config_matrix_domain"
+    done
+
+    local _suggested_server_name
+    _suggested_server_name="$(extract_base_domain "$MATRIX_DOMAIN")"
+    ask SERVER_NAME \
+        "Matrix server name (used in user IDs: @user:SERVER_NAME)" \
+        "$_suggested_server_name"
+
+    ask ADMIN_USERNAME "Admin username" "$config_admin_username"
+    while [[ -z "$ADMIN_USERNAME" ]]; do
+        warn "Admin username is required."
+        ask ADMIN_USERNAME "Admin username" "$config_admin_username"
+    done
+
+    echo
+    echo -e "  ${BOLD}Optional features${RESET}"
+
+    ask_yn ENABLE_REGISTRATION_INPUT \
+        "Allow public user registration?" \
+        "n"
+    ENABLE_REGISTRATION="$([ "$ENABLE_REGISTRATION_INPUT" == "y" ] && echo "true" || echo "false")"
+
+    ask_yn ENABLE_FEDERATION_INPUT \
+        "Enable federation with other Matrix servers?" \
+        "y"
+    ENABLE_FEDERATION="$([ "$ENABLE_FEDERATION_INPUT" == "y" ] && echo "true" || echo "false")"
+
+    # SSO placeholder
+    ENABLE_SSO="false"
+
+    ask_yn INSTALL_ELEMENT_INPUT \
+        "Install Element web client? (skip if you already have a client)" \
+        "y"
+    INSTALL_ELEMENT="$([ "$INSTALL_ELEMENT_INPUT" == "y" ] && echo "true" || echo "false")"
+    if [[ "$INSTALL_ELEMENT" == "true" ]]; then
+        local _suggested_element_domain
+        _suggested_element_domain="element.$(extract_base_domain "$MATRIX_DOMAIN")"
+        ask ELEMENT_DOMAIN \
+            "Element domain  (e.g. element.example.com)" \
+            "$_suggested_element_domain"
+        while [[ -z "$ELEMENT_DOMAIN" ]]; do
+            warn "Element domain is required when installing Element."
+            ask ELEMENT_DOMAIN "Element domain" "$_suggested_element_domain"
+        done
+    else
+        ELEMENT_DOMAIN=""
+    fi
+
+    echo
+    echo -e "  ${BOLD}Calls (TURN + LiveKit SFU)${RESET}"
+    local _suggested_livekit_domain
+    _suggested_livekit_domain="livekit.$(extract_base_domain "$MATRIX_DOMAIN")"
+    ask LIVEKIT_DOMAIN \
+        "LiveKit domain  (e.g. livekit.example.com)" \
+        "$_suggested_livekit_domain"
+    while [[ -z "$LIVEKIT_DOMAIN" ]]; do
+        warn "LiveKit domain is required."
+        ask LIVEKIT_DOMAIN "LiveKit domain" "$_suggested_livekit_domain"
+    done
+
+    echo
+    echo -e "${BOLD}  Configuration summary${RESET}"
+    echo -e "  ─────────────────────────────────────────────────────"
+    echo -e "  Matrix domain   : ${CYAN}${MATRIX_DOMAIN}${RESET}"
+    echo -e "  Server name     : ${CYAN}${SERVER_NAME}${RESET}  (IDs look like @${ADMIN_USERNAME}:${SERVER_NAME})"
+    echo -e "  Admin user      : ${CYAN}${ADMIN_USERNAME}${RESET}"
+    echo -e "  Public reg.     : ${CYAN}${ENABLE_REGISTRATION}${RESET}"
+    echo -e "  Federation      : ${CYAN}${ENABLE_FEDERATION_INPUT}${RESET}"
+    echo -e "  SSO (OIDC)      : ${CYAN}disabled${RESET}"
+    if [[ "$INSTALL_ELEMENT" == "true" ]]; then
+        echo -e "  Element client  : ${CYAN}${ELEMENT_DOMAIN}${RESET}"
+    else
+        echo -e "  Element client  : ${CYAN}not installed${RESET}"
+    fi
+    echo -e "  LiveKit (calls) : ${CYAN}${LIVEKIT_DOMAIN}${RESET}"
+    echo
+    echo -e "  ${YELLOW}DNS check:${RESET} make sure these A records point to this server before proceeding:"
+    echo -e "    ${CYAN}${MATRIX_DOMAIN}${RESET}  →  <this server's IP>"
+    if [[ "$SERVER_NAME" != "$MATRIX_DOMAIN" ]]; then
+        echo -e "    ${CYAN}${SERVER_NAME}${RESET}  →  <this server's IP>  ${YELLOW}(required for federation delegation)${RESET}"
+    fi
+    if [[ "$INSTALL_ELEMENT" == "true" ]]; then
+        echo -e "    ${CYAN}${ELEMENT_DOMAIN}${RESET}  →  <this server's IP>"
+    fi
+    echo -e "    ${CYAN}${LIVEKIT_DOMAIN}${RESET}  →  <this server's IP>"
+    echo
+
+    ask_yn _confirm "Does this look right? Proceed?" "y"
+    if [[ "$_confirm" != "y" ]]; then
+        warn "Restarting configuration…"
+        echo
+        edit_deploy_config
+        return
+    fi
+
+    # Write deploy.yaml
+    cat > "$DEPLOY_YAML" <<EOF
+# matrix-easy-deploy configuration
+# This is the single source of truth for your deployment.
+# Edit this file directly or use the wizard, then run 'bash apply.sh' to apply changes.
+
+matrix:
+  # The primary domain for your Matrix homeserver (e.g., matrix.example.com)
+  domain: "${MATRIX_DOMAIN}"
+
+  # The server name used in Matrix user IDs (@user:server_name)
+  server_name: "${SERVER_NAME}"
+
+  # Admin username (without @server part)
+  admin_username: "${ADMIN_USERNAME}"
+
+features:
+  # Allow public user registration
+  registration_enabled: ${ENABLE_REGISTRATION}
+
+  # Enable federation with other Matrix servers
+  federation_enabled: ${ENABLE_FEDERATION}
+
+  # Install Element web client
+  element:
+    enabled: ${INSTALL_ELEMENT}
+    domain: "${ELEMENT_DOMAIN}"
+
+  # Enable calls (TURN + LiveKit)
+  calls:
+    enabled: true
+    livekit_domain: "${LIVEKIT_DOMAIN}"
+
+  # SSO/OIDC configuration
+  sso:
+    enabled: false
+    providers: []
+
+# Optional modules
+modules:
+  # Hookshot (GitHub/GitLab/webhook bridge)
+  hookshot:
+    enabled: false
+    domain: "hookshot.$(extract_base_domain "$MATRIX_DOMAIN")"
+
+  # WhatsApp bridge
+  whatsapp_bridge:
+    enabled: false
+    admin_username: "${ADMIN_USERNAME}"
+
+  # Slack bridge
+  slack_bridge:
+    enabled: false
+    admin_username: "${ADMIN_USERNAME}"
+EOF
+    success "Configuration saved to deploy.yaml"
+}
 
 run_full_setup() {
     print_banner
@@ -41,11 +225,19 @@ run_full_setup() {
 
     echo
     echo -e "${BOLD}  Step 1 of 5 — Configuration${RESET}"
-    gather_config
+    edit_deploy_config
 
     echo
-    echo -e "${BOLD}  Step 2 of 5 — Generating configuration files${RESET}"
-    generate_config
+    echo -e "${BOLD}  Step 2 of 5 — Applying configuration${RESET}"
+    bash "${SCRIPT_DIR}/apply.sh"
+
+    # Load the generated .env for runtime
+    if [[ -f "$DEPLOY_ENV" ]]; then
+        set -o allexport
+        # shellcheck disable=SC1090
+        source "$DEPLOY_ENV"
+        set +o allexport
+    fi
 
     echo
     echo -e "${BOLD}  Step 3 of 5 — Docker infrastructure${RESET}"

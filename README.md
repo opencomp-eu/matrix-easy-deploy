@@ -121,20 +121,40 @@ This project makes setup even easier. It doesn't take power away from you — bu
 ```bash
 git clone https://github.com/nordwestt/matrix-easy-deploy-kit
 cd matrix-easy-deploy-kit
+```
+
+### Option 1: Use the interactive wizard
+
+```bash
 bash matrix-wizard.sh
 ```
 
-`matrix-wizard.sh` now opens an interactive operator wizard where you can:
-- run first-time setup,
+The wizard opens an interactive menu where you can:
+- run first-time setup (edits `deploy.yaml` and applies),
 - install/configure modules,
 - create users/admins,
 - start/stop/update services,
 - and tail logs.
 
-If you want to jump straight into first-time setup without the menu:
+For first-time setup without the menu:
 
 ```bash
 bash matrix-wizard.sh --full-setup
+```
+
+### Option 2: Edit config file directly
+
+1. Edit `deploy.yaml` with your settings
+2. Apply the configuration:
+
+```bash
+bash apply.sh
+```
+
+3. Start the services:
+
+```bash
+bash start.sh
 ```
 
 ### Run with Docker (single command)
@@ -155,6 +175,9 @@ What this does:
 - opens the same interactive `matrix-wizard.sh` flow.
 
 The wizard will ask you:
+
+1. **Your Matrix domain** — something like `matrix.example.com`
+2. **Your server name** — appears in Matrix IDs like `@you:example.com` (defaults to the base domain)
 
 1. **Your Matrix domain** — something like `matrix.example.com`
 2. **Your server name** — appears in Matrix IDs like `@you:example.com` (defaults to the base domain)
