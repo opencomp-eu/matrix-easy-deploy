@@ -154,9 +154,9 @@ setup_database() {
         die "POSTGRES_PASSWORD not found in .env. Please re-run the main wizard."
     fi
 
-    # Generate a dedicated bridge DB user + password
-    WA_DB_USER="mautrix_whatsapp"
-    WA_DB_PASSWORD="$(generate_secret)"
+    # Reuse existing credentials when present to keep re-runs idempotent.
+    WA_DB_USER="${WA_DB_USER:-mautrix_whatsapp}"
+    WA_DB_PASSWORD="${WA_DB_PASSWORD:-$(generate_secret)}"
     WA_DB_URI="postgres://${WA_DB_USER}:${WA_DB_PASSWORD}@matrix_postgres/${WA_DB_NAME}?sslmode=disable"
     export WA_DB_USER WA_DB_PASSWORD WA_DB_URI
 
@@ -176,24 +176,21 @@ setup_database() {
          END \$\$;" \
         2>&1 | sed 's/^/    /'
 
-    # Drop and recreate the database so we always start fresh
-    info "Dropping existing '${WA_DB_NAME}' database if present…"
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" matrix_postgres \
-        psql -U synapse -c \
-        "SELECT pg_terminate_backend(pid)
-           FROM pg_stat_activity
-          WHERE datname = '${WA_DB_NAME}' AND pid <> pg_backend_pid();" \
-        2>&1 | sed 's/^/    /'
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" matrix_postgres \
-        psql -U synapse -c \
-        "DROP DATABASE IF EXISTS ${WA_DB_NAME};" \
-        2>&1 | sed 's/^/    /'
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" matrix_postgres \
-        psql -U synapse -c \
-        "CREATE DATABASE ${WA_DB_NAME} OWNER ${WA_DB_USER}
-         ENCODING 'UTF8' LC_COLLATE='C' LC_CTYPE='C'
-         TEMPLATE template0;" \
-        2>&1 | sed 's/^/    /'
+    # Create database only when it does not already exist.
+    local _wa_db_exists
+    _wa_db_exists="$(docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" matrix_postgres \
+        psql -U synapse -tAc "SELECT 1 FROM pg_database WHERE datname = '${WA_DB_NAME}'" | tr -d '[:space:]')"
+    if [[ "${_wa_db_exists}" != "1" ]]; then
+        info "Creating database '${WA_DB_NAME}'…"
+        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" matrix_postgres \
+            psql -U synapse -c \
+            "CREATE DATABASE ${WA_DB_NAME} OWNER ${WA_DB_USER}
+             ENCODING 'UTF8' LC_COLLATE='C' LC_CTYPE='C'
+             TEMPLATE template0;" \
+            2>&1 | sed 's/^/    /'
+    else
+        info "Database '${WA_DB_NAME}' already exists — skipping create."
+    fi
 
     # Grant privileges
     docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" matrix_postgres \

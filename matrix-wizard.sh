@@ -42,22 +42,20 @@ edit_deploy_config() {
     echo -e "  ─────────────────────────────────────────────────────"
     echo -e "  Press Enter to accept a ${CYAN}[default]${RESET}.\n"
 
-    # Load existing config if present
+    # Load existing config defaults
     local config_matrix_domain="matrix.example.com"
-    local config_server_name=""
+    local config_server_name="example.com"
     local config_admin_username="admin"
-    local config_registration_enabled="false"
-    local config_federation_enabled="true"
-    local config_element_enabled="true"
+    local config_registration_default="n"
+    local config_federation_default="y"
+    local config_element_default="y"
     local config_element_domain=""
-    local config_calls_enabled="true"
+    local config_calls_default="y"
     local config_livekit_domain=""
-    local config_sso_enabled="false"
 
     if [[ -f "$DEPLOY_YAML" ]]; then
-        # Load existing values (simplified, assume YAML is simple)
-        # For now, just use defaults; in full impl, parse YAML
         info "Loading existing configuration from deploy.yaml"
+        eval "$(python3 "${SCRIPT_DIR}/scripts/config_edit.py" --deploy-yaml "$DEPLOY_YAML" --print-wizard-defaults)"
     fi
 
     ask MATRIX_DOMAIN \
@@ -72,7 +70,7 @@ edit_deploy_config() {
     _suggested_server_name="$(extract_base_domain "$MATRIX_DOMAIN")"
     ask SERVER_NAME \
         "Matrix server name (used in user IDs: @user:SERVER_NAME)" \
-        "$_suggested_server_name"
+        "${config_server_name:-$_suggested_server_name}"
 
     ask ADMIN_USERNAME "Admin username" "$config_admin_username"
     while [[ -z "$ADMIN_USERNAME" ]]; do
@@ -85,12 +83,12 @@ edit_deploy_config() {
 
     ask_yn ENABLE_REGISTRATION_INPUT \
         "Allow public user registration?" \
-        "n"
+        "$config_registration_default"
     ENABLE_REGISTRATION="$([ "$ENABLE_REGISTRATION_INPUT" == "y" ] && echo "true" || echo "false")"
 
     ask_yn ENABLE_FEDERATION_INPUT \
         "Enable federation with other Matrix servers?" \
-        "y"
+        "$config_federation_default"
     ENABLE_FEDERATION="$([ "$ENABLE_FEDERATION_INPUT" == "y" ] && echo "true" || echo "false")"
 
     # SSO placeholder
@@ -98,17 +96,17 @@ edit_deploy_config() {
 
     ask_yn INSTALL_ELEMENT_INPUT \
         "Install Element web client? (skip if you already have a client)" \
-        "y"
+        "$config_element_default"
     INSTALL_ELEMENT="$([ "$INSTALL_ELEMENT_INPUT" == "y" ] && echo "true" || echo "false")"
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         local _suggested_element_domain
         _suggested_element_domain="element.$(extract_base_domain "$MATRIX_DOMAIN")"
         ask ELEMENT_DOMAIN \
             "Element domain  (e.g. element.example.com)" \
-            "$_suggested_element_domain"
+            "${config_element_domain:-$_suggested_element_domain}"
         while [[ -z "$ELEMENT_DOMAIN" ]]; do
             warn "Element domain is required when installing Element."
-            ask ELEMENT_DOMAIN "Element domain" "$_suggested_element_domain"
+            ask ELEMENT_DOMAIN "Element domain" "${config_element_domain:-$_suggested_element_domain}"
         done
     else
         ELEMENT_DOMAIN=""
@@ -116,15 +114,23 @@ edit_deploy_config() {
 
     echo
     echo -e "  ${BOLD}Calls (TURN + LiveKit SFU)${RESET}"
-    local _suggested_livekit_domain
-    _suggested_livekit_domain="livekit.$(extract_base_domain "$MATRIX_DOMAIN")"
-    ask LIVEKIT_DOMAIN \
-        "LiveKit domain  (e.g. livekit.example.com)" \
-        "$_suggested_livekit_domain"
-    while [[ -z "$LIVEKIT_DOMAIN" ]]; do
-        warn "LiveKit domain is required."
-        ask LIVEKIT_DOMAIN "LiveKit domain" "$_suggested_livekit_domain"
-    done
+    ask_yn ENABLE_CALLS_INPUT \
+        "Enable TURN + LiveKit calls services?" \
+        "$config_calls_default"
+    ENABLE_CALLS="$([ "$ENABLE_CALLS_INPUT" == "y" ] && echo "true" || echo "false")"
+    if [[ "$ENABLE_CALLS" == "true" ]]; then
+        local _suggested_livekit_domain
+        _suggested_livekit_domain="livekit.$(extract_base_domain "$MATRIX_DOMAIN")"
+        ask LIVEKIT_DOMAIN \
+            "LiveKit domain  (e.g. livekit.example.com)" \
+            "${config_livekit_domain:-$_suggested_livekit_domain}"
+        while [[ -z "$LIVEKIT_DOMAIN" ]]; do
+            warn "LiveKit domain is required when calls are enabled."
+            ask LIVEKIT_DOMAIN "LiveKit domain" "${config_livekit_domain:-$_suggested_livekit_domain}"
+        done
+    else
+        LIVEKIT_DOMAIN=""
+    fi
 
     echo
     echo -e "${BOLD}  Configuration summary${RESET}"
@@ -140,7 +146,11 @@ edit_deploy_config() {
     else
         echo -e "  Element client  : ${CYAN}not installed${RESET}"
     fi
-    echo -e "  LiveKit (calls) : ${CYAN}${LIVEKIT_DOMAIN}${RESET}"
+    if [[ "$ENABLE_CALLS" == "true" ]]; then
+        echo -e "  LiveKit (calls) : ${CYAN}${LIVEKIT_DOMAIN}${RESET}"
+    else
+        echo -e "  LiveKit (calls) : ${CYAN}disabled${RESET}"
+    fi
     echo
     echo -e "  ${YELLOW}DNS check:${RESET} make sure these A records point to this server before proceeding:"
     echo -e "    ${CYAN}${MATRIX_DOMAIN}${RESET}  →  <this server's IP>"
@@ -150,7 +160,9 @@ edit_deploy_config() {
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         echo -e "    ${CYAN}${ELEMENT_DOMAIN}${RESET}  →  <this server's IP>"
     fi
-    echo -e "    ${CYAN}${LIVEKIT_DOMAIN}${RESET}  →  <this server's IP>"
+    if [[ "$ENABLE_CALLS" == "true" ]]; then
+        echo -e "    ${CYAN}${LIVEKIT_DOMAIN}${RESET}  →  <this server's IP>"
+    fi
     echo
 
     ask_yn _confirm "Does this look right? Proceed?" "y"
@@ -161,61 +173,18 @@ edit_deploy_config() {
         return
     fi
 
-    # Write deploy.yaml
-    cat > "$DEPLOY_YAML" <<EOF
-# matrix-easy-deploy configuration
-# This is the single source of truth for your deployment.
-# Edit this file directly or use the wizard, then run 'bash apply.sh' to apply changes.
-
-matrix:
-  # The primary domain for your Matrix homeserver (e.g., matrix.example.com)
-  domain: "${MATRIX_DOMAIN}"
-
-  # The server name used in Matrix user IDs (@user:server_name)
-  server_name: "${SERVER_NAME}"
-
-  # Admin username (without @server part)
-  admin_username: "${ADMIN_USERNAME}"
-
-features:
-  # Allow public user registration
-  registration_enabled: ${ENABLE_REGISTRATION}
-
-  # Enable federation with other Matrix servers
-  federation_enabled: ${ENABLE_FEDERATION}
-
-  # Install Element web client
-  element:
-    enabled: ${INSTALL_ELEMENT}
-    domain: "${ELEMENT_DOMAIN}"
-
-  # Enable calls (TURN + LiveKit)
-  calls:
-    enabled: true
-    livekit_domain: "${LIVEKIT_DOMAIN}"
-
-  # SSO/OIDC configuration
-  sso:
-    enabled: false
-    providers: []
-
-# Optional modules
-modules:
-  # Hookshot (GitHub/GitLab/webhook bridge)
-  hookshot:
-    enabled: false
-    domain: "hookshot.$(extract_base_domain "$MATRIX_DOMAIN")"
-
-  # WhatsApp bridge
-  whatsapp_bridge:
-    enabled: false
-    admin_username: "${ADMIN_USERNAME}"
-
-  # Slack bridge
-  slack_bridge:
-    enabled: false
-    admin_username: "${ADMIN_USERNAME}"
-EOF
+        python3 "${SCRIPT_DIR}/scripts/config_edit.py" \
+                --deploy-yaml "$DEPLOY_YAML" \
+                --set-core \
+                --matrix-domain "$MATRIX_DOMAIN" \
+                --server-name "$SERVER_NAME" \
+                --admin-username "$ADMIN_USERNAME" \
+                --registration-enabled "$ENABLE_REGISTRATION" \
+                --federation-enabled "$ENABLE_FEDERATION" \
+                --install-element "$INSTALL_ELEMENT" \
+                --element-domain "$ELEMENT_DOMAIN" \
+                --calls-enabled "$ENABLE_CALLS" \
+                --livekit-domain "$LIVEKIT_DOMAIN"
     success "Configuration saved to deploy.yaml"
 }
 
@@ -323,7 +292,15 @@ run_module_wizard() {
 
     if [[ "$choice" =~ ^[0-9]+$ ]]; then
         if (( choice >= 1 && choice <= ${#modules[@]} )); then
-            run_module_setup "${modules[$((choice - 1))]}"
+            local selected_module
+            selected_module="${modules[$((choice - 1))]}"
+            info "Marking module '${selected_module}' as enabled in deploy.yaml…"
+            python3 "${SCRIPT_DIR}/scripts/config_edit.py" \
+                --deploy-yaml "${DEPLOY_YAML}" \
+                --enable-module "${selected_module}"
+            info "Applying updated configuration…"
+            bash "${SCRIPT_DIR}/apply.sh"
+            run_module_setup "$selected_module"
             pause_screen
             return
         fi
@@ -336,6 +313,12 @@ run_module_wizard() {
                 pause_screen
                 return
             fi
+            info "Marking module '${module_name}' as enabled in deploy.yaml…"
+            python3 "${SCRIPT_DIR}/scripts/config_edit.py" \
+                --deploy-yaml "${DEPLOY_YAML}" \
+                --enable-module "${module_name}"
+            info "Applying updated configuration…"
+            bash "${SCRIPT_DIR}/apply.sh"
             run_module_setup "$module_name"
             pause_screen
             return

@@ -6,6 +6,9 @@ source "${SCRIPT_DIR}/scripts/lib.sh"
 
 # Load settings from .env so we know what's actually installed
 INSTALL_ELEMENT="true"   # default: assume Element is present if .env is missing
+HOOKSHOT_ENABLED="false"
+WHATSAPP_BRIDGE_ENABLED="false"
+SLACK_BRIDGE_ENABLED="false"
 if [[ -f "${SCRIPT_DIR}/.env" ]]; then
     # shellcheck disable=SC1090
     source "${SCRIPT_DIR}/.env"
@@ -25,15 +28,15 @@ if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
     docker pull vectorim/element-web:latest
 fi
 
-if [[ -n "${HOOKSHOT_DOMAIN:-}" && -f "${SCRIPT_DIR}/modules/hookshot/hookshot/config.yml" ]]; then
+if [[ "${HOOKSHOT_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/hookshot/hookshot/config.yml" ]]; then
     docker pull halfshot/matrix-hookshot:latest
 fi
 
-if [[ -f "${SCRIPT_DIR}/modules/whatsapp-bridge/whatsapp/config.yaml" ]]; then
+if [[ "${WHATSAPP_BRIDGE_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/whatsapp-bridge/whatsapp/config.yaml" ]]; then
     docker pull dock.mau.dev/mautrix/whatsapp:latest
 fi
 
-if [[ -f "${SCRIPT_DIR}/modules/slack-bridge/slack/config.yaml" ]]; then
+if [[ "${SLACK_BRIDGE_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/slack-bridge/slack/config.yaml" ]]; then
     docker pull dock.mau.dev/mautrix/slack:latest
 fi
 

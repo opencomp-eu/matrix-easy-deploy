@@ -1,0 +1,142 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+import yaml
+
+from scripts import config_edit
+
+
+class ConfigEditTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.deploy_yaml = self.root / "deploy.yaml"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_enable_module_in_existing_file(self):
+        config = {
+            "matrix": {
+                "domain": "matrix.example.com",
+                "server_name": "example.com",
+                "admin_username": "admin",
+            },
+            "modules": {
+                "hookshot": {"enabled": False, "domain": "hookshot.example.com"},
+                "whatsapp_bridge": {"enabled": False},
+                "slack_bridge": {"enabled": False},
+            },
+        }
+        self.deploy_yaml.write_text(yaml.safe_dump(config, sort_keys=False))
+
+        rc = config_edit.main([
+            "--deploy-yaml",
+            str(self.deploy_yaml),
+            "--enable-module",
+            "hookshot",
+        ])
+
+        self.assertEqual(rc, 0)
+        updated = yaml.safe_load(self.deploy_yaml.read_text())
+        self.assertTrue(updated["modules"]["hookshot"]["enabled"])
+
+    def test_enable_module_initializes_file_when_missing(self):
+        rc = config_edit.main([
+            "--deploy-yaml",
+            str(self.deploy_yaml),
+            "--enable-module",
+            "whatsapp-bridge",
+        ])
+
+        self.assertEqual(rc, 0)
+        updated = yaml.safe_load(self.deploy_yaml.read_text())
+        self.assertTrue(updated["modules"]["whatsapp_bridge"]["enabled"])
+
+    def test_set_core_updates_without_removing_modules(self):
+        initial = {
+            "matrix": {
+                "domain": "matrix.example.com",
+                "server_name": "example.com",
+                "admin_username": "admin",
+            },
+            "features": {
+                "registration_enabled": False,
+                "federation_enabled": True,
+                "element": {"enabled": True, "domain": "element.example.com"},
+                "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
+                "sso": {"enabled": True, "providers": [{"name": "Google"}]},
+            },
+            "modules": {
+                "hookshot": {"enabled": True, "domain": "hookshot.example.com"},
+            },
+        }
+        self.deploy_yaml.write_text(yaml.safe_dump(initial, sort_keys=False))
+
+        rc = config_edit.main([
+            "--deploy-yaml",
+            str(self.deploy_yaml),
+            "--set-core",
+            "--matrix-domain",
+            "matrix.new.example.com",
+            "--server-name",
+            "new.example.com",
+            "--admin-username",
+            "root",
+            "--registration-enabled",
+            "true",
+            "--federation-enabled",
+            "false",
+            "--install-element",
+            "false",
+            "--element-domain",
+            "",
+            "--calls-enabled",
+            "false",
+            "--livekit-domain",
+            "",
+        ])
+
+        self.assertEqual(rc, 0)
+        updated = yaml.safe_load(self.deploy_yaml.read_text())
+        self.assertEqual(updated["matrix"]["domain"], "matrix.new.example.com")
+        self.assertEqual(updated["matrix"]["server_name"], "new.example.com")
+        self.assertEqual(updated["matrix"]["admin_username"], "root")
+        self.assertTrue(updated["features"]["registration_enabled"])
+        self.assertFalse(updated["features"]["federation_enabled"])
+        self.assertFalse(updated["features"]["element"]["enabled"])
+        self.assertFalse(updated["features"]["calls"]["enabled"])
+        self.assertTrue(updated["modules"]["hookshot"]["enabled"])
+        self.assertTrue(updated["features"]["sso"]["enabled"])
+
+    def test_print_wizard_defaults_uses_existing_values(self):
+        initial = {
+            "matrix": {
+                "domain": "matrix.dev.local",
+                "server_name": "dev.local",
+                "admin_username": "operator",
+            },
+            "features": {
+                "registration_enabled": True,
+                "federation_enabled": False,
+                "element": {"enabled": False, "domain": ""},
+                "calls": {"enabled": True, "livekit_domain": "calls.dev.local"},
+            },
+        }
+        self.deploy_yaml.write_text(yaml.safe_dump(initial, sort_keys=False))
+
+        config = config_edit.load_or_init(self.deploy_yaml)
+        defaults = config_edit.emit_wizard_defaults(config)
+
+        self.assertIn("config_matrix_domain=matrix.dev.local", defaults)
+        self.assertIn("config_server_name=dev.local", defaults)
+        self.assertIn("config_admin_username=operator", defaults)
+        self.assertIn("config_registration_default=y", defaults)
+        self.assertIn("config_federation_default=n", defaults)
+        self.assertIn("config_element_default=n", defaults)
+        self.assertIn("config_calls_default=y", defaults)
+
+
+if __name__ == "__main__":
+    unittest.main()
