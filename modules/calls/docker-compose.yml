@@ -1,0 +1,27 @@
+services:
+  coturn:
+    image: coturn/coturn:latest
+    container_name: matrix_coturn
+    restart: unless-stopped
+    # host networking is required so coturn can bind UDP relay ports directly
+    # and report the correct external IP to WebRTC clients.
+    network_mode: host
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: matrix_livekit
+    restart: unless-stopped
+    command: --config /livekit.yaml
+    ports:
+      - "50000-50200:50000-50200/udp"   # WebRTC media relay
+    volumes:
+      - ./livekit/livekit.yaml:/livekit.yaml:ro
+    networks:
+      - caddy_net
+
+networks:
+  caddy_net:
+    external: true
+    name: caddy_net

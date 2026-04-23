@@ -1,0 +1,14 @@
+services:
+  draupnir:
+    image: gnuxie/draupnir:latest
+    container_name: matrix-draupnir
+    restart: unless-stopped
+    volumes:
+      - ./draupnir:/data
+    networks:
+      - caddy_net
+
+networks:
+  caddy_net:
+    external: true
+    name: caddy_net

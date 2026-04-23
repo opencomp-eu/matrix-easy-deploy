@@ -1,0 +1,27 @@
+services:
+  mautrix-whatsapp:
+    image: dock.mau.dev/mautrix/whatsapp:latest
+    container_name: mautrix-whatsapp
+    restart: unless-stopped
+    # No host-port bindings needed — Synapse reaches the bridge via caddy_net
+    # using the container name, and the bridge reaches Postgres via matrix_internal.
+    volumes:
+      # config.yaml, registration.yaml, and SQLite fallback all live here
+      - ./whatsapp:/data
+    networks:
+      - caddy_net
+      - matrix_internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:29318/_matrix/mau/live || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+networks:
+  caddy_net:
+    external: true
+    name: caddy_net
+  matrix_internal:
+    external: true
+    name: core_matrix_internal

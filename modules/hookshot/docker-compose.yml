@@ -1,0 +1,24 @@
+services:
+  hookshot:
+    image: halfshot/matrix-hookshot:latest
+    container_name: matrix-hookshot
+    restart: unless-stopped
+    # No host-port bindings needed — all traffic flows through the shared
+    # Docker networks (caddy_net for Caddy proxy + Synapse → Hookshot,
+    # matrix_internal for Hookshot → Synapse).
+    volumes:
+      # Contains config.yml, registration.yml, and passkey.pem
+      - ./hookshot:/data
+    networks:
+      - caddy_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+networks:
+  caddy_net:
+    external: true
+    name: caddy_net

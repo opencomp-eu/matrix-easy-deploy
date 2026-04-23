@@ -1,0 +1,30 @@
+# Secrets — never commit these
+.env
+
+# Rendered config files (generated from templates by setup.sh)
+caddy/Caddyfile
+modules/core/synapse/homeserver.yaml
+modules/core/element/config.json
+modules/core/synapse_data/*
+*.conf
+*.yaml
+*.yml
+*.pem
+
+# Generated Synapse signing key
+*.signing.key
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Cryptostore data for hookshot (if using the hookshot module)
+modules/hookshot/hookshot/cryptostore
+
+!docker-compose.yml
+!docker-compose.yaml
+!.github/workflows/*.yml

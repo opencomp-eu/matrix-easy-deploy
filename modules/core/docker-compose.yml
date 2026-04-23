@@ -1,0 +1,76 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: matrix_redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - matrix_internal
+      - caddy_net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: matrix_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: synapse
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - matrix_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: matrix_synapse
+    restart: unless-stopped
+    environment:
+      SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+    volumes:
+      - ./synapse_data:/data
+      - ./synapse/homeserver.yaml:/data/homeserver.yaml:ro
+      - ./synapse/log.config:/data/log.config:ro
+    networks:
+      - matrix_internal
+      - caddy_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # curl is not installed in the slim Synapse image; use Python instead.
+      # Port 8008 is bound on 0.0.0.0 inside the container so localhost works.
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8008/health\")' 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  element:
+    image: vectorim/element-web:latest
+    container_name: matrix_element
+    restart: unless-stopped
+    profiles:
+      - element
+    volumes:
+      - ./element/config.json:/app/config.json:ro
+    networks:
+      - caddy_net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  matrix_internal:
+  caddy_net:
+    external: true
+    name: caddy_net
