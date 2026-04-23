@@ -199,11 +199,11 @@ def generate_secret() -> str:
     return secrets.token_hex(32)
 
 
-def create_or_update_secrets(ctx: ApplyContext, existing: dict) -> dict:
+def create_or_update_secrets(ctx: ApplyContext, existing: dict, rotate: bool = False) -> dict:
     state = dict(existing)
 
     for key in DEFAULT_SECRET_KEYS:
-        if not state.get(key):
+        if rotate or not state.get(key):
             state[key] = generate_secret()
 
     # Static key kept for compatibility with current templates.
@@ -315,12 +315,12 @@ def reconcile_module_state(ctx: ApplyContext, config: dict) -> None:
         yaml.safe_dump(state, f, default_flow_style=False, sort_keys=True)
 
 
-def apply_configuration(ctx: ApplyContext, server_ip: str | None = None) -> None:
+def apply_configuration(ctx: ApplyContext, server_ip: str | None = None, rotate_secrets: bool = False) -> None:
     config = load_config(ctx)
     validate_config(config)
     derived = derive_values(config, server_ip=server_ip)
     existing = load_secrets(ctx)
-    saved = create_or_update_secrets(ctx, existing)
+    saved = create_or_update_secrets(ctx, existing, rotate=rotate_secrets)
     env_vars = build_env_vars(config, derived, saved)
     write_env_file(ctx, env_vars)
     render_templates(ctx, env_vars)
@@ -339,6 +339,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="Override detected server IP (useful in CI or tests)",
     )
+    parser.add_argument(
+        "--rotate-secrets",
+        action="store_true",
+        help="Rotate generated secrets intentionally (destructive for existing deployments)",
+    )
     return parser.parse_args(argv)
 
 
@@ -347,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
     project_root = Path(args.project_root).resolve() if args.project_root else Path(__file__).resolve().parent.parent
     ctx = ApplyContext(project_root)
 
-    apply_configuration(ctx, server_ip=args.server_ip)
+    apply_configuration(ctx, server_ip=args.server_ip, rotate_secrets=args.rotate_secrets)
     print("Configuration applied successfully.")
     print("Generated .env file and rendered templates.")
     return 0

@@ -97,6 +97,15 @@ class ApplyTests(unittest.TestCase):
             self.assertIn(key, second)
             self.assertEqual(first[key], second[key])
 
+    def test_rotate_secrets_changes_core_values(self):
+        ctx = apply.ApplyContext(self.root)
+        first = apply.create_or_update_secrets(ctx, {})
+        second = apply.create_or_update_secrets(ctx, first, rotate=True)
+
+        changed = [k for k in apply.DEFAULT_SECRET_KEYS if first[k] != second[k]]
+        self.assertTrue(changed)
+        self.assertEqual(second["LIVEKIT_KEY"], "matrix")
+
     def test_apply_configuration_writes_env_and_templates(self):
         self.write_config(self.sample_config())
         ctx = apply.ApplyContext(self.root)

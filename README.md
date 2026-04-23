@@ -178,9 +178,6 @@ The wizard will ask you:
 
 1. **Your Matrix domain** — something like `matrix.example.com`
 2. **Your server name** — appears in Matrix IDs like `@you:example.com` (defaults to the base domain)
-
-1. **Your Matrix domain** — something like `matrix.example.com`
-2. **Your server name** — appears in Matrix IDs like `@you:example.com` (defaults to the base domain)
 3. **Admin username and password**
 4. Whether to allow public registration
 5. Whether to enable federation
@@ -191,6 +188,19 @@ The wizard will ask you:
 10. For each provider: optional OIDC claim allowlist (org/group/domain control)
 11. Whether to install Element Web, and on which domain
 12. **Your LiveKit domain** — something like `livekit.example.com` (defaults to `livekit.<basedomain>`)
+
+### Configuration model
+
+- `deploy.yaml` is the operator-owned source of truth.
+- `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered templates, module state metadata).
+- Re-running `bash apply.sh` is idempotent by default: existing generated secrets are re-used.
+- To rotate generated secrets intentionally, use:
+
+```bash
+bash apply.sh --rotate-secrets
+```
+
+> `--rotate-secrets` is destructive for existing deployments unless you plan migration/restart carefully.
 
 ### Important: `MATRIX_DOMAIN` vs `SERVER_NAME`
 
@@ -424,16 +434,27 @@ docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 
 ---
 
-## Re-running setup
+## Re-applying configuration
 
-If you need to change your domain or reconfigure anything, open the wizard with `bash matrix-wizard.sh` and select `First setup (full wizard)`, or run the direct command below. It will regenerate all config files and restart services. If you already have data you want to preserve, stop first:
+If you need to change domains, feature flags, or module enablement:
+
+1. Edit `deploy.yaml` directly or use `bash matrix-wizard.sh`.
+2. Apply changes:
+
+```bash
+bash apply.sh
+```
+
+3. Restart services if needed:
 
 ```bash
 bash stop.sh
-bash matrix-wizard.sh --full-setup
+bash start.sh
 ```
 
-> Secrets (database password, signing keys, TURN shared secret, LiveKit API key, etc.) are re-generated each time you run setup. If you want to preserve an existing database, back it up first, or manually edit `.env` and the config files instead of re-running setup.
+By default, `apply.sh` preserves existing generated secrets and re-renders files deterministically from `deploy.yaml`.
+
+Need migration details from legacy setup behavior? See `MIGRATION.md`.
 
 ---
 
@@ -447,7 +468,7 @@ bash matrix-wizard.sh --module <module-name>
 
 You can also install modules from the interactive wizard (`bash matrix-wizard.sh` → `Install/configure module`).
 
-This calls the module's own `setup.sh`, which can ask its own questions, pull its own images, and register itself with the rest of the stack without touching the core configuration.
+This updates module desired state in `deploy.yaml`, runs `apply.sh`, then calls the module's own `setup.sh` for module-specific bootstrap (tokens, registration, etc.).
 
 ### Available modules
 
@@ -626,7 +647,7 @@ docker inspect matrix_postgres | grep -A 5 Health
 
 ## Security notes
 
-- Your `.env` file contains database credentials, TURN secrets, LiveKit API keys, and other internal secrets. It's in `.gitignore` — keep it that way.
+- Your `.env` file and `.matrix-easy-deploy/secrets.yaml` contain database credentials, TURN secrets, LiveKit API keys, and other internal secrets. Keep both private and out of git.
 - Public registration is off by default. Think carefully before turning it on; an open Matrix server is a spam target.
 - OIDC SSO is on by default in the wizard. If you don't want external IdPs, disable SSO during setup.
 - Federation is on by default. If you want a private, islands-only server, disable it during setup.
@@ -642,6 +663,23 @@ docker inspect matrix_postgres | grep -A 5 Health
 ## Contributing
 
 Issues, fixes, and module contributions are welcome. If you're adding a new module, follow the pattern in `modules/core/` — a `docker-compose.yml` for services and a `setup.sh` that sources `scripts/lib.sh` for prompts and helpers.
+
+## Verification (local-dev friendly)
+
+You can validate logic and idempotency on a local laptop without a full server deployment:
+
+```bash
+# Unit and logic tests
+./test
+
+# Deterministic apply run with fixed IP for local smoke checks
+bash apply.sh --server-ip 127.0.0.1
+
+# Optional: verify repeated apply is stable
+bash apply.sh --server-ip 127.0.0.1
+```
+
+For release confidence, run these checks before shipping changes to setup/apply/module scripts.
 
 ## Releasing
 
