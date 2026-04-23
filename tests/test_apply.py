@@ -66,6 +66,28 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(derived["HOOKSHOT_ENABLED"], "true")
         self.assertEqual(derived["WHATSAPP_BRIDGE_ENABLED"], "false")
 
+    def test_derive_values_with_oidc_providers(self):
+        cfg = self.sample_config()
+        cfg["features"]["sso"] = {
+            "enabled": True,
+            "providers": [
+                {
+                    "name": "Google",
+                    "issuer": "https://accounts.google.com/",
+                    "client_id": "id-1",
+                    "client_secret": "secret-1",
+                    "allow_registration": True,
+                }
+            ],
+        }
+
+        derived = apply.derive_values(cfg, server_ip="1.2.3.4")
+
+        self.assertEqual(derived["ENABLE_SSO"], "true")
+        self.assertEqual(derived["OIDC_PROVIDER_COUNT"], "1")
+        self.assertEqual(derived["OIDC_PROVIDER_NAMES"], "Google")
+        self.assertIn('"idp_name":"Google"', derived["OIDC_PROVIDERS_JSON"])
+
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
         first = apply.create_or_update_secrets(ctx, {})

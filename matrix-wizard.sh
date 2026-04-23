@@ -14,17 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=scripts/lib.sh
 source "${SCRIPT_DIR}/scripts/lib.sh"
-# shellcheck source=scripts/sso.sh
-source "${SCRIPT_DIR}/scripts/sso.sh"
 
 # shellcheck source=scripts/setup/banner.sh
 source "${SCRIPT_DIR}/scripts/setup/banner.sh"
 # shellcheck source=scripts/setup/dependencies.sh
 source "${SCRIPT_DIR}/scripts/setup/dependencies.sh"
-# shellcheck source=scripts/setup/config.sh
-source "${SCRIPT_DIR}/scripts/setup/config.sh"
-# shellcheck source=scripts/setup/generate.sh
-source "${SCRIPT_DIR}/scripts/setup/generate.sh"
 # shellcheck source=scripts/setup/runtime.sh
 source "${SCRIPT_DIR}/scripts/setup/runtime.sh"
 # shellcheck source=scripts/setup/summary.sh
