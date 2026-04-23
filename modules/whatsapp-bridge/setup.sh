@@ -347,22 +347,16 @@ PYEOF
 
     success "config.yaml patched."
 
-    # --- Append bridge vars to .env ---
-    if ! grep -q "^WA_DB_NAME=" "$DEPLOY_ENV"; then
-        info "Appending WhatsApp bridge variables to .env…"
-        cat >> "$DEPLOY_ENV" <<EOF
-
-# WhatsApp bridge module — added by modules/whatsapp-bridge/setup.sh
-WA_DB_NAME=${WA_DB_NAME}
-WA_DB_USER=${WA_DB_USER}
-WA_DB_PASSWORD=${WA_DB_PASSWORD}
-WA_DB_URI=${WA_DB_URI}
-WA_ADMIN_USERNAME=${WA_ADMIN_USERNAME}
-EOF
-        success ".env updated."
-    else
-        info "WhatsApp bridge variables already in .env — skipping."
-    fi
+    # --- Upsert bridge vars in .env ---
+    info "Upserting WhatsApp bridge variables in .env…"
+    python3 "${PROJECT_ROOT}/scripts/env_upsert.py" \
+        --env-file "$DEPLOY_ENV" \
+        --set "WA_DB_NAME=${WA_DB_NAME}" \
+        --set "WA_DB_USER=${WA_DB_USER}" \
+        --set "WA_DB_PASSWORD=${WA_DB_PASSWORD}" \
+        --set "WA_DB_URI=${WA_DB_URI}" \
+        --set "WA_ADMIN_USERNAME=${WA_ADMIN_USERNAME}"
+    success ".env updated."
 }
 
 # =============================================================================

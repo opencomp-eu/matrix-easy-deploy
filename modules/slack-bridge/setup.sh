@@ -347,22 +347,16 @@ PYEOF
 
     success "config.yaml patched."
 
-    # --- Append bridge vars to .env ---
-    if ! grep -q "^SL_DB_NAME=" "$DEPLOY_ENV"; then
-        info "Appending Slack bridge variables to .env…"
-        cat >> "$DEPLOY_ENV" <<EOF
-
-# Slack bridge module — added by modules/slack-bridge/setup.sh
-SL_DB_NAME=${SL_DB_NAME}
-SL_DB_USER=${SL_DB_USER}
-SL_DB_PASSWORD=${SL_DB_PASSWORD}
-SL_DB_URI=${SL_DB_URI}
-SL_ADMIN_USERNAME=${SL_ADMIN_USERNAME}
-EOF
-        success ".env updated."
-    else
-        info "Slack bridge variables already in .env — skipping."
-    fi
+    # --- Upsert bridge vars in .env ---
+    info "Upserting Slack bridge variables in .env…"
+    python3 "${PROJECT_ROOT}/scripts/env_upsert.py" \
+        --env-file "$DEPLOY_ENV" \
+        --set "SL_DB_NAME=${SL_DB_NAME}" \
+        --set "SL_DB_USER=${SL_DB_USER}" \
+        --set "SL_DB_PASSWORD=${SL_DB_PASSWORD}" \
+        --set "SL_DB_URI=${SL_DB_URI}" \
+        --set "SL_ADMIN_USERNAME=${SL_ADMIN_USERNAME}"
+    success ".env updated."
 }
 
 # =============================================================================

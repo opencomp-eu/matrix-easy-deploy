@@ -156,8 +156,8 @@ gather_config() {
 # =============================================================================
 generate_config() {
     info "Generating appservice tokens…"
-    HOOKSHOT_AS_TOKEN="$(generate_secret)"
-    HOOKSHOT_HS_TOKEN="$(generate_secret)"
+    HOOKSHOT_AS_TOKEN="${HOOKSHOT_AS_TOKEN:-$(generate_secret)}"
+    HOOKSHOT_HS_TOKEN="${HOOKSHOT_HS_TOKEN:-$(generate_secret)}"
     success "Tokens generated."
 
     # Generate RSA passkey for encrypting stored OAuth/API tokens
@@ -176,35 +176,17 @@ generate_config() {
         success "Passkey written to ${passkey_path}."
     fi
 
-    # Append Hookshot vars to the project .env
-    if ! grep -q "^HOOKSHOT_DOMAIN=" "$DEPLOY_ENV"; then
-        info "Appending Hookshot variables to .env…"
-        cat >> "$DEPLOY_ENV" <<EOF
-
-# Hookshot module — added by modules/hookshot/setup.sh
-HOOKSHOT_DOMAIN=${HOOKSHOT_DOMAIN}
-HOOKSHOT_AS_TOKEN=${HOOKSHOT_AS_TOKEN}
-HOOKSHOT_HS_TOKEN=${HOOKSHOT_HS_TOKEN}
-HOOKSHOT_REDIS_URI=${HOOKSHOT_REDIS_URI}
-EOF
-
-    if ! grep -q "^HOOKSHOT_REDIS_URI=" "$DEPLOY_ENV"; then
-        info "Adding HOOKSHOT_REDIS_URI to .env…"
-        echo "HOOKSHOT_REDIS_URI=${HOOKSHOT_REDIS_URI}" >> "$DEPLOY_ENV"
-    fi
-    if ! grep -q "^SHARED_REDIS_HOST=" "$DEPLOY_ENV"; then
-        echo "SHARED_REDIS_HOST=${SHARED_REDIS_HOST}" >> "$DEPLOY_ENV"
-    fi
-    if ! grep -q "^SHARED_REDIS_PORT=" "$DEPLOY_ENV"; then
-        echo "SHARED_REDIS_PORT=${SHARED_REDIS_PORT}" >> "$DEPLOY_ENV"
-    fi
-    if ! grep -q "^SHARED_REDIS_URL=" "$DEPLOY_ENV"; then
-        echo "SHARED_REDIS_URL=${SHARED_REDIS_URL}" >> "$DEPLOY_ENV"
-    fi
-        success ".env updated."
-    else
-        info "Hookshot variables already present in .env — skipping."
-    fi
+    info "Upserting Hookshot variables in .env…"
+    python3 "${PROJECT_ROOT}/scripts/env_upsert.py" \
+        --env-file "$DEPLOY_ENV" \
+        --set "HOOKSHOT_DOMAIN=${HOOKSHOT_DOMAIN}" \
+        --set "HOOKSHOT_AS_TOKEN=${HOOKSHOT_AS_TOKEN}" \
+        --set "HOOKSHOT_HS_TOKEN=${HOOKSHOT_HS_TOKEN}" \
+        --set "HOOKSHOT_REDIS_URI=${HOOKSHOT_REDIS_URI}" \
+        --set "SHARED_REDIS_HOST=${SHARED_REDIS_HOST}" \
+        --set "SHARED_REDIS_PORT=${SHARED_REDIS_PORT}" \
+        --set "SHARED_REDIS_URL=${SHARED_REDIS_URL}"
+    success ".env updated."
 
     # Build substitution map
     VARS_FILE="$(mktemp)"
