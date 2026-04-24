@@ -29,6 +29,8 @@ source "${PROJECT_ROOT}/scripts/module_common.sh"
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 
 DEPLOY_ENV="${PROJECT_ROOT}/.env"
+DEPLOY_YAML="${PROJECT_ROOT}/deploy.yaml"
+STATE_SECRETS="${PROJECT_ROOT}/.matrix-easy-deploy/secrets.yaml"
 MODULE_DIR="${SCRIPT_DIR}"
 BRIDGE_DATA_DIR="${MODULE_DIR}/slack"
 CORE_SYNAPSE_DATA_DIR="${PROJECT_ROOT}/modules/core/synapse_data"
@@ -46,7 +48,20 @@ APP_SERVICE_CHANGED="0"
 load_env() {
     module_load_env "$DEPLOY_ENV" "the main setup wizard"
 
+    load_module_defaults
+
     ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+}
+
+load_module_defaults() {
+    MODULE_SL_ADMIN_USERNAME_DEFAULT=""
+    MODULE_SL_DB_NAME_DEFAULT=""
+
+    if [[ -f "$DEPLOY_YAML" ]]; then
+        eval "$(python3 "${PROJECT_ROOT}/scripts/config_edit.py" --deploy-yaml "$DEPLOY_YAML" --print-module-defaults slack-bridge 2>/dev/null || true)"
+        MODULE_SL_ADMIN_USERNAME_DEFAULT="${module_admin_username:-}"
+        MODULE_SL_DB_NAME_DEFAULT="${module_db_name:-}"
+    fi
 }
 
 # =============================================================================
@@ -61,8 +76,8 @@ verify_server_name() {
 # =============================================================================
 gather_config() {
     if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
-        SL_ADMIN_USERNAME="${MODULE_SL_ADMIN_USERNAME:-${SL_ADMIN_USERNAME:-${ADMIN_USERNAME:-admin}}}"
-        SL_DB_NAME="${MODULE_SL_DB_NAME:-${SL_DB_NAME:-mautrix_slack}}"
+        SL_ADMIN_USERNAME="${MODULE_SL_ADMIN_USERNAME:-${MODULE_SL_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}}"
+        SL_DB_NAME="${MODULE_SL_DB_NAME:-${MODULE_SL_DB_NAME_DEFAULT:-mautrix_slack}}"
         if [[ -z "$SL_ADMIN_USERNAME" || -z "$SL_DB_NAME" ]]; then
             die "SL_ADMIN_USERNAME and SL_DB_NAME are required in non-interactive mode."
         fi
@@ -78,7 +93,7 @@ gather_config() {
 
     ask SL_ADMIN_USERNAME \
         "Matrix admin username for full bridge access (without @/server part)" \
-        "${ADMIN_USERNAME:-admin}"
+        "${MODULE_SL_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}"
     while [[ -z "$SL_ADMIN_USERNAME" ]]; do
         warn "Admin username is required."
         ask SL_ADMIN_USERNAME "Matrix admin username" "${ADMIN_USERNAME:-admin}"
@@ -86,7 +101,7 @@ gather_config() {
 
     ask SL_DB_NAME \
         "PostgreSQL database name for the Slack bridge" \
-        "mautrix_slack"
+        "${MODULE_SL_DB_NAME_DEFAULT:-mautrix_slack}"
 
     echo
     echo -e "${BOLD}  Configuration summary${RESET}"
@@ -106,8 +121,35 @@ gather_config() {
 }
 
 # =============================================================================
+# Step 3b - Persist module desired state in deploy.yaml
+# =============================================================================
+persist_module_config() {
+    info "Persisting Slack module configuration to deploy.yaml..."
+    python3 "${PROJECT_ROOT}/scripts/config_edit.py" \
+        --deploy-yaml "$DEPLOY_YAML" \
+        --set-module-config "slack-bridge" \
+        --module-enabled "true" \
+        --module-admin-username "$SL_ADMIN_USERNAME" \
+        --module-db-name "$SL_DB_NAME"
+    success "deploy.yaml updated."
+}
+
+# =============================================================================
 # Step 4 — Create a dedicated PostgreSQL database for the bridge
 # =============================================================================
+resolve_database_credentials() {
+    SL_DB_USER="mautrix_slack"
+    SL_DB_PASSWORD="$(python3 "${PROJECT_ROOT}/scripts/state_secrets.py" --secrets-file "$STATE_SECRETS" --get SL_DB_PASSWORD 2>/dev/null || true)"
+    SL_DB_PASSWORD="${SL_DB_PASSWORD:-$(generate_secret)}"
+
+    python3 "${PROJECT_ROOT}/scripts/state_secrets.py" \
+        --secrets-file "$STATE_SECRETS" \
+        --set "SL_DB_PASSWORD=${SL_DB_PASSWORD}"
+
+    SL_DB_URI="postgres://${SL_DB_USER}:${SL_DB_PASSWORD}@matrix_postgres/${SL_DB_NAME}?sslmode=disable"
+    export SL_DB_USER SL_DB_PASSWORD SL_DB_URI
+}
+
 setup_database() {
     info "Setting up PostgreSQL database '${SL_DB_NAME}' for the Slack bridge…"
 
@@ -115,11 +157,8 @@ setup_database() {
         die "POSTGRES_PASSWORD not found in .env. Please re-run the main wizard."
     fi
 
-    # Reuse existing credentials when present to keep re-runs idempotent.
-    SL_DB_USER="${SL_DB_USER:-mautrix_slack}"
-    SL_DB_PASSWORD="${SL_DB_PASSWORD:-$(generate_secret)}"
-    SL_DB_URI="postgres://${SL_DB_USER}:${SL_DB_PASSWORD}@matrix_postgres/${SL_DB_NAME}?sslmode=disable"
-    export SL_DB_USER SL_DB_PASSWORD SL_DB_URI
+    # Reuse persisted credentials from state secrets to keep re-runs idempotent.
+    resolve_database_credentials
 
     ensure_postgres_role_and_database \
         "${POSTGRES_PASSWORD}" \
@@ -174,16 +213,7 @@ generate_config() {
 
     success "config.yaml patched."
 
-    # --- Upsert bridge vars in .env ---
-    info "Upserting Slack bridge variables in .env…"
-    python3 "${PROJECT_ROOT}/scripts/env_upsert.py" \
-        --env-file "$DEPLOY_ENV" \
-        --set "SL_DB_NAME=${SL_DB_NAME}" \
-        --set "SL_DB_USER=${SL_DB_USER}" \
-        --set "SL_DB_PASSWORD=${SL_DB_PASSWORD}" \
-        --set "SL_DB_URI=${SL_DB_URI}" \
-        --set "SL_ADMIN_USERNAME=${SL_ADMIN_USERNAME}"
-    success ".env updated."
+    info "Skipping direct .env edits for Slack module values (managed by apply from deploy.yaml + state)."
 }
 
 # =============================================================================
@@ -292,6 +322,10 @@ EOF
     gather_config
 
     echo
+    echo -e "${BOLD}  Step 3b of 8 — Persist module configuration${RESET}"
+    persist_module_config
+
+    echo
     echo -e "${BOLD}  Step 4 of 8 — PostgreSQL database${RESET}"
     setup_database
 
@@ -314,4 +348,6 @@ EOF
     print_summary
 }
 
-main "$@"
+if [[ "${MED_SOURCE_ONLY:-0}" != "1" ]]; then
+    main "$@"
+fi
