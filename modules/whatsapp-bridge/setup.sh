@@ -29,6 +29,8 @@ source "${PROJECT_ROOT}/scripts/module_common.sh"
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 
 DEPLOY_ENV="${PROJECT_ROOT}/.env"
+DEPLOY_YAML="${PROJECT_ROOT}/deploy.yaml"
+STATE_SECRETS="${PROJECT_ROOT}/.matrix-easy-deploy/secrets.yaml"
 MODULE_DIR="${SCRIPT_DIR}"
 BRIDGE_DATA_DIR="${MODULE_DIR}/whatsapp"
 CORE_SYNAPSE_DATA_DIR="${PROJECT_ROOT}/modules/core/synapse_data"
@@ -38,6 +40,7 @@ CADDYFILE="${PROJECT_ROOT}/caddy/Caddyfile"
 BRIDGE_IMAGE="dock.mau.dev/mautrix/whatsapp:latest"
 BRIDGE_CONTAINER="mautrix-whatsapp"
 BRIDGE_PORT="29318"
+APP_SERVICE_CHANGED="0"
 
 # =============================================================================
 # Step 1 — Load existing deployment environment
@@ -45,8 +48,21 @@ BRIDGE_PORT="29318"
 load_env() {
     module_load_env "$DEPLOY_ENV" "the main setup wizard"
 
+    load_module_defaults
+
     # Derive a sensible default admin username from .env if available
     ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+}
+
+load_module_defaults() {
+    MODULE_WA_ADMIN_USERNAME_DEFAULT=""
+    MODULE_WA_DB_NAME_DEFAULT=""
+
+    if [[ -f "$DEPLOY_YAML" ]]; then
+        eval "$(python3 "${PROJECT_ROOT}/scripts/config_edit.py" --deploy-yaml "$DEPLOY_YAML" --print-module-defaults whatsapp-bridge 2>/dev/null || true)"
+        MODULE_WA_ADMIN_USERNAME_DEFAULT="${module_admin_username:-}"
+        MODULE_WA_DB_NAME_DEFAULT="${module_db_name:-}"
+    fi
 }
 
 # =============================================================================
@@ -61,8 +77,8 @@ verify_server_name() {
 # =============================================================================
 gather_config() {
     if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
-        WA_ADMIN_USERNAME="${MODULE_WA_ADMIN_USERNAME:-${WA_ADMIN_USERNAME:-${ADMIN_USERNAME:-admin}}}"
-        WA_DB_NAME="${MODULE_WA_DB_NAME:-${WA_DB_NAME:-mautrix_whatsapp}}"
+        WA_ADMIN_USERNAME="${MODULE_WA_ADMIN_USERNAME:-${MODULE_WA_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}}"
+        WA_DB_NAME="${MODULE_WA_DB_NAME:-${MODULE_WA_DB_NAME_DEFAULT:-mautrix_whatsapp}}"
         if [[ -z "$WA_ADMIN_USERNAME" || -z "$WA_DB_NAME" ]]; then
             die "WA_ADMIN_USERNAME and WA_DB_NAME are required in non-interactive mode."
         fi
@@ -80,7 +96,7 @@ gather_config() {
     # Admin user on the homeserver
     ask WA_ADMIN_USERNAME \
         "Matrix admin username for full bridge access (without @/server part)" \
-        "${ADMIN_USERNAME:-admin}"
+        "${MODULE_WA_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}"
     while [[ -z "$WA_ADMIN_USERNAME" ]]; do
         warn "Admin username is required."
         ask WA_ADMIN_USERNAME "Matrix admin username" "${ADMIN_USERNAME:-admin}"
@@ -89,7 +105,7 @@ gather_config() {
     # Database name for the bridge
     ask WA_DB_NAME \
         "PostgreSQL database name for the WhatsApp bridge" \
-        "mautrix_whatsapp"
+        "${MODULE_WA_DB_NAME_DEFAULT:-mautrix_whatsapp}"
 
     echo
     echo -e "${BOLD}  Configuration summary${RESET}"
@@ -109,8 +125,35 @@ gather_config() {
 }
 
 # =============================================================================
+# Step 3b - Persist module desired state in deploy.yaml
+# =============================================================================
+persist_module_config() {
+    info "Persisting WhatsApp module configuration to deploy.yaml..."
+    python3 "${PROJECT_ROOT}/scripts/config_edit.py" \
+        --deploy-yaml "$DEPLOY_YAML" \
+        --set-module-config "whatsapp-bridge" \
+        --module-enabled "true" \
+        --module-admin-username "$WA_ADMIN_USERNAME" \
+        --module-db-name "$WA_DB_NAME"
+    success "deploy.yaml updated."
+}
+
+# =============================================================================
 # Step 4 — Create a dedicated PostgreSQL database for the bridge
 # =============================================================================
+resolve_database_credentials() {
+    WA_DB_USER="mautrix_whatsapp"
+    WA_DB_PASSWORD="$(python3 "${PROJECT_ROOT}/scripts/state_secrets.py" --secrets-file "$STATE_SECRETS" --get WA_DB_PASSWORD 2>/dev/null || true)"
+    WA_DB_PASSWORD="${WA_DB_PASSWORD:-$(generate_secret)}"
+
+    python3 "${PROJECT_ROOT}/scripts/state_secrets.py" \
+        --secrets-file "$STATE_SECRETS" \
+        --set "WA_DB_PASSWORD=${WA_DB_PASSWORD}"
+
+    WA_DB_URI="postgres://${WA_DB_USER}:${WA_DB_PASSWORD}@matrix_postgres/${WA_DB_NAME}?sslmode=disable"
+    export WA_DB_USER WA_DB_PASSWORD WA_DB_URI
+}
+
 setup_database() {
     info "Setting up PostgreSQL database '${WA_DB_NAME}' for the WhatsApp bridge…"
 
@@ -118,11 +161,8 @@ setup_database() {
         die "POSTGRES_PASSWORD not found in .env. Please re-run the main wizard."
     fi
 
-    # Reuse existing credentials when present to keep re-runs idempotent.
-    WA_DB_USER="${WA_DB_USER:-mautrix_whatsapp}"
-    WA_DB_PASSWORD="${WA_DB_PASSWORD:-$(generate_secret)}"
-    WA_DB_URI="postgres://${WA_DB_USER}:${WA_DB_PASSWORD}@matrix_postgres/${WA_DB_NAME}?sslmode=disable"
-    export WA_DB_USER WA_DB_PASSWORD WA_DB_URI
+    # Reuse persisted credentials from state secrets to keep re-runs idempotent.
+    resolve_database_credentials
 
     ensure_postgres_role_and_database \
         "${POSTGRES_PASSWORD}" \
@@ -177,38 +217,18 @@ generate_config() {
 
     success "config.yaml patched."
 
-    # --- Upsert bridge vars in .env ---
-    info "Upserting WhatsApp bridge variables in .env…"
-    python3 "${PROJECT_ROOT}/scripts/env_upsert.py" \
-        --env-file "$DEPLOY_ENV" \
-        --set "WA_DB_NAME=${WA_DB_NAME}" \
-        --set "WA_DB_USER=${WA_DB_USER}" \
-        --set "WA_DB_PASSWORD=${WA_DB_PASSWORD}" \
-        --set "WA_DB_URI=${WA_DB_URI}" \
-        --set "WA_ADMIN_USERNAME=${WA_ADMIN_USERNAME}"
-    success ".env updated."
+    info "Skipping direct .env edits for WhatsApp module values (managed by apply from deploy.yaml + state)."
 }
 
 # =============================================================================
 # Step 6 — Generate registration.yaml
 # =============================================================================
 generate_registration() {
-    local reg_file="${BRIDGE_DATA_DIR}/registration.yaml"
-
-    # Always regenerate so registration.yaml stays in sync with config.yaml.
-    # Stale registration files cause Synapse → bridge connectivity failures.
-    [[ -f "$reg_file" ]] && rm -f "$reg_file"
-
-    info "Running container to generate registration.yaml…"
-    docker run --rm \
-        -v "${BRIDGE_DATA_DIR}:/data:z" \
+    module_generate_registration_if_needed \
+        "$BRIDGE_DATA_DIR" \
         "$BRIDGE_IMAGE" \
-        2>&1 | sed 's/^/    /' || true
-
-    if [[ ! -f "$reg_file" ]]; then
-        die "registration.yaml was not generated. Check config.yaml for errors."
-    fi
-    success "registration.yaml generated."
+        "config.yaml" \
+        "registration.yaml"
 }
 
 # =============================================================================
@@ -218,26 +238,9 @@ register_appservice() {
     local reg_src="${BRIDGE_DATA_DIR}/registration.yaml"
     local reg_dest="${CORE_SYNAPSE_DATA_DIR}/whatsapp-registration.yaml"
     local reg_container_path="/data/whatsapp-registration.yaml"
-
-    info "Copying registration.yaml to Synapse data directory…"
-    cp "$reg_src" "$reg_dest"
-    chmod 644 "$reg_dest"
-    success "Copied to ${reg_dest}."
-
-    if [[ ! -f "$HOMESERVER_YAML" ]]; then
-        die "homeserver.yaml not found at ${HOMESERVER_YAML}."
+    if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_YAML" "$reg_container_path" "WhatsApp bridge")" == "1" ]]; then
+        APP_SERVICE_CHANGED="1"
     fi
-
-    if grep -qF "$reg_container_path" "$HOMESERVER_YAML"; then
-        info "WhatsApp bridge already registered in homeserver.yaml — skipping."
-        return
-    fi
-
-    info "Registering WhatsApp appservice in homeserver.yaml…"
-    python3 "${PROJECT_ROOT}/scripts/synapse_appservice.py" \
-        --homeserver-yaml "$HOMESERVER_YAML" \
-        --registration-path "$reg_container_path"
-    success "homeserver.yaml updated."
 }
 
 # =============================================================================
@@ -250,14 +253,7 @@ start_services() {
     success "mautrix-whatsapp started."
 
     echo
-    info "Restarting Synapse to load the new appservice registration…"
-    if docker ps --format '{{.Names}}' | grep -q '^matrix_synapse$'; then
-        docker restart matrix_synapse
-        success "Synapse restarted."
-    else
-        warn "Synapse (matrix_synapse) is not running."
-        warn "Start the core stack first: cd ${PROJECT_ROOT}/modules/core && docker compose up -d"
-    fi
+    module_restart_synapse_if_changed "$APP_SERVICE_CHANGED" "$PROJECT_ROOT"
 }
 
 # =============================================================================
@@ -327,6 +323,10 @@ EOF
     gather_config
 
     echo
+    echo -e "${BOLD}  Step 3b of 8 — Persist module configuration${RESET}"
+    persist_module_config
+
+    echo
     echo -e "${BOLD}  Step 4 of 8 — PostgreSQL database${RESET}"
     setup_database
 
@@ -349,4 +349,6 @@ EOF
     print_summary
 }
 
-main "$@"
+if [[ "${MED_SOURCE_ONLY:-0}" != "1" ]]; then
+    main "$@"
+fi

@@ -110,6 +110,75 @@ class ConfigEditTests(unittest.TestCase):
         self.assertTrue(updated["modules"]["hookshot"]["enabled"])
         self.assertTrue(updated["features"]["sso"]["enabled"])
 
+    def test_set_module_config_updates_whatsapp_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            deploy_yaml = Path(tmp) / "deploy.yaml"
+            deploy_yaml.write_text(
+                yaml.safe_dump(
+                    {
+                        "matrix": {
+                            "domain": "matrix.example.com",
+                            "server_name": "example.com",
+                            "admin_username": "admin",
+                        },
+                        "modules": {
+                            "whatsapp_bridge": {
+                                "enabled": False,
+                                "admin_username": "oldadmin",
+                                "db_name": "old_db",
+                            }
+                        },
+                    },
+                    sort_keys=False,
+                )
+            )
+
+            rc = config_edit.main(
+                [
+                    "--deploy-yaml",
+                    str(deploy_yaml),
+                    "--set-module-config",
+                    "whatsapp-bridge",
+                    "--module-enabled",
+                    "true",
+                    "--module-admin-username",
+                    "newadmin",
+                    "--module-db-name",
+                    "wa_prod",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            data = yaml.safe_load(deploy_yaml.read_text())
+            module = data["modules"]["whatsapp_bridge"]
+            self.assertTrue(module["enabled"])
+            self.assertEqual(module["admin_username"], "newadmin")
+            self.assertEqual(module["db_name"], "wa_prod")
+
+    def test_print_module_defaults_for_whatsapp(self):
+        initial = {
+            "matrix": {
+                "domain": "matrix.example.com",
+                "server_name": "example.com",
+                "admin_username": "admin",
+            },
+            "modules": {
+                "whatsapp_bridge": {
+                    "enabled": True,
+                    "admin_username": "waadmin",
+                    "db_name": "wa_prod",
+                }
+            },
+        }
+        self.deploy_yaml.write_text(yaml.safe_dump(initial, sort_keys=False))
+
+        config = config_edit.load_or_init(self.deploy_yaml)
+        defaults = config_edit.emit_module_defaults(config, "whatsapp-bridge")
+
+        self.assertIn("module_enabled=true", defaults)
+        self.assertIn("module_admin_username=waadmin", defaults)
+        self.assertIn("module_db_name=wa_prod", defaults)
+
     def test_print_wizard_defaults_uses_existing_values(self):
         initial = {
             "matrix": {

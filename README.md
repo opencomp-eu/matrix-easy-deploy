@@ -123,18 +123,43 @@ git clone https://github.com/nordwestt/matrix-easy-deploy-kit
 cd matrix-easy-deploy-kit
 ```
 
-### Option 1: Use the interactive wizard
+### Recommended workflow (YAML-first)
+
+The primary operating model is:
+
+1. Edit `deploy.yaml`.
+2. Run `bash apply.sh`.
+3. Optionally run `bash apply.sh --reconcile-runtime` to apply changes to running containers immediately.
+
+Minimal flow:
+
+```bash
+# 1) Edit desired state
+$EDITOR deploy.yaml
+
+# 2) Converge generated artifacts and module state
+bash apply.sh
+
+# 3) Start services (first run) or reconcile live runtime (subsequent changes)
+bash start.sh
+# or
+bash apply.sh --reconcile-runtime
+```
+
+By default, `bash apply.sh` also attempts non-interactive bootstrap for enabled modules when required generated files are missing.
+To skip bootstrap:
+
+```bash
+bash apply.sh --skip-module-bootstrap
+```
+
+### Interactive wizard (optional UX)
 
 ```bash
 bash matrix-wizard.sh
 ```
 
-The wizard opens an interactive menu where you can:
-- run first-time setup (edits `deploy.yaml` and applies),
-- install/configure modules,
-- create users/admins,
-- start/stop/update services,
-- and tail logs.
+The wizard is a convenience layer over the same YAML-first model. It edits `deploy.yaml`, runs apply, and offers module/user/runtime shortcuts.
 
 For first-time setup without the menu:
 
@@ -142,8 +167,7 @@ For first-time setup without the menu:
 bash matrix-wizard.sh --full-setup
 ```
 
-During first-time setup, the wizard now securely prompts for the initial admin password using hidden input and confirmation.
-For unattended automation, you can optionally export `ADMIN_PASSWORD` before running `--full-setup` to skip the prompt:
+For unattended wizard automation, you can optionally set `ADMIN_PASSWORD` before `--full-setup`:
 
 ```bash
 export ADMIN_PASSWORD='use-a-long-random-secret'
@@ -153,33 +177,90 @@ unset ADMIN_PASSWORD
 
 Avoid storing `ADMIN_PASSWORD` in `.env` or `deploy.yaml`.
 
-### Option 2: Edit config file directly
+### Non-interactive setup from an existing `deploy.yaml`
 
-1. Edit `deploy.yaml` with your settings
-2. Apply the configuration:
+If you already have a complete `deploy.yaml` and want to bootstrap the server without the interactive wizard, use this flow:
+
+1. Apply the config to generate `.env` and rendered files.
+2. Start the stack.
+3. Wait for Synapse to become healthy.
+4. Create the initial admin user non-interactively.
+
+Example:
 
 ```bash
+# 1. Render runtime files from deploy.yaml
 bash apply.sh
-```
 
-To also reconcile running services to match the new desired state immediately:
-
-```bash
-bash apply.sh --reconcile-runtime
-```
-
-By default, `apply.sh` also attempts non-interactive bootstrap for enabled modules when required generated module config is missing.
-If you want to skip that behavior:
-
-```bash
-bash apply.sh --skip-module-bootstrap
-```
-
-3. Start the services:
-
-```bash
+# 2. Start the stack
 bash start.sh
+
+# 3. Wait until Synapse is healthy
+until [[ "$(docker inspect --format='{{.State.Health.Status}}' matrix_synapse 2>/dev/null)" == "healthy" ]]; do
+  echo "Waiting for Synapse..."
+  sleep 5
+done
+
+# 4. Load generated values and create the initial admin user
+set -o allexport
+source ./.env
+set +o allexport
+
+bash scripts/create-admin.sh \
+  "https://${MATRIX_DOMAIN}" \
+  "${REGISTRATION_SHARED_SECRET}" \
+  "${ADMIN_USERNAME}" \
+  'replace-with-a-long-random-password'
 ```
+
+Notes:
+
+- `bash apply.sh --reconcile-runtime` is also valid if you want apply to run stop/start for you.
+- `scripts/create-admin.sh` is safe to re-run; if the user already exists it will warn and skip.
+- Keep the admin password out of `deploy.yaml` and `.env`. Pass it at execution time or inject it through your automation/secret manager.
+- Enabled modules are bootstrapped non-interactively during `bash apply.sh` when their required generated config is missing.
+- Bridge/module enable-disable transitions are reconciled by `bash apply.sh`; use `--reconcile-runtime` to apply those changes to running containers immediately.
+
+### Smoke verification checklist
+
+Run this after major changes or before release:
+
+```bash
+# 1) First apply should converge cleanly
+bash apply.sh
+
+# 2) Second apply should remain clean/idempotent
+bash apply.sh
+
+# 3) Runtime command coverage
+bash stop.sh
+bash start.sh
+bash update.sh
+
+# 4) Repeated module re-apply should not churn
+bash matrix-wizard.sh --module hookshot
+bash matrix-wizard.sh --module hookshot
+bash matrix-wizard.sh --module whatsapp-bridge
+bash matrix-wizard.sh --module whatsapp-bridge
+bash matrix-wizard.sh --module slack-bridge
+bash matrix-wizard.sh --module slack-bridge
+```
+
+### Uninstall/reset the stack
+
+For repeatable test cycles, you can remove running services, Docker resources, and generated repository state while keeping `deploy.yaml`:
+
+```bash
+bash uninstall.sh
+```
+
+Non-interactive mode:
+
+```bash
+bash uninstall.sh --yes
+```
+
+This cleanup removes generated runtime files like `.env`, `.matrix-easy-deploy/`, rendered configs, and module data directories (`modules/core/synapse_data`, `modules/hookshot/hookshot`, `modules/whatsapp-bridge/whatsapp`, `modules/slack-bridge/slack`).
 
 ### Run with Docker (single command)
 
@@ -218,6 +299,13 @@ The wizard will ask you:
 - `deploy.yaml` is the operator-owned source of truth.
 - `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered templates, module state metadata).
 - Re-running `bash apply.sh` is idempotent by default: existing generated secrets are re-used.
+- Enabled modules converge deterministically: if required generated files are missing, setup runs non-interactively.
+- Bridge appservice registrations converge deterministically in Synapse:
+  - enabled modules are synced into `modules/core/synapse_data` and added to `app_service_config_files`,
+  - disabled modules are removed from `modules/core/synapse_data` and removed from `app_service_config_files`.
+- Hookshot Caddy ingress converges deterministically:
+  - enabled Hookshot ensures a managed Caddy block,
+  - disabled Hookshot removes the managed Hookshot block.
 - To rotate generated secrets intentionally, use:
 
 ```bash

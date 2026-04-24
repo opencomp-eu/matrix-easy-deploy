@@ -16,25 +16,27 @@ if [[ -f "${SCRIPT_DIR}/.env" ]]; then
     set +o allexport
 fi
 
+load_runtime_desired_state "${SCRIPT_DIR}"
+
 _element_profile=""
 if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
     _element_profile="--profile element"
 fi
 
-# Stop WhatsApp bridge if it was installed as a module
-if [[ "${WHATSAPP_BRIDGE_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/whatsapp-bridge/whatsapp/config.yaml" ]]; then
+# Stop WhatsApp bridge when its module was previously installed
+if [[ -f "${SCRIPT_DIR}/modules/whatsapp-bridge/whatsapp/config.yaml" ]]; then
     info "Stopping WhatsApp bridge…"
     (cd "${SCRIPT_DIR}/modules/whatsapp-bridge" && "${DOCKER_COMPOSE[@]}" down)
 fi
 
-# Stop Slack bridge if it was installed as a module
-if [[ "${SLACK_BRIDGE_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/slack-bridge/slack/config.yaml" ]]; then
+# Stop Slack bridge when its module was previously installed
+if [[ -f "${SCRIPT_DIR}/modules/slack-bridge/slack/config.yaml" ]]; then
     info "Stopping Slack bridge…"
     (cd "${SCRIPT_DIR}/modules/slack-bridge" && "${DOCKER_COMPOSE[@]}" down)
 fi
 
-# Stop Hookshot if it was installed as a module
-if [[ "${HOOKSHOT_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/hookshot/hookshot/config.yml" ]]; then
+# Stop Hookshot when its module was previously installed
+if [[ -f "${SCRIPT_DIR}/modules/hookshot/hookshot/config.yml" ]]; then
     info "Stopping Hookshot…"
     (cd "${SCRIPT_DIR}/modules/hookshot" && "${DOCKER_COMPOSE[@]}" down)
 fi

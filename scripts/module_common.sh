@@ -107,3 +107,88 @@ ensure_postgres_role_and_database() {
         "GRANT ALL PRIVILEGES ON DATABASE ${db_name} TO ${db_user};" \
         2>&1 | sed 's/^/    /'
 }
+
+module_generate_registration_if_needed() {
+    local bridge_data_dir="$1"
+    local bridge_image="$2"
+    local config_name="${3:-config.yaml}"
+    local registration_name="${4:-registration.yaml}"
+
+    local config_file="${bridge_data_dir}/${config_name}"
+    local reg_file="${bridge_data_dir}/${registration_name}"
+
+    if [[ -f "$reg_file" && -f "$config_file" && "$reg_file" -nt "$config_file" ]]; then
+        info "${registration_name} is up to date - skipping regeneration."
+        return
+    fi
+
+    [[ -f "$reg_file" ]] && rm -f "$reg_file"
+
+    info "Running container to generate ${registration_name}..."
+    docker run --rm \
+        -v "${bridge_data_dir}:/data:z" \
+        "$bridge_image" \
+        2>&1 | sed 's/^/    /' || true
+
+    if [[ ! -f "$reg_file" ]]; then
+        die "${registration_name} was not generated. Check ${config_name} for errors."
+    fi
+    success "${registration_name} generated."
+}
+
+module_sync_appservice_registration() {
+    local project_root="$1"
+    local registration_src="$2"
+    local registration_dest="$3"
+    local homeserver_yaml="$4"
+    local registration_path="$5"
+    local module_label="$6"
+
+    local changed=0
+
+    if [[ ! -f "$registration_dest" ]] || ! cmp -s "$registration_src" "$registration_dest"; then
+        info "Syncing registration to Synapse data directory..."
+        cp "$registration_src" "$registration_dest"
+        chmod 644 "$registration_dest"
+        success "Copied to ${registration_dest}."
+        changed=1
+    else
+        info "registration is unchanged in Synapse data directory - skipping copy."
+    fi
+
+    if [[ ! -f "$homeserver_yaml" ]]; then
+        die "homeserver.yaml not found at ${homeserver_yaml}."
+    fi
+
+    if grep -qF "$registration_path" "$homeserver_yaml"; then
+        info "${module_label} already registered in homeserver.yaml - skipping."
+    else
+        info "Registering ${module_label} appservice in homeserver.yaml..."
+        python3 "${project_root}/scripts/synapse_appservice.py" \
+            --homeserver-yaml "$homeserver_yaml" \
+            --registration-path "$registration_path"
+        success "homeserver.yaml updated."
+        changed=1
+    fi
+
+    echo "$changed"
+}
+
+module_restart_synapse_if_changed() {
+    local changed="$1"
+    local project_root="$2"
+
+    if [[ "$changed" != "1" ]]; then
+        info "Synapse appservice wiring unchanged - skipping Synapse restart."
+        return
+    fi
+
+    info "Restarting Synapse to load the updated appservice registration..."
+    if docker ps --format '{{.Names}}' | grep -q '^matrix_synapse$'; then
+        docker restart matrix_synapse
+        success "Synapse restarted."
+    else
+        warn "Synapse (matrix_synapse) is not running."
+        warn "Start the core stack first: cd ${project_root}/modules/core && docker compose up -d"
+    fi
+}

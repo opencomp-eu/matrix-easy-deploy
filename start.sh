@@ -5,6 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/lib.sh"
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 
+# Ensure external Docker resources exist for direct apply/start workflows.
+ensure_docker_network "caddy_net"
+ensure_docker_volume "caddy_data"
+
 info "Starting Caddy…"
 (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" up -d)
 
@@ -20,6 +24,8 @@ if [[ -f "${SCRIPT_DIR}/.env" ]]; then
     source "${SCRIPT_DIR}/.env"
     set +o allexport
 fi
+
+load_runtime_desired_state "${SCRIPT_DIR}"
 
 _element_profile=""
 if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then

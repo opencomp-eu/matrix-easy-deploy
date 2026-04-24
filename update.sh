@@ -14,6 +14,8 @@ if [[ -f "${SCRIPT_DIR}/.env" ]]; then
     source "${SCRIPT_DIR}/.env"
 fi
 
+load_runtime_desired_state "${SCRIPT_DIR}"
+
 info "Stopping services…"
 bash "${SCRIPT_DIR}/stop.sh"
 

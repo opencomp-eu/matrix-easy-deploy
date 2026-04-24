@@ -12,6 +12,17 @@ from pathlib import Path
 
 import yaml
 
+try:
+    from scripts import synapse_appservice
+    from scripts import hookshot_caddy
+except ModuleNotFoundError:
+    # When run as scripts/apply.py, Python may not include project root in sys.path.
+    project_root = Path(__file__).resolve().parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from scripts import synapse_appservice
+    from scripts import hookshot_caddy
+
 
 DEFAULT_SECRET_KEYS = [
     "POSTGRES_PASSWORD",
@@ -20,12 +31,32 @@ DEFAULT_SECRET_KEYS = [
     "FORM_SECRET",
     "COTURN_SECRET",
     "LIVEKIT_SECRET",
+    "WA_DB_PASSWORD",
+    "SL_DB_PASSWORD",
 ]
 
 MODULE_CONFIG_KEY_TO_DIR = {
     "hookshot": "hookshot",
     "whatsapp_bridge": "whatsapp-bridge",
     "slack_bridge": "slack-bridge",
+}
+
+BRIDGE_APP_SERVICE_SPECS = {
+    "hookshot": {
+        "registration_src": "modules/hookshot/hookshot/registration.yml",
+        "registration_dest": "modules/core/synapse_data/hookshot-registration.yml",
+        "registration_path": "/data/hookshot-registration.yml",
+    },
+    "whatsapp_bridge": {
+        "registration_src": "modules/whatsapp-bridge/whatsapp/registration.yaml",
+        "registration_dest": "modules/core/synapse_data/whatsapp-registration.yaml",
+        "registration_path": "/data/whatsapp-registration.yaml",
+    },
+    "slack_bridge": {
+        "registration_src": "modules/slack-bridge/slack/registration.yaml",
+        "registration_dest": "modules/core/synapse_data/slack-registration.yaml",
+        "registration_path": "/data/slack-registration.yaml",
+    },
 }
 
 
@@ -35,6 +66,22 @@ class ApplyContext:
         self.config_file = project_root / "deploy.yaml"
         self.state_dir = project_root / ".matrix-easy-deploy"
         self.env_file = project_root / ".env"
+
+
+def load_env_map(env_file: Path) -> dict[str, str]:
+    if not env_file.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw in env_file.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            values[key] = value
+    return values
 
 
 def extract_base_domain(fqdn: str) -> str:
@@ -251,6 +298,37 @@ def build_env_vars(config: dict, derived: dict, state_secrets: dict) -> dict:
         "SERVER_NAME": derived["SERVER_NAME"],
         "ADMIN_USERNAME": config["matrix"]["admin_username"],
     }
+
+    modules = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+    whatsapp = modules.get("whatsapp_bridge", {}) if isinstance(modules.get("whatsapp_bridge", {}), dict) else {}
+    slack = modules.get("slack_bridge", {}) if isinstance(modules.get("slack_bridge", {}), dict) else {}
+
+    wa_db_name = str(whatsapp.get("db_name", "mautrix_whatsapp"))
+    wa_db_user = "mautrix_whatsapp"
+    wa_db_password = state_secrets.get("WA_DB_PASSWORD", "")
+    env_vars["WA_DB_NAME"] = wa_db_name
+    env_vars["WA_DB_USER"] = wa_db_user
+    env_vars["WA_DB_PASSWORD"] = wa_db_password
+    env_vars["WA_DB_URI"] = (
+        f"postgres://{wa_db_user}:{wa_db_password}@matrix_postgres/{wa_db_name}?sslmode=disable"
+    )
+    env_vars["WA_ADMIN_USERNAME"] = str(
+        whatsapp.get("admin_username", config["matrix"].get("admin_username", "admin"))
+    )
+
+    sl_db_name = str(slack.get("db_name", "mautrix_slack"))
+    sl_db_user = "mautrix_slack"
+    sl_db_password = state_secrets.get("SL_DB_PASSWORD", "")
+    env_vars["SL_DB_NAME"] = sl_db_name
+    env_vars["SL_DB_USER"] = sl_db_user
+    env_vars["SL_DB_PASSWORD"] = sl_db_password
+    env_vars["SL_DB_URI"] = (
+        f"postgres://{sl_db_user}:{sl_db_password}@matrix_postgres/{sl_db_name}?sslmode=disable"
+    )
+    env_vars["SL_ADMIN_USERNAME"] = str(
+        slack.get("admin_username", config["matrix"].get("admin_username", "admin"))
+    )
+
     env_vars.update(derived)
     env_vars.update(state_secrets)
     return env_vars
@@ -325,6 +403,30 @@ def load_module_manifest(ctx: ApplyContext, module_dir_name: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def module_required_files(ctx: ApplyContext, manifest: dict) -> list[Path]:
+    paths: list[Path] = []
+    generated = manifest.get("generated_files", []) if isinstance(manifest.get("generated_files", []), list) else []
+    for rel in generated:
+        if isinstance(rel, str) and rel.strip():
+            paths.append(ctx.project_root / rel)
+
+    runtime = manifest.get("runtime", {}) if isinstance(manifest.get("runtime", {}), dict) else {}
+    config_exists = runtime.get("config_exists")
+    if isinstance(config_exists, str) and config_exists.strip():
+        config_path = ctx.project_root / config_exists
+        if config_path not in paths:
+            paths.append(config_path)
+
+    return paths
+
+
+def missing_module_files(ctx: ApplyContext, manifest: dict) -> list[Path]:
+    required = module_required_files(ctx, manifest)
+    if not required:
+        return []
+    return [path for path in required if not path.exists()]
+
+
 def reconcile_module_state(ctx: ApplyContext, config: dict) -> None:
     modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
     state = {}
@@ -371,28 +473,25 @@ def module_env_overrides(config: dict, config_key: str) -> dict:
 
 def reconcile_module_bootstrap(ctx: ApplyContext, config: dict) -> None:
     modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+    converged: list[str] = []
+    skipped: list[str] = []
+    failed: list[str] = []
 
     for config_key, dir_name in MODULE_CONFIG_KEY_TO_DIR.items():
         desired = modules_cfg.get(config_key, {}) if isinstance(modules_cfg.get(config_key, {}), dict) else {}
         if not bool(desired.get("enabled", False)):
+            skipped.append(config_key)
             continue
 
         manifest = load_module_manifest(ctx, dir_name)
-        runtime = manifest.get("runtime", {}) if isinstance(manifest.get("runtime", {}), dict) else {}
-        config_exists = runtime.get("config_exists")
-        if not config_exists:
-            continue
-
-        config_path = ctx.project_root / str(config_exists)
-        if config_path.exists():
+        missing_before = missing_module_files(ctx, manifest)
+        if not missing_before:
+            converged.append(config_key)
             continue
 
         setup_script = ctx.project_root / "modules" / dir_name / "setup.sh"
         if not setup_script.exists():
-            print(
-                f"[WARN] Module '{config_key}' is enabled but setup script is missing ({setup_script}).",
-                file=sys.stderr,
-            )
+            failed.append(f"{config_key}: missing setup script ({setup_script})")
             continue
 
         env = dict(os.environ)
@@ -400,7 +499,109 @@ def reconcile_module_bootstrap(ctx: ApplyContext, config: dict) -> None:
         for key, value in module_env_overrides(config, config_key).items():
             env[key] = value
 
-        subprocess.run(["bash", str(setup_script)], check=True, env=env)
+        try:
+            subprocess.run(["bash", str(setup_script)], check=True, env=env)
+        except subprocess.CalledProcessError as exc:
+            failed.append(f"{config_key}: setup failed with exit code {exc.returncode}")
+            continue
+
+        missing_after = missing_module_files(ctx, manifest)
+        if missing_after:
+            missing_list = ", ".join(str(p.relative_to(ctx.project_root)) for p in missing_after)
+            failed.append(f"{config_key}: missing generated files after setup ({missing_list})")
+            continue
+
+        converged.append(config_key)
+
+    if converged:
+        print("Module convergence complete for: " + ", ".join(sorted(converged)))
+    if failed:
+        print("Module convergence failures:", file=sys.stderr)
+        for item in failed:
+            print(f"  - {item}", file=sys.stderr)
+        raise RuntimeError("One or more enabled modules failed to converge")
+
+
+def reconcile_bridge_appservices(ctx: ApplyContext, config: dict) -> None:
+    modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+    homeserver_yaml = ctx.project_root / "modules" / "core" / "synapse" / "homeserver.yaml"
+    failures: list[str] = []
+    changes: list[str] = []
+
+    if not homeserver_yaml.exists():
+        return
+
+    for config_key, spec in BRIDGE_APP_SERVICE_SPECS.items():
+        desired = modules_cfg.get(config_key, {}) if isinstance(modules_cfg.get(config_key, {}), dict) else {}
+        enabled = bool(desired.get("enabled", False))
+
+        reg_src = ctx.project_root / spec["registration_src"]
+        reg_dest = ctx.project_root / spec["registration_dest"]
+        reg_path = str(spec["registration_path"])
+
+        if enabled:
+            if not reg_src.exists():
+                failures.append(
+                    f"{config_key}: missing registration source ({reg_src.relative_to(ctx.project_root)})"
+                )
+                continue
+
+            reg_dest.parent.mkdir(parents=True, exist_ok=True)
+            needs_copy = not reg_dest.exists() or reg_src.read_bytes() != reg_dest.read_bytes()
+            if needs_copy:
+                reg_dest.write_bytes(reg_src.read_bytes())
+                changes.append(f"{config_key}: synced {reg_dest.relative_to(ctx.project_root)}")
+
+            if synapse_appservice.ensure_appservice_registration(homeserver_yaml, reg_path):
+                changes.append(f"{config_key}: ensured {reg_path} in homeserver.yaml")
+        else:
+            if reg_dest.exists():
+                reg_dest.unlink()
+                changes.append(f"{config_key}: removed {reg_dest.relative_to(ctx.project_root)}")
+
+            if synapse_appservice.remove_appservice_registration(homeserver_yaml, reg_path):
+                changes.append(f"{config_key}: removed {reg_path} from homeserver.yaml")
+
+    if changes:
+        print("Bridge appservice reconciliation changes:")
+        for item in changes:
+            print(f"  - {item}")
+
+    if failures:
+        print("Bridge appservice reconciliation failures:", file=sys.stderr)
+        for item in failures:
+            print(f"  - {item}", file=sys.stderr)
+        raise RuntimeError("One or more bridge modules failed appservice reconciliation")
+
+
+def reconcile_hookshot_caddy(ctx: ApplyContext, config: dict, derived: dict) -> None:
+    modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+    hookshot_cfg = modules_cfg.get("hookshot", {}) if isinstance(modules_cfg.get("hookshot", {}), dict) else {}
+    enabled = bool(hookshot_cfg.get("enabled", False))
+
+    caddyfile = ctx.project_root / "caddy" / "Caddyfile"
+    if not caddyfile.exists():
+        return
+
+    content = caddyfile.read_text()
+    hookshot_domain = str(derived.get("HOOKSHOT_DOMAIN", "") or "")
+    if not hookshot_domain:
+        existing_env = load_env_map(ctx.env_file)
+        hookshot_domain = str(existing_env.get("HOOKSHOT_DOMAIN", "") or "")
+
+    if enabled:
+        if not hookshot_domain:
+            raise RuntimeError("hookshot is enabled but HOOKSHOT_DOMAIN could not be resolved")
+        updated = hookshot_caddy.upsert_hookshot_block(content, hookshot_domain)
+    else:
+        updated = hookshot_caddy.remove_hookshot_block(content, hookshot_domain or None)
+
+    if updated != content:
+        caddyfile.write_text(updated)
+        if enabled:
+            print("Hookshot Caddy reconciliation: ensured managed block")
+        else:
+            print("Hookshot Caddy reconciliation: removed managed block")
 
 
 def apply_configuration(
@@ -420,6 +621,8 @@ def apply_configuration(
     reconcile_module_state(ctx, config)
     if reconcile_modules:
         reconcile_module_bootstrap(ctx, config)
+    reconcile_bridge_appservices(ctx, config)
+    reconcile_hookshot_caddy(ctx, config, derived)
 
 
 def run_runtime_reconcile(ctx: ApplyContext) -> None:
