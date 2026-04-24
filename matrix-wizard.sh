@@ -452,6 +452,7 @@ print_wizard_menu() {
     echo -e "  ${CYAN}7)${RESET} Update images + restart"
     echo -e "  ${CYAN}8)${RESET} Show running containers"
     echo -e "  ${CYAN}9)${RESET} Tail service logs"
+    echo -e "  ${CYAN}10)${RESET} Uninstall/reset stack"
     echo -e "  ${CYAN}q)${RESET} Exit"
     echo
 }
@@ -497,6 +498,10 @@ run_wizard_hub() {
                 ;;
             9)
                 run_logs_wizard
+                ;;
+            10)
+                bash "${SCRIPT_DIR}/uninstall.sh"
+                pause_screen
                 ;;
             q)
                 success "Exiting wizard."

@@ -246,6 +246,22 @@ bash matrix-wizard.sh --module slack-bridge
 bash matrix-wizard.sh --module slack-bridge
 ```
 
+### Uninstall/reset the stack
+
+For repeatable test cycles, you can remove running services, Docker resources, and generated repository state while keeping `deploy.yaml`:
+
+```bash
+bash uninstall.sh
+```
+
+Non-interactive mode:
+
+```bash
+bash uninstall.sh --yes
+```
+
+This cleanup removes generated runtime files like `.env`, `.matrix-easy-deploy/`, rendered configs, and module data directories (`modules/core/synapse_data`, `modules/hookshot/hookshot`, `modules/whatsapp-bridge/whatsapp`, `modules/slack-bridge/slack`).
+
 ### Run with Docker (single command)
 
 If you prefer not to install local dependencies, run the wizard from the published container image:
