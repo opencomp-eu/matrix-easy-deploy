@@ -22,6 +22,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=../../scripts/lib.sh
 source "${PROJECT_ROOT}/scripts/lib.sh"
+# shellcheck source=../../scripts/module_common.sh
+source "${PROJECT_ROOT}/scripts/module_common.sh"
 
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 
@@ -42,24 +44,7 @@ CADDYFILE="${PROJECT_ROOT}/caddy/Caddyfile"
 # Step 1 — Load existing deployment environment
 # =============================================================================
 load_env() {
-    if [[ ! -f "$DEPLOY_ENV" ]]; then
-        die "No .env file found at ${DEPLOY_ENV}. Please run setup.sh first."
-    fi
-
-    info "Loading existing deployment configuration from .env…"
-    # Export each non-comment, non-empty line
-    while IFS='=' read -r key value; do
-        [[ -z "$key" || "$key" == \#* ]] && continue
-        export "${key}=${value}"
-    done < "$DEPLOY_ENV"
-
-    # Validate expected vars are present
-    local required_vars=(MATRIX_DOMAIN SERVER_NAME)
-    for var in "${required_vars[@]}"; do
-        if [[ -z "${!var:-}" ]]; then
-            die "Required variable '${var}' not found in .env. Please re-run setup.sh."
-        fi
-    done
+    module_load_env "$DEPLOY_ENV" "setup.sh"
 
     # Shared Redis defaults (provided by root setup.sh; fallback for older .env files)
     SHARED_REDIS_HOST="${SHARED_REDIS_HOST:-matrix_redis}"
@@ -69,50 +54,13 @@ load_env() {
     HOOKSHOT_REDIS_URI="${HOOKSHOT_REDIS_URI:-${SHARED_REDIS_URL}/${HOOKSHOT_REDIS_DB}}"
     export SHARED_REDIS_HOST SHARED_REDIS_PORT SHARED_REDIS_URL HOOKSHOT_REDIS_DB HOOKSHOT_REDIS_URI
 
-    success "Loaded: MATRIX_DOMAIN=${MATRIX_DOMAIN}, SERVER_NAME=${SERVER_NAME}"
 }
 
 # =============================================================================
 # Step 1b — Verify SERVER_NAME matches Synapse's actual server_name
 # =============================================================================
 verify_server_name() {
-    if [[ ! -f "$HOMESERVER_YAML" ]]; then
-        warn "homeserver.yaml not found — skipping server_name cross-check."
-        return
-    fi
-
-    # Read the server_name Synapse is actually using
-    local actual_server_name
-    actual_server_name="$(grep -E '^server_name:' "$HOMESERVER_YAML" \
-        | head -1 | awk '{print $2}' | tr -d '"' )"
-
-    if [[ -z "$actual_server_name" ]]; then
-        warn "Could not read server_name from homeserver.yaml — skipping check."
-        return
-    fi
-
-    if [[ "$actual_server_name" == "$SERVER_NAME" ]]; then
-        success "server_name check passed: ${SERVER_NAME}"
-        return
-    fi
-
-    # Mismatch — this is the root cause of the 'Can't join remote room' error.
-    echo
-    warn   "SERVER_NAME mismatch detected!"
-    echo   -e "  ${BOLD}.env has:${RESET}             ${RED}${SERVER_NAME}${RESET}"
-    echo   -e "  ${BOLD}homeserver.yaml has:${RESET}  ${GREEN}${actual_server_name}${RESET}"
-    echo
-    echo   -e "  Hookshot's bridge.domain MUST match Synapse's server_name."
-    echo   -e "  Using the homeserver.yaml value for this module setup."
-    echo
-    echo   -e "  ${YELLOW}If you also want to fix .env, update SERVER_NAME=${actual_server_name}${RESET}"
-    echo   -e "  ${YELLOW}and re-run: bash setup.sh --module hookshot${RESET}"
-    echo
-
-    # Override for the duration of THIS run only
-    SERVER_NAME="$actual_server_name"
-    export SERVER_NAME
-    info "Using server_name=${SERVER_NAME} for hookshot config."
+    module_verify_server_name "$HOMESERVER_YAML" "hookshot config"
 }
 # =============================================================================
 gather_config() {

@@ -43,63 +43,16 @@ BRIDGE_PORT="29335"
 # Step 1 — Load existing deployment environment
 # =============================================================================
 load_env() {
-    if [[ ! -f "$DEPLOY_ENV" ]]; then
-        die "No .env file found at ${DEPLOY_ENV}. Please run the main setup wizard first."
-    fi
-
-    info "Loading existing deployment configuration from .env…"
-    while IFS='=' read -r key value; do
-        [[ -z "$key" || "$key" == \#* ]] && continue
-        # strip inline comments
-        value="${value%%#*}"
-        value="${value%"${value##*[![:space:]]}"}"
-        export "${key}=${value}"
-    done < "$DEPLOY_ENV"
-
-    local required_vars=(MATRIX_DOMAIN SERVER_NAME)
-    for var in "${required_vars[@]}"; do
-        if [[ -z "${!var:-}" ]]; then
-            die "Required variable '${var}' not found in .env. Please re-run the main wizard."
-        fi
-    done
+    module_load_env "$DEPLOY_ENV" "the main setup wizard"
 
     ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
-    success "Loaded: MATRIX_DOMAIN=${MATRIX_DOMAIN}, SERVER_NAME=${SERVER_NAME}"
 }
 
 # =============================================================================
 # Step 2 — Verify SERVER_NAME matches Synapse's actual server_name
 # =============================================================================
 verify_server_name() {
-    if [[ ! -f "$HOMESERVER_YAML" ]]; then
-        warn "homeserver.yaml not found — skipping server_name cross-check."
-        return
-    fi
-
-    local actual_server_name
-    actual_server_name="$(grep -E '^server_name:' "$HOMESERVER_YAML" \
-        | head -1 | awk '{print $2}' | tr -d '"')"
-
-    if [[ -z "$actual_server_name" ]]; then
-        warn "Could not read server_name from homeserver.yaml — skipping check."
-        return
-    fi
-
-    if [[ "$actual_server_name" == "$SERVER_NAME" ]]; then
-        success "server_name check passed: ${SERVER_NAME}"
-        return
-    fi
-
-    echo
-    warn "SERVER_NAME mismatch detected!"
-    echo -e "  ${BOLD}.env has:${RESET}             ${RED}${SERVER_NAME}${RESET}"
-    echo -e "  ${BOLD}homeserver.yaml has:${RESET}  ${GREEN}${actual_server_name}${RESET}"
-    echo -e "  Using homeserver.yaml value for this module setup."
-    echo
-
-    SERVER_NAME="$actual_server_name"
-    export SERVER_NAME
-    info "Using server_name=${SERVER_NAME} for bridge config."
+    module_verify_server_name "$HOMESERVER_YAML" "bridge config"
 }
 
 # =============================================================================
