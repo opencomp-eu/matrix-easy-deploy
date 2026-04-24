@@ -63,9 +63,7 @@ load_env() {
         fi
     done
 
-    # Derive a sensible default admin username from .env if available
     ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
-
     success "Loaded: MATRIX_DOMAIN=${MATRIX_DOMAIN}, SERVER_NAME=${SERVER_NAME}"
 }
 
@@ -122,10 +120,8 @@ gather_config() {
     echo -e "${BOLD}  Slack Bridge Configuration${RESET}"
     echo -e "  ─────────────────────────────────────────────────────"
     echo -e "  mautrix-slack bridges your Matrix account to Slack."
-    echo -e "  After setup you authenticate with a Slack token and cookie."
     echo -e "  Press Enter to accept a ${CYAN}[default]${RESET}.\n"
 
-    # Admin user on the homeserver
     ask SL_ADMIN_USERNAME \
         "Matrix admin username for full bridge access (without @/server part)" \
         "${ADMIN_USERNAME:-admin}"
@@ -134,7 +130,6 @@ gather_config() {
         ask SL_ADMIN_USERNAME "Matrix admin username" "${ADMIN_USERNAME:-admin}"
     done
 
-    # Database name for the bridge
     ask SL_DB_NAME \
         "PostgreSQL database name for the Slack bridge" \
         "mautrix_slack"
@@ -211,119 +206,17 @@ generate_config() {
         success "config.yaml generated."
     fi
 
-    # --- Patch mandatory fields using Python ---
+    # --- Patch mandatory fields using shared helper ---
     info "Patching config.yaml with homeserver, database, and permissions…"
 
-    python3 - "$config_file" \
-        "$SERVER_NAME" \
-        "http://matrix_synapse:8008" \
-        "http://${BRIDGE_CONTAINER}:${BRIDGE_PORT}" \
-        "postgres" \
-        "$SL_DB_URI" \
-        "$SL_ADMIN_USERNAME" <<'PYEOF'
-import sys, re
-
-config_path   = sys.argv[1]
-server_name   = sys.argv[2]
-hs_address    = sys.argv[3]
-as_address    = sys.argv[4]
-db_type       = sys.argv[5]
-db_uri        = sys.argv[6]
-admin_user    = sys.argv[7]
-
-with open(config_path, 'r') as f:
-    content = f.read()
-
-def replace_field(text, key_path, new_value, quote=True):
-    """Replace a YAML scalar field scoped to its parent section.
-
-    key_path may be 'section.key' or just 'key'.
-    When a section is given, the replacement is constrained to the block
-    starting at that section header, so duplicate key names (e.g. two
-    'address:' fields under different sections) are handled correctly.
-    """
-    parts = key_path.split('.')
-    key   = parts[-1]
-    quoted_val = f'"{new_value}"' if quote else new_value
-    key_pattern = rf'^(\s*{re.escape(key)}:)\s*.*$'
-
-    if len(parts) == 1:
-        # No section context — replace the first occurrence globally
-        result, n = re.subn(key_pattern, rf'\1 {quoted_val}', text, count=1, flags=re.MULTILINE)
-        if n == 0:
-            print(f"  [warn] Field '{key}' not found in config — skipping.", file=sys.stderr)
-        return result
-
-    section = parts[0]
-    # Find the section header (e.g. "homeserver:" or "  homeserver:")
-    sec_match = re.search(rf'^( *){re.escape(section)}:\s*$', text, re.MULTILINE)
-    if not sec_match:
-        print(f"  [warn] Section '{section}' not found — skipping '{key}'.", file=sys.stderr)
-        return text
-
-    sec_indent = sec_match.group(1)          # indentation of the section header
-    sec_start  = sec_match.end()             # character position after the header line
-
-    # The section body ends when we hit a line at the same or lesser indentation
-    # (that isn't blank/comment). Build an end position.
-    body_end = len(text)
-    for m in re.finditer(r'^(' + re.escape(sec_indent) + r'\S)', text[sec_start:], re.MULTILINE):
-        body_end = sec_start + m.start()
-        break
-
-    section_body = text[sec_start:body_end]
-    new_body, n = re.subn(key_pattern, rf'\1 {quoted_val}', section_body, count=1, flags=re.MULTILINE)
-    if n == 0:
-        print(f"  [warn] Field '{key}' not found in section '{section}' — skipping.", file=sys.stderr)
-        return text
-    return text[:sec_start] + new_body + text[body_end:]
-
-# homeserver section
-content = replace_field(content, 'homeserver.domain',  server_name)
-content = replace_field(content, 'homeserver.address', hs_address)
-
-# appservice address (what Synapse uses to reach the bridge)
-content = replace_field(content, 'appservice.address', as_address)
-# bind to all interfaces so Synapse can reach the bridge across Docker networks
-content = replace_field(content, 'appservice.hostname', '0.0.0.0')
-
-# database
-content = replace_field(content, 'database.type', db_type)
-content = replace_field(content, 'database.uri',  db_uri)
-
-# permissions block — find it wherever it lives (top-level or nested under bridge:)
-# Detect the indentation of the permissions: key so we can match its child lines.
-perm_match = re.search(r'^( *)permissions:\s*\n((?:(?! *\S)|\1 [^\n]*\n)*)', content, re.MULTILINE)
-if perm_match:
-    indent = perm_match.group(1)          # e.g. "" or "    "
-    child_indent = indent + "    "        # one level deeper
-    new_block = (
-        f'{indent}permissions:\n'
-        f'{child_indent}"{server_name}": user\n'
-        f'{child_indent}"@{admin_user}:{server_name}": admin\n'
-    )
-    content = content[:perm_match.start()] + new_block + content[perm_match.end():]
-else:
-    # No permissions block at all — append one under bridge: if present, else top-level
-    child_indent = "    "
-    new_block = (
-        f'  permissions:\n'
-        f'{child_indent}"{server_name}": user\n'
-        f'{child_indent}"@{admin_user}:{server_name}": admin\n'
-    )
-    bridge_match = re.search(r'^bridge:\s*$', content, re.MULTILINE)
-    if bridge_match:
-        insert_pos = content.index('\n', bridge_match.start()) + 1
-        content = content[:insert_pos] + new_block + content[insert_pos:]
-    else:
-        content += f'\nbridge:\n{new_block}'
-    print("  [warn] permissions block not found — injected under bridge:", file=sys.stderr)
-
-with open(config_path, 'w') as f:
-    f.write(content)
-
-print("  config.yaml patched successfully.")
-PYEOF
+    python3 "${PROJECT_ROOT}/scripts/bridge_config_patch.py" \
+        --config-path "$config_file" \
+        --server-name "$SERVER_NAME" \
+        --hs-address "http://matrix_synapse:8008" \
+        --as-address "http://${BRIDGE_CONTAINER}:${BRIDGE_PORT}" \
+        --db-type "postgres" \
+        --db-uri "$SL_DB_URI" \
+        --admin-user "$SL_ADMIN_USERNAME"
 
     success "config.yaml patched."
 
