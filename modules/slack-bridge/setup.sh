@@ -23,6 +23,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=../../scripts/lib.sh
 source "${PROJECT_ROOT}/scripts/lib.sh"
+# shellcheck source=../../scripts/module_common.sh
+source "${PROJECT_ROOT}/scripts/module_common.sh"
 
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 
@@ -170,43 +172,11 @@ setup_database() {
     SL_DB_URI="postgres://${SL_DB_USER}:${SL_DB_PASSWORD}@matrix_postgres/${SL_DB_NAME}?sslmode=disable"
     export SL_DB_USER SL_DB_PASSWORD SL_DB_URI
 
-    if ! docker ps --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
-        die "matrix_postgres is not running. Please start the core stack first."
-    fi
-
-    # Create the role (ignore error if already exists)
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" matrix_postgres \
-        psql -U synapse -c \
-        "DO \$\$ BEGIN
-           IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${SL_DB_USER}') THEN
-             CREATE ROLE ${SL_DB_USER} LOGIN PASSWORD '${SL_DB_PASSWORD}';
-           ELSE
-             ALTER ROLE ${SL_DB_USER} WITH PASSWORD '${SL_DB_PASSWORD}';
-           END IF;
-         END \$\$;" \
-        2>&1 | sed 's/^/    /'
-
-    # Create database only when it does not already exist.
-    local _sl_db_exists
-    _sl_db_exists="$(docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" matrix_postgres \
-        psql -U synapse -tAc "SELECT 1 FROM pg_database WHERE datname = '${SL_DB_NAME}'" | tr -d '[:space:]')"
-    if [[ "${_sl_db_exists}" != "1" ]]; then
-        info "Creating database '${SL_DB_NAME}'…"
-        docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" matrix_postgres \
-            psql -U synapse -c \
-            "CREATE DATABASE ${SL_DB_NAME} OWNER ${SL_DB_USER}
-             ENCODING 'UTF8' LC_COLLATE='C' LC_CTYPE='C'
-             TEMPLATE template0;" \
-            2>&1 | sed 's/^/    /'
-    else
-        info "Database '${SL_DB_NAME}' already exists — skipping create."
-    fi
-
-    # Grant privileges
-    docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" matrix_postgres \
-        psql -U synapse -c \
-        "GRANT ALL PRIVILEGES ON DATABASE ${SL_DB_NAME} TO ${SL_DB_USER};" \
-        2>&1 | sed 's/^/    /'
+    ensure_postgres_role_and_database \
+        "${POSTGRES_PASSWORD}" \
+        "${SL_DB_USER}" \
+        "${SL_DB_PASSWORD}" \
+        "${SL_DB_NAME}"
 
     success "Database '${SL_DB_NAME}' ready."
 }
@@ -414,30 +384,9 @@ register_appservice() {
     fi
 
     info "Registering Slack appservice in homeserver.yaml…"
-    python3 - "$HOMESERVER_YAML" "$reg_container_path" <<'PYEOF'
-import sys, re
-
-filepath = sys.argv[1]
-reg_path = sys.argv[2]
-
-with open(filepath, 'r') as f:
-    content = f.read()
-
-if 'app_service_config_files' in content:
-    content = re.sub(
-        r'(app_service_config_files:(?:\s*\n\s+-[^\n]*)*)',
-        lambda m: m.group(0) + f'\n  - {reg_path}',
-        content,
-        count=1
-    )
-else:
-    content += f'\n# Application services (bridges)\napp_service_config_files:\n  - {reg_path}\n'
-
-with open(filepath, 'w') as f:
-    f.write(content)
-
-print(f"  Added {reg_path} to app_service_config_files.")
-PYEOF
+    python3 "${PROJECT_ROOT}/scripts/synapse_appservice.py" \
+        --homeserver-yaml "$HOMESERVER_YAML" \
+        --registration-path "$reg_container_path"
     success "homeserver.yaml updated."
 }
 

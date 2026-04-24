@@ -323,31 +323,9 @@ register_appservice() {
         info "Hookshot already registered in homeserver.yaml — skipping."
     else
         info "Registering Hookshot appservice in homeserver.yaml…"
-        python3 - "$HOMESERVER_YAML" "$reg_container_path" <<'PYEOF'
-import sys, re
-
-filepath = sys.argv[1]
-reg_path = sys.argv[2]
-
-with open(filepath, 'r') as f:
-    content = f.read()
-
-if 'app_service_config_files' in content:
-    # Append our registration to the existing list
-    content = re.sub(
-        r'(app_service_config_files:(?:\s*\n\s+-[^\n]*)*)',
-        lambda m: m.group(0) + f'\n  - {reg_path}',
-        content,
-        count=1
-    )
-else:
-    content += f'\n# Application services (bridges)\napp_service_config_files:\n  - {reg_path}\n'
-
-with open(filepath, 'w') as f:
-    f.write(content)
-
-print(f"  Added {reg_path} to app_service_config_files.")
-PYEOF
+        python3 "${PROJECT_ROOT}/scripts/synapse_appservice.py" \
+            --homeserver-yaml "$HOMESERVER_YAML" \
+            --registration-path "$reg_container_path"
         success "homeserver.yaml updated."
     fi
 }
