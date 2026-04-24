@@ -38,6 +38,7 @@ CADDYFILE="${PROJECT_ROOT}/caddy/Caddyfile"
 BRIDGE_IMAGE="dock.mau.dev/mautrix/slack:latest"
 BRIDGE_CONTAINER="mautrix-slack"
 BRIDGE_PORT="29335"
+APP_SERVICE_CHANGED="0"
 
 # =============================================================================
 # Step 1 — Load existing deployment environment
@@ -189,10 +190,15 @@ generate_config() {
 # Step 6 — Generate registration.yaml
 # =============================================================================
 generate_registration() {
+    local config_file="${BRIDGE_DATA_DIR}/config.yaml"
     local reg_file="${BRIDGE_DATA_DIR}/registration.yaml"
 
-    # Always regenerate so registration.yaml stays in sync with config.yaml.
-    # Stale registration files cause Synapse → bridge connectivity failures.
+    if [[ -f "$reg_file" && -f "$config_file" && "$reg_file" -nt "$config_file" ]]; then
+        info "registration.yaml is up to date — skipping regeneration."
+        return
+    fi
+
+    # Regenerate when missing or when config has changed.
     [[ -f "$reg_file" ]] && rm -f "$reg_file"
 
     info "Running container to generate registration.yaml…"
@@ -215,10 +221,15 @@ register_appservice() {
     local reg_dest="${CORE_SYNAPSE_DATA_DIR}/slack-registration.yaml"
     local reg_container_path="/data/slack-registration.yaml"
 
-    info "Copying registration.yaml to Synapse data directory…"
-    cp "$reg_src" "$reg_dest"
-    chmod 644 "$reg_dest"
-    success "Copied to ${reg_dest}."
+    if [[ ! -f "$reg_dest" ]] || ! cmp -s "$reg_src" "$reg_dest"; then
+        info "Syncing registration.yaml to Synapse data directory…"
+        cp "$reg_src" "$reg_dest"
+        chmod 644 "$reg_dest"
+        success "Copied to ${reg_dest}."
+        APP_SERVICE_CHANGED="1"
+    else
+        info "registration.yaml unchanged in Synapse data directory — skipping copy."
+    fi
 
     if [[ ! -f "$HOMESERVER_YAML" ]]; then
         die "homeserver.yaml not found at ${HOMESERVER_YAML}."
@@ -234,6 +245,7 @@ register_appservice() {
         --homeserver-yaml "$HOMESERVER_YAML" \
         --registration-path "$reg_container_path"
     success "homeserver.yaml updated."
+    APP_SERVICE_CHANGED="1"
 }
 
 # =============================================================================
@@ -246,13 +258,17 @@ start_services() {
     success "mautrix-slack started."
 
     echo
-    info "Restarting Synapse to load the new appservice registration…"
-    if docker ps --format '{{.Names}}' | grep -q '^matrix_synapse$'; then
-        docker restart matrix_synapse
-        success "Synapse restarted."
+    if [[ "$APP_SERVICE_CHANGED" == "1" ]]; then
+        info "Restarting Synapse to load the updated appservice registration…"
+        if docker ps --format '{{.Names}}' | grep -q '^matrix_synapse$'; then
+            docker restart matrix_synapse
+            success "Synapse restarted."
+        else
+            warn "Synapse (matrix_synapse) is not running."
+            warn "Start the core stack first: cd ${PROJECT_ROOT}/modules/core && docker compose up -d"
+        fi
     else
-        warn "Synapse (matrix_synapse) is not running."
-        warn "Start the core stack first: cd ${PROJECT_ROOT}/modules/core && docker compose up -d"
+        info "Synapse appservice wiring unchanged — skipping Synapse restart."
     fi
 }
 

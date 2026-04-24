@@ -20,6 +20,9 @@ class ApplyTests(unittest.TestCase):
         (self.root / "modules/calls/coturn").mkdir(parents=True)
         (self.root / "modules/calls/livekit").mkdir(parents=True)
         (self.root / "modules/hookshot").mkdir(parents=True)
+        (self.root / "modules/core/synapse_data").mkdir(parents=True)
+        (self.root / "modules/whatsapp-bridge/whatsapp").mkdir(parents=True)
+        (self.root / "modules/slack-bridge/slack").mkdir(parents=True)
 
         (self.root / "caddy/Caddyfile.template").write_text("{{MATRIX_DOMAIN}} {{CADDY_MATRIX_HOSTS}}")
         (self.root / "caddy/Caddyfile-no-element.template").write_text("no-element {{MATRIX_DOMAIN}}")
@@ -149,6 +152,85 @@ class ApplyTests(unittest.TestCase):
         modules_state = yaml.safe_load((self.root / ".matrix-easy-deploy/modules.yaml").read_text())
         self.assertIn("hookshot", modules_state)
         self.assertFalse(modules_state["hookshot"]["enabled"])
+
+    def test_apply_configuration_writes_bridge_env_values(self):
+        cfg = self.sample_config()
+        cfg["modules"]["whatsapp_bridge"] = {
+            "enabled": True,
+            "admin_username": "waadmin",
+            "db_name": "wa_custom",
+        }
+        cfg["modules"]["slack_bridge"] = {
+            "enabled": True,
+            "admin_username": "sladmin",
+            "db_name": "sl_custom",
+        }
+        self.write_config(cfg)
+        (self.root / "modules/whatsapp-bridge/whatsapp/registration.yaml").write_text("wa-reg\n")
+        (self.root / "modules/slack-bridge/slack/registration.yaml").write_text("sl-reg\n")
+        ctx = apply.ApplyContext(self.root)
+
+        apply.apply_configuration(ctx, server_ip="9.8.7.6", reconcile_modules=False)
+
+        env_text = (self.root / ".env").read_text()
+        self.assertIn("WA_ADMIN_USERNAME=waadmin", env_text)
+        self.assertIn("WA_DB_NAME=wa_custom", env_text)
+        self.assertIn("WA_DB_USER=mautrix_whatsapp", env_text)
+        self.assertIn("WA_DB_URI=postgres://mautrix_whatsapp:", env_text)
+        self.assertIn("SL_ADMIN_USERNAME=sladmin", env_text)
+        self.assertIn("SL_DB_NAME=sl_custom", env_text)
+        self.assertIn("SL_DB_USER=mautrix_slack", env_text)
+        self.assertIn("SL_DB_URI=postgres://mautrix_slack:", env_text)
+
+    def test_apply_reconciles_enabled_bridge_appservice_files_and_homeserver(self):
+        cfg = self.sample_config()
+        cfg["modules"]["whatsapp_bridge"]["enabled"] = True
+        cfg["modules"]["slack_bridge"]["enabled"] = True
+        self.write_config(cfg)
+
+        (self.root / "modules/whatsapp-bridge/whatsapp/registration.yaml").write_text("wa-reg\n")
+        (self.root / "modules/slack-bridge/slack/registration.yaml").write_text("sl-reg\n")
+
+        ctx = apply.ApplyContext(self.root)
+        apply.apply_configuration(ctx, server_ip="9.8.7.6", reconcile_modules=False)
+
+        wa_dest = self.root / "modules/core/synapse_data/whatsapp-registration.yaml"
+        sl_dest = self.root / "modules/core/synapse_data/slack-registration.yaml"
+        self.assertTrue(wa_dest.exists())
+        self.assertTrue(sl_dest.exists())
+        self.assertEqual(wa_dest.read_text(), "wa-reg\n")
+        self.assertEqual(sl_dest.read_text(), "sl-reg\n")
+
+        homeserver = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
+        self.assertIn("/data/whatsapp-registration.yaml", homeserver)
+        self.assertIn("/data/slack-registration.yaml", homeserver)
+
+    def test_apply_reconciles_disabled_bridge_appservice_cleanup(self):
+        cfg = self.sample_config()
+        cfg["modules"]["whatsapp_bridge"]["enabled"] = False
+        cfg["modules"]["slack_bridge"]["enabled"] = False
+        self.write_config(cfg)
+
+        homeserver = self.root / "modules/core/synapse/homeserver.yaml"
+        homeserver.parent.mkdir(parents=True, exist_ok=True)
+        homeserver.write_text(
+            "server_name: example.com\n"
+            "app_service_config_files:\n"
+            "  - /data/whatsapp-registration.yaml\n"
+            "  - /data/slack-registration.yaml\n"
+        )
+
+        (self.root / "modules/core/synapse_data/whatsapp-registration.yaml").write_text("wa-reg\n")
+        (self.root / "modules/core/synapse_data/slack-registration.yaml").write_text("sl-reg\n")
+
+        ctx = apply.ApplyContext(self.root)
+        apply.reconcile_bridge_appservices(ctx, cfg)
+
+        self.assertFalse((self.root / "modules/core/synapse_data/whatsapp-registration.yaml").exists())
+        self.assertFalse((self.root / "modules/core/synapse_data/slack-registration.yaml").exists())
+        cleaned = homeserver.read_text()
+        self.assertNotIn("/data/whatsapp-registration.yaml", cleaned)
+        self.assertNotIn("/data/slack-registration.yaml", cleaned)
 
     def test_apply_reuses_existing_secrets(self):
         self.write_config(self.sample_config())

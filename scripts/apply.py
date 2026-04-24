@@ -12,6 +12,8 @@ from pathlib import Path
 
 import yaml
 
+from scripts import synapse_appservice
+
 
 DEFAULT_SECRET_KEYS = [
     "POSTGRES_PASSWORD",
@@ -20,12 +22,27 @@ DEFAULT_SECRET_KEYS = [
     "FORM_SECRET",
     "COTURN_SECRET",
     "LIVEKIT_SECRET",
+    "WA_DB_PASSWORD",
+    "SL_DB_PASSWORD",
 ]
 
 MODULE_CONFIG_KEY_TO_DIR = {
     "hookshot": "hookshot",
     "whatsapp_bridge": "whatsapp-bridge",
     "slack_bridge": "slack-bridge",
+}
+
+BRIDGE_APP_SERVICE_SPECS = {
+    "whatsapp_bridge": {
+        "registration_src": "modules/whatsapp-bridge/whatsapp/registration.yaml",
+        "registration_dest": "modules/core/synapse_data/whatsapp-registration.yaml",
+        "registration_path": "/data/whatsapp-registration.yaml",
+    },
+    "slack_bridge": {
+        "registration_src": "modules/slack-bridge/slack/registration.yaml",
+        "registration_dest": "modules/core/synapse_data/slack-registration.yaml",
+        "registration_path": "/data/slack-registration.yaml",
+    },
 }
 
 
@@ -251,6 +268,37 @@ def build_env_vars(config: dict, derived: dict, state_secrets: dict) -> dict:
         "SERVER_NAME": derived["SERVER_NAME"],
         "ADMIN_USERNAME": config["matrix"]["admin_username"],
     }
+
+    modules = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+    whatsapp = modules.get("whatsapp_bridge", {}) if isinstance(modules.get("whatsapp_bridge", {}), dict) else {}
+    slack = modules.get("slack_bridge", {}) if isinstance(modules.get("slack_bridge", {}), dict) else {}
+
+    wa_db_name = str(whatsapp.get("db_name", "mautrix_whatsapp"))
+    wa_db_user = "mautrix_whatsapp"
+    wa_db_password = state_secrets.get("WA_DB_PASSWORD", "")
+    env_vars["WA_DB_NAME"] = wa_db_name
+    env_vars["WA_DB_USER"] = wa_db_user
+    env_vars["WA_DB_PASSWORD"] = wa_db_password
+    env_vars["WA_DB_URI"] = (
+        f"postgres://{wa_db_user}:{wa_db_password}@matrix_postgres/{wa_db_name}?sslmode=disable"
+    )
+    env_vars["WA_ADMIN_USERNAME"] = str(
+        whatsapp.get("admin_username", config["matrix"].get("admin_username", "admin"))
+    )
+
+    sl_db_name = str(slack.get("db_name", "mautrix_slack"))
+    sl_db_user = "mautrix_slack"
+    sl_db_password = state_secrets.get("SL_DB_PASSWORD", "")
+    env_vars["SL_DB_NAME"] = sl_db_name
+    env_vars["SL_DB_USER"] = sl_db_user
+    env_vars["SL_DB_PASSWORD"] = sl_db_password
+    env_vars["SL_DB_URI"] = (
+        f"postgres://{sl_db_user}:{sl_db_password}@matrix_postgres/{sl_db_name}?sslmode=disable"
+    )
+    env_vars["SL_ADMIN_USERNAME"] = str(
+        slack.get("admin_username", config["matrix"].get("admin_username", "admin"))
+    )
+
     env_vars.update(derived)
     env_vars.update(state_secrets)
     return env_vars
@@ -444,6 +492,58 @@ def reconcile_module_bootstrap(ctx: ApplyContext, config: dict) -> None:
         raise RuntimeError("One or more enabled modules failed to converge")
 
 
+def reconcile_bridge_appservices(ctx: ApplyContext, config: dict) -> None:
+    modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+    homeserver_yaml = ctx.project_root / "modules" / "core" / "synapse" / "homeserver.yaml"
+    failures: list[str] = []
+    changes: list[str] = []
+
+    if not homeserver_yaml.exists():
+        return
+
+    for config_key, spec in BRIDGE_APP_SERVICE_SPECS.items():
+        desired = modules_cfg.get(config_key, {}) if isinstance(modules_cfg.get(config_key, {}), dict) else {}
+        enabled = bool(desired.get("enabled", False))
+
+        reg_src = ctx.project_root / spec["registration_src"]
+        reg_dest = ctx.project_root / spec["registration_dest"]
+        reg_path = str(spec["registration_path"])
+
+        if enabled:
+            if not reg_src.exists():
+                failures.append(
+                    f"{config_key}: missing registration source ({reg_src.relative_to(ctx.project_root)})"
+                )
+                continue
+
+            reg_dest.parent.mkdir(parents=True, exist_ok=True)
+            needs_copy = not reg_dest.exists() or reg_src.read_bytes() != reg_dest.read_bytes()
+            if needs_copy:
+                reg_dest.write_bytes(reg_src.read_bytes())
+                changes.append(f"{config_key}: synced {reg_dest.relative_to(ctx.project_root)}")
+
+            if synapse_appservice.ensure_appservice_registration(homeserver_yaml, reg_path):
+                changes.append(f"{config_key}: ensured {reg_path} in homeserver.yaml")
+        else:
+            if reg_dest.exists():
+                reg_dest.unlink()
+                changes.append(f"{config_key}: removed {reg_dest.relative_to(ctx.project_root)}")
+
+            if synapse_appservice.remove_appservice_registration(homeserver_yaml, reg_path):
+                changes.append(f"{config_key}: removed {reg_path} from homeserver.yaml")
+
+    if changes:
+        print("Bridge appservice reconciliation changes:")
+        for item in changes:
+            print(f"  - {item}")
+
+    if failures:
+        print("Bridge appservice reconciliation failures:", file=sys.stderr)
+        for item in failures:
+            print(f"  - {item}", file=sys.stderr)
+        raise RuntimeError("One or more bridge modules failed appservice reconciliation")
+
+
 def apply_configuration(
     ctx: ApplyContext,
     server_ip: str | None = None,
@@ -461,6 +561,7 @@ def apply_configuration(
     reconcile_module_state(ctx, config)
     if reconcile_modules:
         reconcile_module_bootstrap(ctx, config)
+    reconcile_bridge_appservices(ctx, config)
 
 
 def run_runtime_reconcile(ctx: ApplyContext) -> None:
