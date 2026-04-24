@@ -81,10 +81,36 @@ setup_admin() {
     success "Synapse is responding."
 
     echo
+    local _admin_password=""
+    if [[ -n "${ADMIN_PASSWORD:-}" ]]; then
+        info "Using ADMIN_PASSWORD from environment for non-interactive admin bootstrap."
+        _admin_password="${ADMIN_PASSWORD}"
+    else
+        local _pw_confirm=""
+        info "Set a password for '@${ADMIN_USERNAME}:${SERVER_NAME}'"
+        while true; do
+            ask_secret _admin_password "Admin password"
+            if [[ ${#_admin_password} -lt 10 ]]; then
+                warn "Password must be at least 10 characters."
+                continue
+            fi
+
+            ask_secret _pw_confirm "Confirm admin password"
+            if [[ "$_admin_password" != "$_pw_confirm" ]]; then
+                warn "Passwords do not match. Try again."
+                continue
+            fi
+            break
+        done
+        unset _pw_confirm
+    fi
+
     info "Creating admin user '@${ADMIN_USERNAME}:${SERVER_NAME}'…"
     bash "${SCRIPT_DIR}/scripts/create-admin.sh" \
         "https://${MATRIX_DOMAIN}" \
         "${REGISTRATION_SHARED_SECRET}" \
         "${ADMIN_USERNAME}" \
-        "${ADMIN_PASSWORD}"
+        "${_admin_password}"
+
+    unset _admin_password
 }

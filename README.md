@@ -142,6 +142,17 @@ For first-time setup without the menu:
 bash matrix-wizard.sh --full-setup
 ```
 
+During first-time setup, the wizard now securely prompts for the initial admin password using hidden input and confirmation.
+For unattended automation, you can optionally export `ADMIN_PASSWORD` before running `--full-setup` to skip the prompt:
+
+```bash
+export ADMIN_PASSWORD='use-a-long-random-secret'
+bash matrix-wizard.sh --full-setup
+unset ADMIN_PASSWORD
+```
+
+Avoid storing `ADMIN_PASSWORD` in `.env` or `deploy.yaml`.
+
 ### Option 2: Edit config file directly
 
 1. Edit `deploy.yaml` with your settings

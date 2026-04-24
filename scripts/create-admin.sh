@@ -62,16 +62,27 @@ PYEOF
 # ---------------------------------------------------------------------------
 info "Registering admin user '${USERNAME}'…"
 
+JSON_PAYLOAD=$(python3 - <<PYEOF
+import json
+
+payload = {
+    "nonce": "${NONCE}",
+    "username": "${USERNAME}",
+    "password": "${PASSWORD}",
+    "admin": True,
+    "mac": "${MAC}",
+}
+
+print(json.dumps(payload))
+PYEOF
+)
+
 HTTP_STATUS=$(curl -fsSL -o /dev/null -w "%{http_code}" \
     -X POST "${BASE_URL}/_synapse/admin/v1/register" \
     -H "Content-Type: application/json" \
-    -d "{
-        \"nonce\":    \"${NONCE}\",
-        \"username\": \"${USERNAME}\",
-        \"password\": \"${PASSWORD}\",
-        \"admin\":    true,
-        \"mac\":      \"${MAC}\"
-    }")
+    --data-binary @- <<< "${JSON_PAYLOAD}")
+
+unset JSON_PAYLOAD
 
 if [[ "$HTTP_STATUS" == "200" ]] || [[ "$HTTP_STATUS" == "201" ]]; then
     success "Admin user '@${USERNAME}:${BASE_URL#*://}' created successfully."
