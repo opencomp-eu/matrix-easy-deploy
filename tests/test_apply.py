@@ -19,6 +19,7 @@ class ApplyTests(unittest.TestCase):
         (self.root / "modules/core/element").mkdir(parents=True)
         (self.root / "modules/calls/coturn").mkdir(parents=True)
         (self.root / "modules/calls/livekit").mkdir(parents=True)
+        (self.root / "modules/hookshot").mkdir(parents=True)
 
         (self.root / "caddy/Caddyfile.template").write_text("{{MATRIX_DOMAIN}} {{CADDY_MATRIX_HOSTS}}")
         (self.root / "caddy/Caddyfile-no-element.template").write_text("no-element {{MATRIX_DOMAIN}}")
@@ -26,6 +27,13 @@ class ApplyTests(unittest.TestCase):
         (self.root / "modules/core/element/config.json.template").write_text('{"base_url":"https://{{MATRIX_DOMAIN}}"}')
         (self.root / "modules/calls/coturn/turnserver.conf.template").write_text("realm={{MATRIX_DOMAIN}}")
         (self.root / "modules/calls/livekit/livekit.yaml.template").write_text("keys:\n  {{LIVEKIT_KEY}}: {{LIVEKIT_SECRET}}")
+        (self.root / "modules/hookshot/module.yaml").write_text(
+            "name: hookshot\n"
+            "config_key: hookshot\n"
+            "runtime:\n"
+            "  config_exists: modules/hookshot/hookshot/config.yml\n"
+        )
+        (self.root / "modules/hookshot/setup.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -164,6 +172,36 @@ class ApplyTests(unittest.TestCase):
         second_args = mock_run.call_args_list[1].args[0]
         self.assertTrue(str(first_args[1]).endswith("stop.sh"))
         self.assertTrue(str(second_args[1]).endswith("start.sh"))
+
+    def test_module_bootstrap_invoked_when_enabled_and_missing_config(self):
+        cfg = self.sample_config()
+        cfg["modules"]["hookshot"]["enabled"] = True
+        cfg["modules"]["hookshot"]["domain"] = "hookshot.example.com"
+
+        ctx = apply.ApplyContext(self.root)
+        with patch("scripts.apply.subprocess.run") as mock_run:
+            apply.reconcile_module_bootstrap(ctx, cfg)
+
+        self.assertEqual(mock_run.call_count, 1)
+        call = mock_run.call_args
+        cmd = call.args[0]
+        env = call.kwargs["env"]
+        self.assertTrue(str(cmd[1]).endswith("modules/hookshot/setup.sh"))
+        self.assertEqual(env.get("MED_NON_INTERACTIVE"), "1")
+        self.assertEqual(env.get("MODULE_HOOKSHOT_DOMAIN"), "hookshot.example.com")
+
+    def test_module_bootstrap_skips_when_config_exists(self):
+        cfg = self.sample_config()
+        cfg["modules"]["hookshot"]["enabled"] = True
+
+        (self.root / "modules/hookshot/hookshot").mkdir(parents=True)
+        (self.root / "modules/hookshot/hookshot/config.yml").write_text("ok\n")
+
+        ctx = apply.ApplyContext(self.root)
+        with patch("scripts.apply.subprocess.run") as mock_run:
+            apply.reconcile_module_bootstrap(ctx, cfg)
+
+        self.assertEqual(mock_run.call_count, 0)
 
 
 if __name__ == "__main__":

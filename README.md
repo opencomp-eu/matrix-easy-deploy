@@ -157,6 +157,13 @@ To also reconcile running services to match the new desired state immediately:
 bash apply.sh --reconcile-runtime
 ```
 
+By default, `apply.sh` also attempts non-interactive bootstrap for enabled modules when required generated module config is missing.
+If you want to skip that behavior:
+
+```bash
+bash apply.sh --skip-module-bootstrap
+```
+
 3. Start the services:
 
 ```bash

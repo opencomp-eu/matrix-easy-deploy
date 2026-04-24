@@ -4,6 +4,7 @@
 import argparse
 import datetime as dt
 import json
+import os
 import secrets
 import subprocess
 import sys
@@ -343,7 +344,71 @@ def reconcile_module_state(ctx: ApplyContext, config: dict) -> None:
         yaml.safe_dump(state, f, default_flow_style=False, sort_keys=True)
 
 
-def apply_configuration(ctx: ApplyContext, server_ip: str | None = None, rotate_secrets: bool = False) -> None:
+def module_env_overrides(config: dict, config_key: str) -> dict:
+    matrix = config.get("matrix", {}) if isinstance(config.get("matrix", {}), dict) else {}
+    modules = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+    module_cfg = modules.get(config_key, {}) if isinstance(modules.get(config_key, {}), dict) else {}
+
+    if config_key == "hookshot":
+        return {
+            "MODULE_HOOKSHOT_DOMAIN": str(module_cfg.get("domain", "")),
+        }
+
+    if config_key == "whatsapp_bridge":
+        return {
+            "MODULE_WA_ADMIN_USERNAME": str(module_cfg.get("admin_username", matrix.get("admin_username", "admin"))),
+            "MODULE_WA_DB_NAME": str(module_cfg.get("db_name", "mautrix_whatsapp")),
+        }
+
+    if config_key == "slack_bridge":
+        return {
+            "MODULE_SL_ADMIN_USERNAME": str(module_cfg.get("admin_username", matrix.get("admin_username", "admin"))),
+            "MODULE_SL_DB_NAME": str(module_cfg.get("db_name", "mautrix_slack")),
+        }
+
+    return {}
+
+
+def reconcile_module_bootstrap(ctx: ApplyContext, config: dict) -> None:
+    modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+
+    for config_key, dir_name in MODULE_CONFIG_KEY_TO_DIR.items():
+        desired = modules_cfg.get(config_key, {}) if isinstance(modules_cfg.get(config_key, {}), dict) else {}
+        if not bool(desired.get("enabled", False)):
+            continue
+
+        manifest = load_module_manifest(ctx, dir_name)
+        runtime = manifest.get("runtime", {}) if isinstance(manifest.get("runtime", {}), dict) else {}
+        config_exists = runtime.get("config_exists")
+        if not config_exists:
+            continue
+
+        config_path = ctx.project_root / str(config_exists)
+        if config_path.exists():
+            continue
+
+        setup_script = ctx.project_root / "modules" / dir_name / "setup.sh"
+        if not setup_script.exists():
+            print(
+                f"[WARN] Module '{config_key}' is enabled but setup script is missing ({setup_script}).",
+                file=sys.stderr,
+            )
+            continue
+
+        env = dict(os.environ)
+        env["MED_NON_INTERACTIVE"] = "1"
+        for key, value in module_env_overrides(config, config_key).items():
+            env[key] = value
+
+        subprocess.run(["bash", str(setup_script)], check=True, env=env)
+
+
+def apply_configuration(
+    ctx: ApplyContext,
+    server_ip: str | None = None,
+    rotate_secrets: bool = False,
+    reconcile_modules: bool = True,
+) -> None:
     config = load_config(ctx)
     validate_config(config)
     derived = derive_values(config, server_ip=server_ip)
@@ -353,6 +418,8 @@ def apply_configuration(ctx: ApplyContext, server_ip: str | None = None, rotate_
     write_env_file(ctx, env_vars)
     render_templates(ctx, env_vars)
     reconcile_module_state(ctx, config)
+    if reconcile_modules:
+        reconcile_module_bootstrap(ctx, config)
 
 
 def run_runtime_reconcile(ctx: ApplyContext) -> None:
@@ -383,6 +450,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="After apply, restart services (stop/start) to match desired runtime state",
     )
+    parser.add_argument(
+        "--skip-module-bootstrap",
+        action="store_true",
+        help="Do not run module setup scripts for enabled modules missing required generated config",
+    )
     return parser.parse_args(argv)
 
 
@@ -391,7 +463,12 @@ def main(argv: list[str] | None = None) -> int:
     project_root = Path(args.project_root).resolve() if args.project_root else Path(__file__).resolve().parent.parent
     ctx = ApplyContext(project_root)
 
-    apply_configuration(ctx, server_ip=args.server_ip, rotate_secrets=args.rotate_secrets)
+    apply_configuration(
+        ctx,
+        server_ip=args.server_ip,
+        rotate_secrets=args.rotate_secrets,
+        reconcile_modules=not args.skip_module_bootstrap,
+    )
     if args.reconcile_runtime:
         run_runtime_reconcile(ctx)
     print("Configuration applied successfully.")

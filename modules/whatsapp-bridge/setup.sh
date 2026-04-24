@@ -106,6 +106,16 @@ verify_server_name() {
 # Step 3 — Gather configuration from the user
 # =============================================================================
 gather_config() {
+    if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
+        WA_ADMIN_USERNAME="${MODULE_WA_ADMIN_USERNAME:-${WA_ADMIN_USERNAME:-${ADMIN_USERNAME:-admin}}}"
+        WA_DB_NAME="${MODULE_WA_DB_NAME:-${WA_DB_NAME:-mautrix_whatsapp}}"
+        if [[ -z "$WA_ADMIN_USERNAME" || -z "$WA_DB_NAME" ]]; then
+            die "WA_ADMIN_USERNAME and WA_DB_NAME are required in non-interactive mode."
+        fi
+        info "Non-interactive mode: using WA_ADMIN_USERNAME=${WA_ADMIN_USERNAME}, WA_DB_NAME=${WA_DB_NAME}"
+        return
+    fi
+
     echo
     echo -e "${BOLD}  WhatsApp Bridge Configuration${RESET}"
     echo -e "  ─────────────────────────────────────────────────────"

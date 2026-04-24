@@ -106,6 +106,16 @@ verify_server_name() {
 # Step 3 — Gather configuration from the user
 # =============================================================================
 gather_config() {
+    if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
+        SL_ADMIN_USERNAME="${MODULE_SL_ADMIN_USERNAME:-${SL_ADMIN_USERNAME:-${ADMIN_USERNAME:-admin}}}"
+        SL_DB_NAME="${MODULE_SL_DB_NAME:-${SL_DB_NAME:-mautrix_slack}}"
+        if [[ -z "$SL_ADMIN_USERNAME" || -z "$SL_DB_NAME" ]]; then
+            die "SL_ADMIN_USERNAME and SL_DB_NAME are required in non-interactive mode."
+        fi
+        info "Non-interactive mode: using SL_ADMIN_USERNAME=${SL_ADMIN_USERNAME}, SL_DB_NAME=${SL_DB_NAME}"
+        return
+    fi
+
     echo
     echo -e "${BOLD}  Slack Bridge Configuration${RESET}"
     echo -e "  ─────────────────────────────────────────────────────"

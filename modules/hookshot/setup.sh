@@ -116,6 +116,17 @@ verify_server_name() {
 }
 # =============================================================================
 gather_config() {
+    if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
+        local _suggested_hookshot_domain
+        _suggested_hookshot_domain="hookshot.$(extract_base_domain "$MATRIX_DOMAIN")"
+        HOOKSHOT_DOMAIN="${MODULE_HOOKSHOT_DOMAIN:-${HOOKSHOT_DOMAIN:-$_suggested_hookshot_domain}}"
+        if [[ -z "$HOOKSHOT_DOMAIN" ]]; then
+            die "HOOKSHOT_DOMAIN is required in non-interactive mode."
+        fi
+        info "Non-interactive mode: using HOOKSHOT_DOMAIN=${HOOKSHOT_DOMAIN}"
+        return
+    fi
+
     echo
     echo -e "${BOLD}  Hookshot Module Configuration${RESET}"
     echo -e "  ─────────────────────────────────────────────────────"
