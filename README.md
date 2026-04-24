@@ -181,6 +181,49 @@ bash apply.sh --skip-module-bootstrap
 bash start.sh
 ```
 
+### Non-interactive setup from an existing `deploy.yaml`
+
+If you already have a complete `deploy.yaml` and want to bootstrap the server without the interactive wizard, use this flow:
+
+1. Apply the config to generate `.env` and rendered files.
+2. Start the stack.
+3. Wait for Synapse to become healthy.
+4. Create the initial admin user non-interactively.
+
+Example:
+
+```bash
+# 1. Render runtime files from deploy.yaml
+bash apply.sh
+
+# 2. Start the stack
+bash start.sh
+
+# 3. Wait until Synapse is healthy
+until [[ "$(docker inspect --format='{{.State.Health.Status}}' matrix_synapse 2>/dev/null)" == "healthy" ]]; do
+  echo "Waiting for Synapse..."
+  sleep 5
+done
+
+# 4. Load generated values and create the initial admin user
+set -o allexport
+source ./.env
+set +o allexport
+
+bash scripts/create-admin.sh \
+  "https://${MATRIX_DOMAIN}" \
+  "${REGISTRATION_SHARED_SECRET}" \
+  "${ADMIN_USERNAME}" \
+  'replace-with-a-long-random-password'
+```
+
+Notes:
+
+- `bash apply.sh --reconcile-runtime` is also valid if you want apply to run stop/start for you.
+- `scripts/create-admin.sh` is safe to re-run; if the user already exists it will warn and skip.
+- Keep the admin password out of `deploy.yaml` and `.env`. Pass it at execution time or inject it through your automation/secret manager.
+- Enabled modules are bootstrapped non-interactively during `bash apply.sh` when their required generated config is missing.
+
 ### Run with Docker (single command)
 
 If you prefer not to install local dependencies, run the wizard from the published container image:
