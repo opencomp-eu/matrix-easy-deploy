@@ -61,6 +61,37 @@ class HookshotCaddyTests(unittest.TestCase):
             self.assertIn("hookshot.example.com {", content)
             self.assertEqual(content.count(hookshot_caddy.BEGIN_MARKER), 1)
 
+    def test_remove_hookshot_block_removes_managed_block(self):
+        original = (
+            "matrix.example.com {\n    reverse_proxy matrix_synapse:8008\n}\n\n"
+            f"{hookshot_caddy.BEGIN_MARKER}\n"
+            "hookshot.example.com {\n    reverse_proxy matrix-hookshot:9000\n}\n"
+            f"{hookshot_caddy.END_MARKER}\n"
+        )
+
+        updated = hookshot_caddy.remove_hookshot_block(original, "hookshot.example.com")
+        self.assertNotIn(hookshot_caddy.BEGIN_MARKER, updated)
+        self.assertNotIn("hookshot.example.com {", updated)
+
+    def test_main_remove_writes_cleaned_caddyfile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            caddyfile = Path(tmp) / "Caddyfile"
+            caddyfile.write_text(
+                f"{hookshot_caddy.BEGIN_MARKER}\n"
+                "hookshot.example.com {\n    reverse_proxy matrix-hookshot:9000\n}\n"
+                f"{hookshot_caddy.END_MARKER}\n"
+            )
+
+            rc = hookshot_caddy.main([
+                "--caddyfile",
+                str(caddyfile),
+                "--remove",
+            ])
+
+            self.assertEqual(rc, 0)
+            content = caddyfile.read_text()
+            self.assertNotIn(hookshot_caddy.BEGIN_MARKER, content)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -81,10 +81,39 @@ def upsert_hookshot_block(content: str, domain: str) -> str:
     return cleaned + block
 
 
+def remove_hookshot_block(content: str, domain: str | None = None) -> str:
+    updated = content
+
+    begin = updated.find(BEGIN_MARKER)
+    end = updated.find(END_MARKER)
+    if begin != -1 and end != -1 and end > begin:
+        end_line = updated.find("\n", end)
+        if end_line == -1:
+            end_line = len(updated)
+        else:
+            end_line += 1
+        updated = updated[:begin] + updated[end_line:]
+
+    # Also clean legacy unmanaged hookshot blocks when domain is known.
+    if domain:
+        updated = remove_legacy_hookshot_domain_blocks(updated, domain)
+
+    # Keep file tidy after removals.
+    while "\n\n\n" in updated:
+        updated = updated.replace("\n\n\n", "\n\n")
+
+    return updated
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Upsert Hookshot block in Caddyfile")
     parser.add_argument("--caddyfile", required=True)
-    parser.add_argument("--domain", required=True)
+    parser.add_argument("--domain", required=False)
+    parser.add_argument(
+        "--remove",
+        action="store_true",
+        help="Remove Hookshot block from Caddyfile instead of upserting it",
+    )
     return parser.parse_args(argv)
 
 
@@ -92,9 +121,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     caddyfile = Path(args.caddyfile)
     content = caddyfile.read_text() if caddyfile.exists() else ""
-    updated = upsert_hookshot_block(content, args.domain)
+    if args.remove:
+        updated = remove_hookshot_block(content, args.domain)
+        print("Hookshot Caddy block removed.")
+    else:
+        if not args.domain:
+            raise ValueError("--domain is required unless --remove is set")
+        updated = upsert_hookshot_block(content, args.domain)
+        print("Hookshot Caddy block reconciled.")
     caddyfile.write_text(updated)
-    print("Hookshot Caddy block reconciled.")
     return 0
 
 

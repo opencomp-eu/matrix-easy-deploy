@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 
 from scripts import synapse_appservice
+from scripts import hookshot_caddy
 
 
 DEFAULT_SECRET_KEYS = [
@@ -33,6 +34,11 @@ MODULE_CONFIG_KEY_TO_DIR = {
 }
 
 BRIDGE_APP_SERVICE_SPECS = {
+    "hookshot": {
+        "registration_src": "modules/hookshot/hookshot/registration.yml",
+        "registration_dest": "modules/core/synapse_data/hookshot-registration.yml",
+        "registration_path": "/data/hookshot-registration.yml",
+    },
     "whatsapp_bridge": {
         "registration_src": "modules/whatsapp-bridge/whatsapp/registration.yaml",
         "registration_dest": "modules/core/synapse_data/whatsapp-registration.yaml",
@@ -544,6 +550,33 @@ def reconcile_bridge_appservices(ctx: ApplyContext, config: dict) -> None:
         raise RuntimeError("One or more bridge modules failed appservice reconciliation")
 
 
+def reconcile_hookshot_caddy(ctx: ApplyContext, config: dict, derived: dict) -> None:
+    modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+    hookshot_cfg = modules_cfg.get("hookshot", {}) if isinstance(modules_cfg.get("hookshot", {}), dict) else {}
+    enabled = bool(hookshot_cfg.get("enabled", False))
+
+    caddyfile = ctx.project_root / "caddy" / "Caddyfile"
+    if not caddyfile.exists():
+        return
+
+    content = caddyfile.read_text()
+    hookshot_domain = str(derived.get("HOOKSHOT_DOMAIN", "") or "")
+
+    if enabled:
+        if not hookshot_domain:
+            raise RuntimeError("hookshot is enabled but HOOKSHOT_DOMAIN could not be resolved")
+        updated = hookshot_caddy.upsert_hookshot_block(content, hookshot_domain)
+    else:
+        updated = hookshot_caddy.remove_hookshot_block(content, hookshot_domain or None)
+
+    if updated != content:
+        caddyfile.write_text(updated)
+        if enabled:
+            print("Hookshot Caddy reconciliation: ensured managed block")
+        else:
+            print("Hookshot Caddy reconciliation: removed managed block")
+
+
 def apply_configuration(
     ctx: ApplyContext,
     server_ip: str | None = None,
@@ -562,6 +595,7 @@ def apply_configuration(
     if reconcile_modules:
         reconcile_module_bootstrap(ctx, config)
     reconcile_bridge_appservices(ctx, config)
+    reconcile_hookshot_caddy(ctx, config, derived)
 
 
 def run_runtime_reconcile(ctx: ApplyContext) -> None:

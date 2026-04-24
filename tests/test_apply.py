@@ -232,6 +232,71 @@ class ApplyTests(unittest.TestCase):
         self.assertNotIn("/data/whatsapp-registration.yaml", cleaned)
         self.assertNotIn("/data/slack-registration.yaml", cleaned)
 
+    def test_apply_reconciles_enabled_hookshot_appservice_and_caddy(self):
+        cfg = self.sample_config()
+        cfg["modules"]["hookshot"] = {
+            "enabled": True,
+            "domain": "hookshot.example.com",
+        }
+        self.write_config(cfg)
+
+        (self.root / "modules/hookshot/hookshot").mkdir(parents=True, exist_ok=True)
+        (self.root / "modules/hookshot/hookshot/registration.yml").write_text("hookshot-reg\n")
+
+        caddy_path = self.root / "caddy/Caddyfile"
+        caddy_path.write_text("matrix.example.com {\n    reverse_proxy matrix_synapse:8008\n}\n")
+
+        ctx = apply.ApplyContext(self.root)
+        apply.apply_configuration(ctx, server_ip="9.8.7.6", reconcile_modules=False)
+
+        hookshot_dest = self.root / "modules/core/synapse_data/hookshot-registration.yml"
+        self.assertTrue(hookshot_dest.exists())
+        self.assertEqual(hookshot_dest.read_text(), "hookshot-reg\n")
+
+        homeserver = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
+        self.assertIn("/data/hookshot-registration.yml", homeserver)
+
+        caddy = caddy_path.read_text()
+        self.assertIn("# BEGIN MED-HOOKSHOT BLOCK", caddy)
+        self.assertIn("hookshot.example.com {", caddy)
+
+    def test_apply_reconciles_disabled_hookshot_appservice_and_caddy_cleanup(self):
+        cfg = self.sample_config()
+        cfg["modules"]["hookshot"] = {
+            "enabled": False,
+            "domain": "hookshot.example.com",
+        }
+        self.write_config(cfg)
+
+        homeserver = self.root / "modules/core/synapse/homeserver.yaml"
+        homeserver.parent.mkdir(parents=True, exist_ok=True)
+        homeserver.write_text(
+            "server_name: example.com\n"
+            "app_service_config_files:\n"
+            "  - /data/hookshot-registration.yml\n"
+        )
+
+        (self.root / "modules/core/synapse_data/hookshot-registration.yml").write_text("hookshot-reg\n")
+
+        caddy_path = self.root / "caddy/Caddyfile"
+        caddy_path.write_text(
+            "matrix.example.com {\n    reverse_proxy matrix_synapse:8008\n}\n\n"
+            "# BEGIN MED-HOOKSHOT BLOCK\n"
+            "hookshot.example.com {\n    reverse_proxy matrix-hookshot:9000\n}\n"
+            "# END MED-HOOKSHOT BLOCK\n"
+        )
+
+        ctx = apply.ApplyContext(self.root)
+        apply.apply_configuration(ctx, server_ip="9.8.7.6", reconcile_modules=False)
+
+        self.assertFalse((self.root / "modules/core/synapse_data/hookshot-registration.yml").exists())
+        cleaned_hs = homeserver.read_text()
+        self.assertNotIn("/data/hookshot-registration.yml", cleaned_hs)
+
+        cleaned_caddy = caddy_path.read_text()
+        self.assertNotIn("# BEGIN MED-HOOKSHOT BLOCK", cleaned_caddy)
+        self.assertNotIn("hookshot.example.com {", cleaned_caddy)
+
     def test_apply_reuses_existing_secrets(self):
         self.write_config(self.sample_config())
         ctx = apply.ApplyContext(self.root)
