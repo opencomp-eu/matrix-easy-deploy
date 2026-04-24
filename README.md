@@ -223,6 +223,7 @@ Notes:
 - `scripts/create-admin.sh` is safe to re-run; if the user already exists it will warn and skip.
 - Keep the admin password out of `deploy.yaml` and `.env`. Pass it at execution time or inject it through your automation/secret manager.
 - Enabled modules are bootstrapped non-interactively during `bash apply.sh` when their required generated config is missing.
+- Bridge/module enable-disable transitions are reconciled by `bash apply.sh`; use `--reconcile-runtime` to apply those changes to running containers immediately.
 
 ### Run with Docker (single command)
 
@@ -261,6 +262,13 @@ The wizard will ask you:
 - `deploy.yaml` is the operator-owned source of truth.
 - `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered templates, module state metadata).
 - Re-running `bash apply.sh` is idempotent by default: existing generated secrets are re-used.
+- Enabled modules converge deterministically: if required generated files are missing, setup runs non-interactively.
+- Bridge appservice registrations converge deterministically in Synapse:
+  - enabled modules are synced into `modules/core/synapse_data` and added to `app_service_config_files`,
+  - disabled modules are removed from `modules/core/synapse_data` and removed from `app_service_config_files`.
+- Hookshot Caddy ingress converges deterministically:
+  - enabled Hookshot ensures a managed Caddy block,
+  - disabled Hookshot removes the managed Hookshot block.
 - To rotate generated secrets intentionally, use:
 
 ```bash

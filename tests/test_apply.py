@@ -297,6 +297,34 @@ class ApplyTests(unittest.TestCase):
         self.assertNotIn("# BEGIN MED-HOOKSHOT BLOCK", cleaned_caddy)
         self.assertNotIn("hookshot.example.com {", cleaned_caddy)
 
+    def test_apply_reconciles_disabled_hookshot_legacy_caddy_using_env_domain_fallback(self):
+        cfg = self.sample_config()
+        cfg["modules"]["hookshot"] = {
+            "enabled": False,
+        }
+        self.write_config(cfg)
+
+        # Simulate prior deploy state where domain exists in generated .env.
+        (self.root / ".env").write_text("HOOKSHOT_DOMAIN=hookshot.example.com\n")
+
+        caddy_path = self.root / "caddy/Caddyfile"
+        caddy_path.write_text(
+            "hookshot.example.com {\n"
+            "    reverse_proxy matrix-hookshot:9000\n"
+            "}\n"
+            "\n"
+            "matrix.example.com {\n"
+            "    reverse_proxy matrix_synapse:8008\n"
+            "}\n"
+        )
+
+        ctx = apply.ApplyContext(self.root)
+        apply.apply_configuration(ctx, server_ip="9.8.7.6", reconcile_modules=False)
+
+        cleaned_caddy = caddy_path.read_text()
+        self.assertNotIn("hookshot.example.com {", cleaned_caddy)
+        self.assertIn("matrix.example.com", cleaned_caddy)
+
     def test_apply_reuses_existing_secrets(self):
         self.write_config(self.sample_config())
         ctx = apply.ApplyContext(self.root)

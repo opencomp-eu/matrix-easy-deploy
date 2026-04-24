@@ -60,6 +60,22 @@ class ApplyContext:
         self.env_file = project_root / ".env"
 
 
+def load_env_map(env_file: Path) -> dict[str, str]:
+    if not env_file.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw in env_file.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            values[key] = value
+    return values
+
+
 def extract_base_domain(fqdn: str) -> str:
     parts = fqdn.split(".")
     if len(parts) >= 3:
@@ -561,6 +577,9 @@ def reconcile_hookshot_caddy(ctx: ApplyContext, config: dict, derived: dict) -> 
 
     content = caddyfile.read_text()
     hookshot_domain = str(derived.get("HOOKSHOT_DOMAIN", "") or "")
+    if not hookshot_domain:
+        existing_env = load_env_map(ctx.env_file)
+        hookshot_domain = str(existing_env.get("HOOKSHOT_DOMAIN", "") or "")
 
     if enabled:
         if not hookshot_domain:
