@@ -5,6 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/lib.sh"
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 
+# Ensure external Docker resources exist for direct apply/start workflows.
+ensure_docker_network "caddy_net"
+ensure_docker_volume "caddy_data"
+
 info "Starting Caddy…"
 (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" up -d)
 
