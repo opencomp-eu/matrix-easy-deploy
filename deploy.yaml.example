@@ -1,0 +1,26 @@
+matrix:
+  domain: matrix.example.com
+  server_name: example.com
+  admin_username: admin
+features:
+  registration_enabled: false
+  federation_enabled: true
+  element:
+    enabled: true
+    domain: element.example.com
+  calls:
+    enabled: true
+    livekit_domain: livekit.example.com
+  sso:
+    enabled: false
+    providers: []
+modules:
+  hookshot:
+    enabled: true
+    domain: hookshot.example.com
+  whatsapp_bridge:
+    enabled: false
+    admin_username: admin
+  slack_bridge:
+    enabled: false
+    admin_username: admin

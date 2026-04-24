@@ -121,21 +121,146 @@ This project makes setup even easier. It doesn't take power away from you — bu
 ```bash
 git clone https://github.com/nordwestt/matrix-easy-deploy-kit
 cd matrix-easy-deploy-kit
+```
+
+### Recommended workflow (YAML-first)
+
+The primary operating model is:
+
+1. Edit `deploy.yaml`.
+2. Run `bash apply.sh`.
+3. Optionally run `bash apply.sh --reconcile-runtime` to apply changes to running containers immediately.
+
+Minimal flow:
+
+```bash
+# 1) Edit desired state
+$EDITOR deploy.yaml
+
+# 2) Converge generated artifacts and module state
+bash apply.sh
+
+# 3) Start services (first run) or reconcile live runtime (subsequent changes)
+bash start.sh
+# or
+bash apply.sh --reconcile-runtime
+```
+
+By default, `bash apply.sh` also attempts non-interactive bootstrap for enabled modules when required generated files are missing.
+To skip bootstrap:
+
+```bash
+bash apply.sh --skip-module-bootstrap
+```
+
+### Interactive wizard (optional UX)
+
+```bash
 bash matrix-wizard.sh
 ```
 
-`matrix-wizard.sh` now opens an interactive operator wizard where you can:
-- run first-time setup,
-- install/configure modules,
-- create users/admins,
-- start/stop/update services,
-- and tail logs.
+The wizard is a convenience layer over the same YAML-first model. It edits `deploy.yaml`, runs apply, and offers module/user/runtime shortcuts.
 
-If you want to jump straight into first-time setup without the menu:
+For first-time setup without the menu:
 
 ```bash
 bash matrix-wizard.sh --full-setup
 ```
+
+For unattended wizard automation, you can optionally set `ADMIN_PASSWORD` before `--full-setup`:
+
+```bash
+export ADMIN_PASSWORD='use-a-long-random-secret'
+bash matrix-wizard.sh --full-setup
+unset ADMIN_PASSWORD
+```
+
+Avoid storing `ADMIN_PASSWORD` in `.env` or `deploy.yaml`.
+
+### Non-interactive setup from an existing `deploy.yaml`
+
+If you already have a complete `deploy.yaml` and want to bootstrap the server without the interactive wizard, use this flow:
+
+1. Apply the config to generate `.env` and rendered files.
+2. Start the stack.
+3. Wait for Synapse to become healthy.
+4. Create the initial admin user non-interactively.
+
+Example:
+
+```bash
+# 1. Render runtime files from deploy.yaml
+bash apply.sh
+
+# 2. Start the stack
+bash start.sh
+
+# 3. Wait until Synapse is healthy
+until [[ "$(docker inspect --format='{{.State.Health.Status}}' matrix_synapse 2>/dev/null)" == "healthy" ]]; do
+  echo "Waiting for Synapse..."
+  sleep 5
+done
+
+# 4. Load generated values and create the initial admin user
+set -o allexport
+source ./.env
+set +o allexport
+
+bash scripts/create-admin.sh \
+  "https://${MATRIX_DOMAIN}" \
+  "${REGISTRATION_SHARED_SECRET}" \
+  "${ADMIN_USERNAME}" \
+  'replace-with-a-long-random-password'
+```
+
+Notes:
+
+- `bash apply.sh --reconcile-runtime` is also valid if you want apply to run stop/start for you.
+- `scripts/create-admin.sh` is safe to re-run; if the user already exists it will warn and skip.
+- Keep the admin password out of `deploy.yaml` and `.env`. Pass it at execution time or inject it through your automation/secret manager.
+- Enabled modules are bootstrapped non-interactively during `bash apply.sh` when their required generated config is missing.
+- Bridge/module enable-disable transitions are reconciled by `bash apply.sh`; use `--reconcile-runtime` to apply those changes to running containers immediately.
+
+### Smoke verification checklist
+
+Run this after major changes or before release:
+
+```bash
+# 1) First apply should converge cleanly
+bash apply.sh
+
+# 2) Second apply should remain clean/idempotent
+bash apply.sh
+
+# 3) Runtime command coverage
+bash stop.sh
+bash start.sh
+bash update.sh
+
+# 4) Repeated module re-apply should not churn
+bash matrix-wizard.sh --module hookshot
+bash matrix-wizard.sh --module hookshot
+bash matrix-wizard.sh --module whatsapp-bridge
+bash matrix-wizard.sh --module whatsapp-bridge
+bash matrix-wizard.sh --module slack-bridge
+bash matrix-wizard.sh --module slack-bridge
+```
+
+### Uninstall/reset the stack
+
+For repeatable test cycles, you can remove running services, Docker resources, and generated repository state while keeping `deploy.yaml`:
+
+```bash
+bash uninstall.sh
+```
+
+Non-interactive mode:
+
+```bash
+bash uninstall.sh --yes
+```
+
+This cleanup removes generated runtime files like `.env`, `.matrix-easy-deploy/`, rendered configs, and module data directories (`modules/core/synapse_data`, `modules/hookshot/hookshot`, `modules/whatsapp-bridge/whatsapp`, `modules/slack-bridge/slack`).
 
 ### Run with Docker (single command)
 
@@ -168,6 +293,26 @@ The wizard will ask you:
 10. For each provider: optional OIDC claim allowlist (org/group/domain control)
 11. Whether to install Element Web, and on which domain
 12. **Your LiveKit domain** — something like `livekit.example.com` (defaults to `livekit.<basedomain>`)
+
+### Configuration model
+
+- `deploy.yaml` is the operator-owned source of truth.
+- `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered templates, module state metadata).
+- Re-running `bash apply.sh` is idempotent by default: existing generated secrets are re-used.
+- Enabled modules converge deterministically: if required generated files are missing, setup runs non-interactively.
+- Bridge appservice registrations converge deterministically in Synapse:
+  - enabled modules are synced into `modules/core/synapse_data` and added to `app_service_config_files`,
+  - disabled modules are removed from `modules/core/synapse_data` and removed from `app_service_config_files`.
+- Hookshot Caddy ingress converges deterministically:
+  - enabled Hookshot ensures a managed Caddy block,
+  - disabled Hookshot removes the managed Hookshot block.
+- To rotate generated secrets intentionally, use:
+
+```bash
+bash apply.sh --rotate-secrets
+```
+
+> `--rotate-secrets` is destructive for existing deployments unless you plan migration/restart carefully.
 
 ### Important: `MATRIX_DOMAIN` vs `SERVER_NAME`
 
@@ -401,16 +546,28 @@ docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 
 ---
 
-## Re-running setup
+## Re-applying configuration
 
-If you need to change your domain or reconfigure anything, open the wizard with `bash matrix-wizard.sh` and select `First setup (full wizard)`, or run the direct command below. It will regenerate all config files and restart services. If you already have data you want to preserve, stop first:
+If you need to change domains, feature flags, or module enablement:
+
+1. Edit `deploy.yaml` directly or use `bash matrix-wizard.sh`.
+2. Apply changes:
+
+```bash
+bash apply.sh
+```
+
+3. Restart services if needed:
 
 ```bash
 bash stop.sh
-bash matrix-wizard.sh --full-setup
+bash start.sh
 ```
 
-> Secrets (database password, signing keys, TURN shared secret, LiveKit API key, etc.) are re-generated each time you run setup. If you want to preserve an existing database, back it up first, or manually edit `.env` and the config files instead of re-running setup.
+By default, `apply.sh` preserves existing generated secrets and re-renders files deterministically from `deploy.yaml`.
+Use `apply.sh --reconcile-runtime` when you want apply to also run stop/start and align running services with the updated config.
+
+Need migration details from legacy setup behavior? See `MIGRATION.md`.
 
 ---
 
@@ -424,7 +581,7 @@ bash matrix-wizard.sh --module <module-name>
 
 You can also install modules from the interactive wizard (`bash matrix-wizard.sh` → `Install/configure module`).
 
-This calls the module's own `setup.sh`, which can ask its own questions, pull its own images, and register itself with the rest of the stack without touching the core configuration.
+This updates module desired state in `deploy.yaml`, runs `apply.sh`, then calls the module's own `setup.sh` for module-specific bootstrap (tokens, registration, etc.).
 
 ### Available modules
 
@@ -603,7 +760,7 @@ docker inspect matrix_postgres | grep -A 5 Health
 
 ## Security notes
 
-- Your `.env` file contains database credentials, TURN secrets, LiveKit API keys, and other internal secrets. It's in `.gitignore` — keep it that way.
+- Your `.env` file and `.matrix-easy-deploy/secrets.yaml` contain database credentials, TURN secrets, LiveKit API keys, and other internal secrets. Keep both private and out of git.
 - Public registration is off by default. Think carefully before turning it on; an open Matrix server is a spam target.
 - OIDC SSO is on by default in the wizard. If you don't want external IdPs, disable SSO during setup.
 - Federation is on by default. If you want a private, islands-only server, disable it during setup.
@@ -619,6 +776,23 @@ docker inspect matrix_postgres | grep -A 5 Health
 ## Contributing
 
 Issues, fixes, and module contributions are welcome. If you're adding a new module, follow the pattern in `modules/core/` — a `docker-compose.yml` for services and a `setup.sh` that sources `scripts/lib.sh` for prompts and helpers.
+
+## Verification (local-dev friendly)
+
+You can validate logic and idempotency on a local laptop without a full server deployment:
+
+```bash
+# Unit and logic tests
+./test
+
+# Deterministic apply run with fixed IP for local smoke checks
+bash apply.sh --server-ip 127.0.0.1
+
+# Optional: verify repeated apply is stable
+bash apply.sh --server-ip 127.0.0.1
+```
+
+For release confidence, run these checks before shipping changes to setup/apply/module scripts.
 
 ## Releasing
 

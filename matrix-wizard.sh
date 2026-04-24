@@ -14,17 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=scripts/lib.sh
 source "${SCRIPT_DIR}/scripts/lib.sh"
-# shellcheck source=scripts/sso.sh
-source "${SCRIPT_DIR}/scripts/sso.sh"
 
 # shellcheck source=scripts/setup/banner.sh
 source "${SCRIPT_DIR}/scripts/setup/banner.sh"
 # shellcheck source=scripts/setup/dependencies.sh
 source "${SCRIPT_DIR}/scripts/setup/dependencies.sh"
-# shellcheck source=scripts/setup/config.sh
-source "${SCRIPT_DIR}/scripts/setup/config.sh"
-# shellcheck source=scripts/setup/generate.sh
-source "${SCRIPT_DIR}/scripts/setup/generate.sh"
 # shellcheck source=scripts/setup/runtime.sh
 source "${SCRIPT_DIR}/scripts/setup/runtime.sh"
 # shellcheck source=scripts/setup/summary.sh
@@ -34,6 +28,169 @@ source "${SCRIPT_DIR}/scripts/setup/modules.sh"
 
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 DEPLOY_ENV="${SCRIPT_DIR}/.env"
+DEPLOY_YAML="${SCRIPT_DIR}/deploy.yaml"
+
+edit_deploy_config() {
+    echo
+    echo -e "${BOLD}  Configuration${RESET}"
+    echo -e "  ─────────────────────────────────────────────────────"
+    echo -e "  Press Enter to accept a ${CYAN}[default]${RESET}.\n"
+
+    # Load existing config defaults
+    local config_matrix_domain="matrix.example.com"
+    local config_server_name="example.com"
+    local config_admin_username="admin"
+    local config_registration_default="n"
+    local config_federation_default="y"
+    local config_element_default="y"
+    local config_element_domain=""
+    local config_calls_default="y"
+    local config_livekit_domain=""
+
+    if [[ -f "$DEPLOY_YAML" ]]; then
+        info "Loading existing configuration from deploy.yaml"
+        eval "$(python3 "${SCRIPT_DIR}/scripts/config_edit.py" --deploy-yaml "$DEPLOY_YAML" --print-wizard-defaults)"
+    fi
+
+    ask MATRIX_DOMAIN \
+        "Matrix homeserver domain  (e.g. matrix.example.com)" \
+        "$config_matrix_domain"
+    while [[ -z "$MATRIX_DOMAIN" ]]; do
+        warn "Matrix domain is required."
+        ask MATRIX_DOMAIN "Matrix homeserver domain" "$config_matrix_domain"
+    done
+
+    local _suggested_server_name
+    _suggested_server_name="$(extract_base_domain "$MATRIX_DOMAIN")"
+    ask SERVER_NAME \
+        "Matrix server name (used in user IDs: @user:SERVER_NAME)" \
+        "${config_server_name:-$_suggested_server_name}"
+
+    ask ADMIN_USERNAME "Admin username" "$config_admin_username"
+    while [[ -z "$ADMIN_USERNAME" ]]; do
+        warn "Admin username is required."
+        ask ADMIN_USERNAME "Admin username" "$config_admin_username"
+    done
+
+    echo
+    echo -e "  ${BOLD}Optional features${RESET}"
+
+    ask_yn ENABLE_REGISTRATION_INPUT \
+        "Allow public user registration?" \
+        "$config_registration_default"
+    ENABLE_REGISTRATION="$([ "$ENABLE_REGISTRATION_INPUT" == "y" ] && echo "true" || echo "false")"
+
+    ask_yn ENABLE_FEDERATION_INPUT \
+        "Enable federation with other Matrix servers?" \
+        "$config_federation_default"
+    ENABLE_FEDERATION="$([ "$ENABLE_FEDERATION_INPUT" == "y" ] && echo "true" || echo "false")"
+
+    # SSO placeholder
+    ENABLE_SSO="false"
+
+    ask_yn INSTALL_ELEMENT_INPUT \
+        "Install Element web client? (skip if you already have a client)" \
+        "$config_element_default"
+    INSTALL_ELEMENT="$([ "$INSTALL_ELEMENT_INPUT" == "y" ] && echo "true" || echo "false")"
+    if [[ "$INSTALL_ELEMENT" == "true" ]]; then
+        local _suggested_element_domain
+        _suggested_element_domain="element.$(extract_base_domain "$MATRIX_DOMAIN")"
+        ask ELEMENT_DOMAIN \
+            "Element domain  (e.g. element.example.com)" \
+            "${config_element_domain:-$_suggested_element_domain}"
+        while [[ -z "$ELEMENT_DOMAIN" ]]; do
+            warn "Element domain is required when installing Element."
+            ask ELEMENT_DOMAIN "Element domain" "${config_element_domain:-$_suggested_element_domain}"
+        done
+    else
+        ELEMENT_DOMAIN=""
+    fi
+
+    echo
+    echo -e "  ${BOLD}Calls (TURN + LiveKit SFU)${RESET}"
+    ask_yn ENABLE_CALLS_INPUT \
+        "Enable TURN + LiveKit calls services?" \
+        "$config_calls_default"
+    ENABLE_CALLS="$([ "$ENABLE_CALLS_INPUT" == "y" ] && echo "true" || echo "false")"
+    if [[ "$ENABLE_CALLS" == "true" ]]; then
+        local _suggested_livekit_domain
+        _suggested_livekit_domain="livekit.$(extract_base_domain "$MATRIX_DOMAIN")"
+        ask LIVEKIT_DOMAIN \
+            "LiveKit domain  (e.g. livekit.example.com)" \
+            "${config_livekit_domain:-$_suggested_livekit_domain}"
+        while [[ -z "$LIVEKIT_DOMAIN" ]]; do
+            warn "LiveKit domain is required when calls are enabled."
+            ask LIVEKIT_DOMAIN "LiveKit domain" "${config_livekit_domain:-$_suggested_livekit_domain}"
+        done
+    else
+        LIVEKIT_DOMAIN=""
+    fi
+
+    echo
+    echo -e "${BOLD}  Configuration summary${RESET}"
+    echo -e "  ─────────────────────────────────────────────────────"
+    echo -e "  Matrix domain   : ${CYAN}${MATRIX_DOMAIN}${RESET}"
+    echo -e "  Server name     : ${CYAN}${SERVER_NAME}${RESET}  (IDs look like @${ADMIN_USERNAME}:${SERVER_NAME})"
+    echo -e "  Admin user      : ${CYAN}${ADMIN_USERNAME}${RESET}"
+    echo -e "  Public reg.     : ${CYAN}${ENABLE_REGISTRATION}${RESET}"
+    echo -e "  Federation      : ${CYAN}${ENABLE_FEDERATION_INPUT}${RESET}"
+    echo -e "  SSO (OIDC)      : ${CYAN}disabled${RESET}"
+    if [[ "$INSTALL_ELEMENT" == "true" ]]; then
+        echo -e "  Element client  : ${CYAN}${ELEMENT_DOMAIN}${RESET}"
+    else
+        echo -e "  Element client  : ${CYAN}not installed${RESET}"
+    fi
+    if [[ "$ENABLE_CALLS" == "true" ]]; then
+        echo -e "  LiveKit (calls) : ${CYAN}${LIVEKIT_DOMAIN}${RESET}"
+    else
+        echo -e "  LiveKit (calls) : ${CYAN}disabled${RESET}"
+    fi
+    echo
+    echo -e "  ${YELLOW}DNS check:${RESET} make sure these A records point to this server before proceeding:"
+    echo -e "    ${CYAN}${MATRIX_DOMAIN}${RESET}  →  <this server's IP>"
+    if [[ "$SERVER_NAME" != "$MATRIX_DOMAIN" ]]; then
+        echo -e "    ${CYAN}${SERVER_NAME}${RESET}  →  <this server's IP>  ${YELLOW}(required for federation delegation)${RESET}"
+    fi
+    if [[ "$INSTALL_ELEMENT" == "true" ]]; then
+        echo -e "    ${CYAN}${ELEMENT_DOMAIN}${RESET}  →  <this server's IP>"
+    fi
+    if [[ "$ENABLE_CALLS" == "true" ]]; then
+        echo -e "    ${CYAN}${LIVEKIT_DOMAIN}${RESET}  →  <this server's IP>"
+    fi
+    echo
+
+    ask_yn _confirm "Does this look right? Proceed?" "y"
+    if [[ "$_confirm" != "y" ]]; then
+        warn "Restarting configuration…"
+        echo
+        edit_deploy_config
+        return $?
+    fi
+
+    python3 "${SCRIPT_DIR}/scripts/config_edit.py" \
+        --deploy-yaml "$DEPLOY_YAML" \
+        --set-core \
+        --matrix-domain "$MATRIX_DOMAIN" \
+        --server-name "$SERVER_NAME" \
+        --admin-username "$ADMIN_USERNAME" \
+        --registration-enabled "$ENABLE_REGISTRATION" \
+        --federation-enabled "$ENABLE_FEDERATION" \
+        --install-element "$INSTALL_ELEMENT" \
+        --element-domain "$ELEMENT_DOMAIN" \
+        --calls-enabled "$ENABLE_CALLS" \
+        --livekit-domain "$LIVEKIT_DOMAIN"
+    success "Configuration saved to deploy.yaml"
+
+    echo
+    ask_yn _proceed_deploy "Proceed to deployment?" "y"
+    if [[ "$_proceed_deploy" != "y" ]]; then
+        info "Stopping after configuration step."
+        info "You can deploy anytime with 'bash apply.sh' followed by 'bash start.sh'."
+        return 1
+    fi
+
+    return 0
+}
 
 run_full_setup() {
     print_banner
@@ -41,11 +198,21 @@ run_full_setup() {
 
     echo
     echo -e "${BOLD}  Step 1 of 5 — Configuration${RESET}"
-    gather_config
+    if ! edit_deploy_config; then
+        return
+    fi
 
     echo
-    echo -e "${BOLD}  Step 2 of 5 — Generating configuration files${RESET}"
-    generate_config
+    echo -e "${BOLD}  Step 2 of 5 — Applying configuration${RESET}"
+    bash "${SCRIPT_DIR}/apply.sh"
+
+    # Load the generated .env for runtime
+    if [[ -f "$DEPLOY_ENV" ]]; then
+        set -o allexport
+        # shellcheck disable=SC1090
+        source "$DEPLOY_ENV"
+        set +o allexport
+    fi
 
     echo
     echo -e "${BOLD}  Step 3 of 5 — Docker infrastructure${RESET}"
@@ -131,7 +298,15 @@ run_module_wizard() {
 
     if [[ "$choice" =~ ^[0-9]+$ ]]; then
         if (( choice >= 1 && choice <= ${#modules[@]} )); then
-            run_module_setup "${modules[$((choice - 1))]}"
+            local selected_module
+            selected_module="${modules[$((choice - 1))]}"
+            info "Marking module '${selected_module}' as enabled in deploy.yaml…"
+            python3 "${SCRIPT_DIR}/scripts/config_edit.py" \
+                --deploy-yaml "${DEPLOY_YAML}" \
+                --enable-module "${selected_module}"
+            info "Applying updated configuration…"
+            bash "${SCRIPT_DIR}/apply.sh"
+            run_module_setup "$selected_module"
             pause_screen
             return
         fi
@@ -144,6 +319,12 @@ run_module_wizard() {
                 pause_screen
                 return
             fi
+            info "Marking module '${module_name}' as enabled in deploy.yaml…"
+            python3 "${SCRIPT_DIR}/scripts/config_edit.py" \
+                --deploy-yaml "${DEPLOY_YAML}" \
+                --enable-module "${module_name}"
+            info "Applying updated configuration…"
+            bash "${SCRIPT_DIR}/apply.sh"
             run_module_setup "$module_name"
             pause_screen
             return
@@ -271,6 +452,7 @@ print_wizard_menu() {
     echo -e "  ${CYAN}7)${RESET} Update images + restart"
     echo -e "  ${CYAN}8)${RESET} Show running containers"
     echo -e "  ${CYAN}9)${RESET} Tail service logs"
+    echo -e "  ${CYAN}10)${RESET} Uninstall/reset stack"
     echo -e "  ${CYAN}q)${RESET} Exit"
     echo
 }
@@ -316,6 +498,10 @@ run_wizard_hub() {
                 ;;
             9)
                 run_logs_wizard
+                ;;
+            10)
+                bash "${SCRIPT_DIR}/uninstall.sh"
+                pause_screen
                 ;;
             q)
                 success "Exiting wizard."

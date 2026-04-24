@@ -28,3 +28,5 @@ modules/hookshot/hookshot/cryptostore
 !docker-compose.yml
 !docker-compose.yaml
 !.github/workflows/*.yml
+*.pyc
+__pycache__/

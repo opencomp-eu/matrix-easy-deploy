@@ -62,24 +62,61 @@ PYEOF
 # ---------------------------------------------------------------------------
 info "Registering admin user '${USERNAME}'…"
 
-HTTP_STATUS=$(curl -fsSL -o /dev/null -w "%{http_code}" \
+JSON_PAYLOAD=$(python3 - <<PYEOF
+import json
+
+payload = {
+    "nonce": "${NONCE}",
+    "username": "${USERNAME}",
+    "password": "${PASSWORD}",
+    "admin": True,
+    "mac": "${MAC}",
+}
+
+print(json.dumps(payload))
+PYEOF
+)
+
+RESPONSE_FILE="$(mktemp)"
+trap 'rm -f "$RESPONSE_FILE"' EXIT
+
+HTTP_STATUS=$(curl -sS -o "$RESPONSE_FILE" -w "%{http_code}" \
     -X POST "${BASE_URL}/_synapse/admin/v1/register" \
     -H "Content-Type: application/json" \
-    -d "{
-        \"nonce\":    \"${NONCE}\",
-        \"username\": \"${USERNAME}\",
-        \"password\": \"${PASSWORD}\",
-        \"admin\":    true,
-        \"mac\":      \"${MAC}\"
-    }")
+    --data-binary @- <<< "${JSON_PAYLOAD}")
+
+unset JSON_PAYLOAD
 
 if [[ "$HTTP_STATUS" == "200" ]] || [[ "$HTTP_STATUS" == "201" ]]; then
     success "Admin user '@${USERNAME}:${BASE_URL#*://}' created successfully."
 else
-    # Check if user already exists
-    if [[ "$HTTP_STATUS" == "400" ]]; then
-        warn "User '${USERNAME}' may already exist (HTTP 400). Skipping."
+    RESPONSE_BODY="$(cat "$RESPONSE_FILE")"
+
+    ERR_INFO=$(python3 - <<'PYEOF' "$RESPONSE_BODY"
+import json
+import sys
+
+raw = sys.argv[1]
+try:
+    data = json.loads(raw) if raw else {}
+except Exception:
+    data = {}
+
+errcode = data.get("errcode", "") if isinstance(data, dict) else ""
+error = data.get("error", "") if isinstance(data, dict) else ""
+print(f"{errcode}\t{error}")
+PYEOF
+)
+
+    ERR_CODE="${ERR_INFO%%$'\t'*}"
+    ERR_MSG="${ERR_INFO#*$'\t'}"
+
+    if [[ "$HTTP_STATUS" == "400" && "$ERR_CODE" == "M_USER_IN_USE" ]]; then
+        warn "User '${USERNAME}' already exists. Skipping."
     else
-        die "Failed to create admin user (HTTP ${HTTP_STATUS})."
+        if [[ -n "$ERR_CODE" || -n "$ERR_MSG" ]]; then
+            die "Failed to create admin user (HTTP ${HTTP_STATUS}, ${ERR_CODE}: ${ERR_MSG})."
+        fi
+        die "Failed to create admin user (HTTP ${HTTP_STATUS}). Response: ${RESPONSE_BODY}"
     fi
 fi

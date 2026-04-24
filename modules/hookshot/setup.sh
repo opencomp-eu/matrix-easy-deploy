@@ -22,44 +22,39 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=../../scripts/lib.sh
 source "${PROJECT_ROOT}/scripts/lib.sh"
+# shellcheck source=../../scripts/module_common.sh
+source "${PROJECT_ROOT}/scripts/module_common.sh"
 
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 
 # Temp file used in generate_config(); declared here so the EXIT trap can
 # always reference it — local variables go out of scope before EXIT fires.
 VARS_FILE=""
-cleanup() { [[ -n "$VARS_FILE" ]] && rm -f "$VARS_FILE"; }
+cleanup() {
+    if [[ -n "$VARS_FILE" ]]; then
+        rm -f "$VARS_FILE"
+    fi
+    return 0
+}
 trap cleanup EXIT
 
 DEPLOY_ENV="${PROJECT_ROOT}/.env"
+DEPLOY_YAML="${PROJECT_ROOT}/deploy.yaml"
+STATE_SECRETS="${PROJECT_ROOT}/.matrix-easy-deploy/secrets.yaml"
 MODULE_DIR="${SCRIPT_DIR}"
 HOOKSHOT_DATA_DIR="${MODULE_DIR}/hookshot"
 CORE_SYNAPSE_DATA_DIR="${PROJECT_ROOT}/modules/core/synapse_data"
 HOMESERVER_YAML="${PROJECT_ROOT}/modules/core/synapse/homeserver.yaml"
 CADDYFILE="${PROJECT_ROOT}/caddy/Caddyfile"
+APP_SERVICE_CHANGED="0"
 
 # =============================================================================
 # Step 1 — Load existing deployment environment
 # =============================================================================
 load_env() {
-    if [[ ! -f "$DEPLOY_ENV" ]]; then
-        die "No .env file found at ${DEPLOY_ENV}. Please run setup.sh first."
-    fi
+    module_load_env "$DEPLOY_ENV" "setup.sh"
 
-    info "Loading existing deployment configuration from .env…"
-    # Export each non-comment, non-empty line
-    while IFS='=' read -r key value; do
-        [[ -z "$key" || "$key" == \#* ]] && continue
-        export "${key}=${value}"
-    done < "$DEPLOY_ENV"
-
-    # Validate expected vars are present
-    local required_vars=(MATRIX_DOMAIN SERVER_NAME)
-    for var in "${required_vars[@]}"; do
-        if [[ -z "${!var:-}" ]]; then
-            die "Required variable '${var}' not found in .env. Please re-run setup.sh."
-        fi
-    done
+    load_module_defaults
 
     # Shared Redis defaults (provided by root setup.sh; fallback for older .env files)
     SHARED_REDIS_HOST="${SHARED_REDIS_HOST:-matrix_redis}"
@@ -69,53 +64,36 @@ load_env() {
     HOOKSHOT_REDIS_URI="${HOOKSHOT_REDIS_URI:-${SHARED_REDIS_URL}/${HOOKSHOT_REDIS_DB}}"
     export SHARED_REDIS_HOST SHARED_REDIS_PORT SHARED_REDIS_URL HOOKSHOT_REDIS_DB HOOKSHOT_REDIS_URI
 
-    success "Loaded: MATRIX_DOMAIN=${MATRIX_DOMAIN}, SERVER_NAME=${SERVER_NAME}"
+}
+
+load_module_defaults() {
+    MODULE_HOOKSHOT_DOMAIN_DEFAULT=""
+
+    if [[ -f "$DEPLOY_YAML" ]]; then
+        eval "$(python3 "${PROJECT_ROOT}/scripts/config_edit.py" --deploy-yaml "$DEPLOY_YAML" --print-module-defaults hookshot 2>/dev/null || true)"
+        MODULE_HOOKSHOT_DOMAIN_DEFAULT="${module_domain:-}"
+    fi
 }
 
 # =============================================================================
 # Step 1b — Verify SERVER_NAME matches Synapse's actual server_name
 # =============================================================================
 verify_server_name() {
-    if [[ ! -f "$HOMESERVER_YAML" ]]; then
-        warn "homeserver.yaml not found — skipping server_name cross-check."
-        return
-    fi
-
-    # Read the server_name Synapse is actually using
-    local actual_server_name
-    actual_server_name="$(grep -E '^server_name:' "$HOMESERVER_YAML" \
-        | head -1 | awk '{print $2}' | tr -d '"' )"
-
-    if [[ -z "$actual_server_name" ]]; then
-        warn "Could not read server_name from homeserver.yaml — skipping check."
-        return
-    fi
-
-    if [[ "$actual_server_name" == "$SERVER_NAME" ]]; then
-        success "server_name check passed: ${SERVER_NAME}"
-        return
-    fi
-
-    # Mismatch — this is the root cause of the 'Can't join remote room' error.
-    echo
-    warn   "SERVER_NAME mismatch detected!"
-    echo   -e "  ${BOLD}.env has:${RESET}             ${RED}${SERVER_NAME}${RESET}"
-    echo   -e "  ${BOLD}homeserver.yaml has:${RESET}  ${GREEN}${actual_server_name}${RESET}"
-    echo
-    echo   -e "  Hookshot's bridge.domain MUST match Synapse's server_name."
-    echo   -e "  Using the homeserver.yaml value for this module setup."
-    echo
-    echo   -e "  ${YELLOW}If you also want to fix .env, update SERVER_NAME=${actual_server_name}${RESET}"
-    echo   -e "  ${YELLOW}and re-run: bash setup.sh --module hookshot${RESET}"
-    echo
-
-    # Override for the duration of THIS run only
-    SERVER_NAME="$actual_server_name"
-    export SERVER_NAME
-    info "Using server_name=${SERVER_NAME} for hookshot config."
+    module_verify_server_name "$HOMESERVER_YAML" "hookshot config"
 }
 # =============================================================================
 gather_config() {
+    if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
+        local _suggested_hookshot_domain
+        _suggested_hookshot_domain="hookshot.$(extract_base_domain "$MATRIX_DOMAIN")"
+        HOOKSHOT_DOMAIN="${MODULE_HOOKSHOT_DOMAIN:-${MODULE_HOOKSHOT_DOMAIN_DEFAULT:-$_suggested_hookshot_domain}}"
+        if [[ -z "$HOOKSHOT_DOMAIN" ]]; then
+            die "HOOKSHOT_DOMAIN is required in non-interactive mode."
+        fi
+        info "Non-interactive mode: using HOOKSHOT_DOMAIN=${HOOKSHOT_DOMAIN}"
+        return
+    fi
+
     echo
     echo -e "${BOLD}  Hookshot Module Configuration${RESET}"
     echo -e "  ─────────────────────────────────────────────────────"
@@ -126,7 +104,7 @@ gather_config() {
     _suggested_hookshot_domain="hookshot.$(extract_base_domain "$MATRIX_DOMAIN")"
     ask HOOKSHOT_DOMAIN \
         "Hookshot webhook domain  (e.g. hookshot.example.com)" \
-        "$_suggested_hookshot_domain"
+        "${MODULE_HOOKSHOT_DOMAIN_DEFAULT:-$_suggested_hookshot_domain}"
     while [[ -z "$HOOKSHOT_DOMAIN" ]]; do
         warn "Hookshot domain is required."
         ask HOOKSHOT_DOMAIN "Hookshot webhook domain" "$_suggested_hookshot_domain"
@@ -152,12 +130,39 @@ gather_config() {
 }
 
 # =============================================================================
+# Step 3b - Persist module desired state in deploy.yaml
+# =============================================================================
+persist_module_config() {
+    info "Persisting Hookshot module configuration to deploy.yaml..."
+    python3 "${PROJECT_ROOT}/scripts/config_edit.py" \
+        --deploy-yaml "$DEPLOY_YAML" \
+        --set-module-config "hookshot" \
+        --module-enabled "true" \
+        --module-domain "$HOOKSHOT_DOMAIN"
+    success "deploy.yaml updated."
+}
+
+resolve_hookshot_tokens() {
+    HOOKSHOT_AS_TOKEN="$(python3 "${PROJECT_ROOT}/scripts/state_secrets.py" --secrets-file "$STATE_SECRETS" --get HOOKSHOT_AS_TOKEN 2>/dev/null || true)"
+    HOOKSHOT_HS_TOKEN="$(python3 "${PROJECT_ROOT}/scripts/state_secrets.py" --secrets-file "$STATE_SECRETS" --get HOOKSHOT_HS_TOKEN 2>/dev/null || true)"
+
+    HOOKSHOT_AS_TOKEN="${HOOKSHOT_AS_TOKEN:-$(generate_secret)}"
+    HOOKSHOT_HS_TOKEN="${HOOKSHOT_HS_TOKEN:-$(generate_secret)}"
+
+    python3 "${PROJECT_ROOT}/scripts/state_secrets.py" \
+        --secrets-file "$STATE_SECRETS" \
+        --set "HOOKSHOT_AS_TOKEN=${HOOKSHOT_AS_TOKEN}"
+    python3 "${PROJECT_ROOT}/scripts/state_secrets.py" \
+        --secrets-file "$STATE_SECRETS" \
+        --set "HOOKSHOT_HS_TOKEN=${HOOKSHOT_HS_TOKEN}"
+}
+
+# =============================================================================
 # Step 3 — Generate secrets and render config files
 # =============================================================================
 generate_config() {
     info "Generating appservice tokens…"
-    HOOKSHOT_AS_TOKEN="$(generate_secret)"
-    HOOKSHOT_HS_TOKEN="$(generate_secret)"
+    resolve_hookshot_tokens
     success "Tokens generated."
 
     # Generate RSA passkey for encrypting stored OAuth/API tokens
@@ -176,35 +181,7 @@ generate_config() {
         success "Passkey written to ${passkey_path}."
     fi
 
-    # Append Hookshot vars to the project .env
-    if ! grep -q "^HOOKSHOT_DOMAIN=" "$DEPLOY_ENV"; then
-        info "Appending Hookshot variables to .env…"
-        cat >> "$DEPLOY_ENV" <<EOF
-
-# Hookshot module — added by modules/hookshot/setup.sh
-HOOKSHOT_DOMAIN=${HOOKSHOT_DOMAIN}
-HOOKSHOT_AS_TOKEN=${HOOKSHOT_AS_TOKEN}
-HOOKSHOT_HS_TOKEN=${HOOKSHOT_HS_TOKEN}
-HOOKSHOT_REDIS_URI=${HOOKSHOT_REDIS_URI}
-EOF
-
-    if ! grep -q "^HOOKSHOT_REDIS_URI=" "$DEPLOY_ENV"; then
-        info "Adding HOOKSHOT_REDIS_URI to .env…"
-        echo "HOOKSHOT_REDIS_URI=${HOOKSHOT_REDIS_URI}" >> "$DEPLOY_ENV"
-    fi
-    if ! grep -q "^SHARED_REDIS_HOST=" "$DEPLOY_ENV"; then
-        echo "SHARED_REDIS_HOST=${SHARED_REDIS_HOST}" >> "$DEPLOY_ENV"
-    fi
-    if ! grep -q "^SHARED_REDIS_PORT=" "$DEPLOY_ENV"; then
-        echo "SHARED_REDIS_PORT=${SHARED_REDIS_PORT}" >> "$DEPLOY_ENV"
-    fi
-    if ! grep -q "^SHARED_REDIS_URL=" "$DEPLOY_ENV"; then
-        echo "SHARED_REDIS_URL=${SHARED_REDIS_URL}" >> "$DEPLOY_ENV"
-    fi
-        success ".env updated."
-    else
-        info "Hookshot variables already present in .env — skipping."
-    fi
+    info "Skipping direct .env edits for Hookshot module values (managed by apply from deploy.yaml + state)."
 
     # Build substitution map
     VARS_FILE="$(mktemp)"
@@ -248,62 +225,8 @@ ensure_synapse_e2ee_flags() {
     fi
 
     info "Ensuring Synapse MSC3202/MSC2409 compatibility flags are enabled…"
-    python3 - "$HOMESERVER_YAML" <<'PYEOF'
-import sys
-
-filepath = sys.argv[1]
-with open(filepath, 'r', encoding='utf-8') as f:
-    lines = f.read().splitlines()
-
-flags = {
-    'msc3202_device_masquerading': 'true',
-    'msc3202_transaction_extensions': 'true',
-    'msc2409_to_device_messages_enabled': 'true',
-}
-
-exp_idx = next((i for i, line in enumerate(lines) if line.startswith('experimental_features:')), None)
-
-if exp_idx is None:
-    lines.extend([
-        '',
-        'experimental_features:',
-        '  msc3202_device_masquerading: true',
-        '  msc3202_transaction_extensions: true',
-        '  msc2409_to_device_messages_enabled: true',
-    ])
-else:
-    j = exp_idx + 1
-    while j < len(lines):
-        line = lines[j]
-        if line.strip() == '':
-            j += 1
-            continue
-        if not line.startswith('  '):
-            break
-        j += 1
-
-    block_lines = lines[exp_idx + 1:j]
-    existing = {}
-    for idx, line in enumerate(block_lines):
-        stripped = line.strip()
-        if ':' not in stripped:
-            continue
-        key = stripped.split(':', 1)[0].strip()
-        if key in flags:
-            existing[key] = exp_idx + 1 + idx
-
-    for key, value in flags.items():
-        if key in existing:
-            lines[existing[key]] = f'  {key}: {value}'
-        else:
-            lines.insert(j, f'  {key}: {value}')
-            j += 1
-
-with open(filepath, 'w', encoding='utf-8') as f:
-    f.write('\n'.join(lines) + '\n')
-
-print('  Synapse experimental_features updated for Hookshot E2EE.')
-PYEOF
+    python3 "${PROJECT_ROOT}/scripts/hookshot_synapse_features.py" \
+        --homeserver-yaml "$HOMESERVER_YAML"
     success "Synapse encryption compatibility flags ensured."
 }
 
@@ -313,49 +236,9 @@ PYEOF
 register_appservice() {
     local reg_src="${HOOKSHOT_DATA_DIR}/registration.yml"
     local reg_dest="${CORE_SYNAPSE_DATA_DIR}/hookshot-registration.yml"
-
-    info "Copying registration.yml to Synapse data directory…"
-    cp "$reg_src" "$reg_dest"
-    success "Registration file copied to ${reg_dest}."
-
-    # The file is mounted into Synapse as /data/hookshot-registration.yml.
-    # We need to tell Synapse to load it via app_service_config_files.
     local reg_container_path="/data/hookshot-registration.yml"
-
-    if [[ ! -f "$HOMESERVER_YAML" ]]; then
-        die "homeserver.yaml not found at ${HOMESERVER_YAML}. Please run setup.sh first."
-    fi
-
-    if grep -qF "$reg_container_path" "$HOMESERVER_YAML"; then
-        info "Hookshot already registered in homeserver.yaml — skipping."
-    else
-        info "Registering Hookshot appservice in homeserver.yaml…"
-        python3 - "$HOMESERVER_YAML" "$reg_container_path" <<'PYEOF'
-import sys, re
-
-filepath = sys.argv[1]
-reg_path = sys.argv[2]
-
-with open(filepath, 'r') as f:
-    content = f.read()
-
-if 'app_service_config_files' in content:
-    # Append our registration to the existing list
-    content = re.sub(
-        r'(app_service_config_files:(?:\s*\n\s+-[^\n]*)*)',
-        lambda m: m.group(0) + f'\n  - {reg_path}',
-        content,
-        count=1
-    )
-else:
-    content += f'\n# Application services (bridges)\napp_service_config_files:\n  - {reg_path}\n'
-
-with open(filepath, 'w') as f:
-    f.write(content)
-
-print(f"  Added {reg_path} to app_service_config_files.")
-PYEOF
-        success "homeserver.yaml updated."
+    if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_YAML" "$reg_container_path" "Hookshot")" == "1" ]]; then
+        APP_SERVICE_CHANGED="1"
     fi
 }
 
@@ -363,29 +246,11 @@ PYEOF
 # Step 5 — Add Caddy reverse-proxy block for the webhook domain
 # =============================================================================
 update_caddy() {
-    if grep -qF "$HOOKSHOT_DOMAIN" "$CADDYFILE"; then
-        info "Caddy block for ${HOOKSHOT_DOMAIN} already exists — skipping."
-        return
-    fi
-
-    info "Appending Hookshot Caddy block to ${CADDYFILE}…"
-    cat >> "$CADDYFILE" <<EOF
-
-# Hookshot bridge — webhook ingress for GitHub, GitLab, generic hooks, etc.
-${HOOKSHOT_DOMAIN} {
-    reverse_proxy matrix-hookshot:9000
-
-    header {
-        X-Content-Type-Options nosniff
-        X-Frame-Options SAMEORIGIN
-        Referrer-Policy strict-origin-when-cross-origin
-        -Server
-    }
-
-    log
-}
-EOF
-    success "Caddy block added."
+    info "Reconciling Hookshot Caddy block in ${CADDYFILE}…"
+    python3 "${PROJECT_ROOT}/scripts/hookshot_caddy.py" \
+        --caddyfile "$CADDYFILE" \
+        --domain "$HOOKSHOT_DOMAIN"
+    success "Caddy block reconciled."
 
     # Reload Caddy to pick up the new site block (this also triggers cert issuance)
     info "Reloading Caddy…"
@@ -407,14 +272,7 @@ start_services() {
     success "Hookshot started."
 
     echo
-    info "Restarting Synapse to load the new appservice registration…"
-    if docker ps --format '{{.Names}}' | grep -q '^matrix_synapse$'; then
-        docker restart matrix_synapse
-        success "Synapse restarted."
-    else
-        warn "Synapse (matrix_synapse) is not running."
-        warn "Start the core stack first: cd modules/core && docker compose up -d"
-    fi
+    module_restart_synapse_if_changed "$APP_SERVICE_CHANGED" "$PROJECT_ROOT"
 }
 
 # =============================================================================
@@ -514,6 +372,10 @@ EOF
     gather_config
 
     echo
+    echo -e "${BOLD}  Step 3b of 7 — Persist module configuration${RESET}"
+    persist_module_config
+
+    echo
     echo -e "${BOLD}  Step 4 of 7 — Generating secrets and config files${RESET}"
     generate_config
 
@@ -534,4 +396,6 @@ EOF
     print_summary
 }
 
-main "$@"
+if [[ "${MED_SOURCE_ONLY:-0}" != "1" ]]; then
+    main "$@"
+fi

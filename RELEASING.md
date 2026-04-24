@@ -58,6 +58,10 @@ Installed commands:
 
 ## Notes
 
+- Recommended pre-release checks (local):
+	- `./test`
+	- `bash apply.sh --server-ip 127.0.0.1`
+	- Re-run `bash apply.sh --server-ip 127.0.0.1` to sanity-check idempotency
 - The pipeline does **not** perform telemetry or active deployment checks.
 - Each run creates a unique release tag, so every commit to `release` produces a distinct release.
 - To publish a new logical version, update `VERSION` in your commit.
