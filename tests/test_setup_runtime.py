@@ -158,6 +158,135 @@ class SetupRuntimeTests(unittest.TestCase):
             self.assertEqual(capture_file.read_text(), "long-enough-password")
             self.assertEqual(ask_count_file.read_text(), "3")
 
+    def test_start_services_stops_existing_stack_before_resetting_core_volume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            events_file = tmp_path / "events.log"
+
+            (tmp_path / "caddy").mkdir(parents=True)
+            (tmp_path / "modules/core").mkdir(parents=True)
+            (tmp_path / "modules/calls").mkdir(parents=True)
+
+            stop_script = tmp_path / "stop.sh"
+            stop_script.write_text("#!/usr/bin/env bash\nset -euo pipefail\necho stop-script >> \"$EVENTS_FILE\"\n")
+            stop_script.chmod(0o755)
+
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+
+                source "$RUNTIME_SH"
+
+                info() { :; }
+                warn() { :; }
+                success() { :; }
+
+                record_compose() {
+                    printf 'compose:%s:%s\n' "$PWD" "$*" >> "$EVENTS_FILE"
+                }
+
+                docker() {
+                    if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+                        return 0
+                    fi
+                    if [[ "$1" == "volume" && "$2" == "rm" ]]; then
+                        printf 'docker-rm:%s\n' "$3" >> "$EVENTS_FILE"
+                        return 0
+                    fi
+                    return 0
+                }
+
+                SCRIPT_DIR="$TMP_DIR"
+                EVENTS_FILE="$EVENTS_FILE"
+                DOCKER_COMPOSE=(record_compose)
+                INSTALL_ELEMENT="true"
+                POSTGRES_PASSWORD="secret"
+
+                start_services
+                """
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "RUNTIME_SH": str(self.runtime_sh),
+                    "TMP_DIR": str(tmp_path),
+                    "EVENTS_FILE": str(events_file),
+                }
+            )
+
+            result = self._run_script(script, env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            events = events_file.read_text().splitlines()
+            self.assertIn("stop-script", events)
+            self.assertIn("docker-rm:core_postgres_data", events)
+            self.assertLess(events.index("stop-script"), events.index("docker-rm:core_postgres_data"))
+
+    def test_start_services_skips_stop_when_core_volume_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            events_file = tmp_path / "events.log"
+
+            (tmp_path / "caddy").mkdir(parents=True)
+            (tmp_path / "modules/core").mkdir(parents=True)
+            (tmp_path / "modules/calls").mkdir(parents=True)
+
+            stop_script = tmp_path / "stop.sh"
+            stop_script.write_text("#!/usr/bin/env bash\nset -euo pipefail\necho stop-script >> \"$EVENTS_FILE\"\n")
+            stop_script.chmod(0o755)
+
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+
+                source "$RUNTIME_SH"
+
+                info() { :; }
+                warn() { :; }
+                success() { :; }
+
+                record_compose() {
+                    printf 'compose:%s:%s\n' "$PWD" "$*" >> "$EVENTS_FILE"
+                }
+
+                docker() {
+                    if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+                        return 1
+                    fi
+                    if [[ "$1" == "volume" && "$2" == "rm" ]]; then
+                        printf 'docker-rm:%s\n' "$3" >> "$EVENTS_FILE"
+                        return 0
+                    fi
+                    return 0
+                }
+
+                SCRIPT_DIR="$TMP_DIR"
+                EVENTS_FILE="$EVENTS_FILE"
+                DOCKER_COMPOSE=(record_compose)
+                INSTALL_ELEMENT="false"
+                POSTGRES_PASSWORD="secret"
+
+                start_services
+                """
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "RUNTIME_SH": str(self.runtime_sh),
+                    "TMP_DIR": str(tmp_path),
+                    "EVENTS_FILE": str(events_file),
+                }
+            )
+
+            result = self._run_script(script, env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            events = events_file.read_text().splitlines() if events_file.exists() else []
+            self.assertNotIn("stop-script", events)
+            self.assertFalse(any(line.startswith("docker-rm:") for line in events))
+
 
 if __name__ == "__main__":
     unittest.main()

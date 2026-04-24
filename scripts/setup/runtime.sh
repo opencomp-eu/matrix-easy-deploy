@@ -18,27 +18,56 @@ setup_docker() {
     success "Docker infrastructure ready."
 }
 
-start_services() {
-    echo
-    info "Starting Caddy…"
-    (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" up -d --pull always)
-    success "Caddy is up."
+stop_existing_services_for_first_setup_reset() {
+    local stop_script="${SCRIPT_DIR}/stop.sh"
 
-    echo
+    warn "Existing 'core_postgres_data' volume detected from an earlier setup attempt."
+    info "Stopping running services automatically before resetting core database state…"
+
+    if [[ -f "$stop_script" ]]; then
+        if ! bash "$stop_script"; then
+            warn "Automatic stop reported an issue. Continuing with core shutdown fallback."
+        fi
+    fi
+
+    local _element_profile=()
+    if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
+        _element_profile=(--profile element)
+    fi
+
+    (cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${_element_profile[@]}" down --remove-orphans) || true
+    (cd "${SCRIPT_DIR}/modules/calls" && "${DOCKER_COMPOSE[@]}" down) || true
+    (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" down) || true
+}
+
+reset_core_postgres_volume_if_present() {
+    if ! docker volume inspect core_postgres_data &>/dev/null; then
+        return
+    fi
+
+    stop_existing_services_for_first_setup_reset
+    warn "Removing 'core_postgres_data' so PostgreSQL is re-initialised with the current POSTGRES_PASSWORD."
+    docker volume rm core_postgres_data
+}
+
+start_services() {
     local _element_label=""
     local _element_profile=()
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         _element_label=" + Element"
         _element_profile=(--profile element)
     fi
+
+    reset_core_postgres_volume_if_present
+
+    echo
+    info "Starting Caddy…"
+    (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" up -d --pull always)
+    success "Caddy is up."
+
+    echo
     info "Starting core Matrix services (Redis + PostgreSQL + Synapse${_element_label})…"
     info "  Pulling images — this may take a few minutes on first run."
-
-    if docker volume inspect core_postgres_data &>/dev/null; then
-        warn "Existing 'core_postgres_data' volume detected — removing it so the database"
-        warn "is re-initialised with the current POSTGRES_PASSWORD."
-        docker volume rm core_postgres_data
-    fi
 
     (
         cd "${SCRIPT_DIR}/modules/core"
