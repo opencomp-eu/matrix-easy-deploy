@@ -29,6 +29,8 @@ source "${PROJECT_ROOT}/scripts/module_common.sh"
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 
 DEPLOY_ENV="${PROJECT_ROOT}/.env"
+DEPLOY_YAML="${PROJECT_ROOT}/deploy.yaml"
+STATE_SECRETS="${PROJECT_ROOT}/.matrix-easy-deploy/secrets.yaml"
 MODULE_DIR="${SCRIPT_DIR}"
 BRIDGE_DATA_DIR="${MODULE_DIR}/whatsapp"
 CORE_SYNAPSE_DATA_DIR="${PROJECT_ROOT}/modules/core/synapse_data"
@@ -46,8 +48,21 @@ APP_SERVICE_CHANGED="0"
 load_env() {
     module_load_env "$DEPLOY_ENV" "the main setup wizard"
 
+    load_module_defaults
+
     # Derive a sensible default admin username from .env if available
     ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+}
+
+load_module_defaults() {
+    MODULE_WA_ADMIN_USERNAME_DEFAULT=""
+    MODULE_WA_DB_NAME_DEFAULT=""
+
+    if [[ -f "$DEPLOY_YAML" ]]; then
+        eval "$(python3 "${PROJECT_ROOT}/scripts/config_edit.py" --deploy-yaml "$DEPLOY_YAML" --print-module-defaults whatsapp-bridge 2>/dev/null || true)"
+        MODULE_WA_ADMIN_USERNAME_DEFAULT="${module_admin_username:-}"
+        MODULE_WA_DB_NAME_DEFAULT="${module_db_name:-}"
+    fi
 }
 
 # =============================================================================
@@ -62,8 +77,8 @@ verify_server_name() {
 # =============================================================================
 gather_config() {
     if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
-        WA_ADMIN_USERNAME="${MODULE_WA_ADMIN_USERNAME:-${WA_ADMIN_USERNAME:-${ADMIN_USERNAME:-admin}}}"
-        WA_DB_NAME="${MODULE_WA_DB_NAME:-${WA_DB_NAME:-mautrix_whatsapp}}"
+        WA_ADMIN_USERNAME="${MODULE_WA_ADMIN_USERNAME:-${MODULE_WA_ADMIN_USERNAME_DEFAULT:-${WA_ADMIN_USERNAME:-${ADMIN_USERNAME:-admin}}}}"
+        WA_DB_NAME="${MODULE_WA_DB_NAME:-${MODULE_WA_DB_NAME_DEFAULT:-${WA_DB_NAME:-mautrix_whatsapp}}}"
         if [[ -z "$WA_ADMIN_USERNAME" || -z "$WA_DB_NAME" ]]; then
             die "WA_ADMIN_USERNAME and WA_DB_NAME are required in non-interactive mode."
         fi
@@ -81,7 +96,7 @@ gather_config() {
     # Admin user on the homeserver
     ask WA_ADMIN_USERNAME \
         "Matrix admin username for full bridge access (without @/server part)" \
-        "${ADMIN_USERNAME:-admin}"
+        "${MODULE_WA_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}"
     while [[ -z "$WA_ADMIN_USERNAME" ]]; do
         warn "Admin username is required."
         ask WA_ADMIN_USERNAME "Matrix admin username" "${ADMIN_USERNAME:-admin}"
@@ -90,7 +105,7 @@ gather_config() {
     # Database name for the bridge
     ask WA_DB_NAME \
         "PostgreSQL database name for the WhatsApp bridge" \
-        "mautrix_whatsapp"
+        "${MODULE_WA_DB_NAME_DEFAULT:-mautrix_whatsapp}"
 
     echo
     echo -e "${BOLD}  Configuration summary${RESET}"
@@ -110,6 +125,20 @@ gather_config() {
 }
 
 # =============================================================================
+# Step 3b - Persist module desired state in deploy.yaml
+# =============================================================================
+persist_module_config() {
+    info "Persisting WhatsApp module configuration to deploy.yaml..."
+    python3 "${PROJECT_ROOT}/scripts/config_edit.py" \
+        --deploy-yaml "$DEPLOY_YAML" \
+        --set-module-config "whatsapp-bridge" \
+        --module-enabled "true" \
+        --module-admin-username "$WA_ADMIN_USERNAME" \
+        --module-db-name "$WA_DB_NAME"
+    success "deploy.yaml updated."
+}
+
+# =============================================================================
 # Step 4 — Create a dedicated PostgreSQL database for the bridge
 # =============================================================================
 setup_database() {
@@ -121,7 +150,13 @@ setup_database() {
 
     # Reuse existing credentials when present to keep re-runs idempotent.
     WA_DB_USER="${WA_DB_USER:-mautrix_whatsapp}"
+    if [[ -z "${WA_DB_PASSWORD:-}" ]]; then
+        WA_DB_PASSWORD="$(python3 "${PROJECT_ROOT}/scripts/state_secrets.py" --secrets-file "$STATE_SECRETS" --get WA_DB_PASSWORD 2>/dev/null || true)"
+    fi
     WA_DB_PASSWORD="${WA_DB_PASSWORD:-$(generate_secret)}"
+    python3 "${PROJECT_ROOT}/scripts/state_secrets.py" \
+        --secrets-file "$STATE_SECRETS" \
+        --set "WA_DB_PASSWORD=${WA_DB_PASSWORD}"
     WA_DB_URI="postgres://${WA_DB_USER}:${WA_DB_PASSWORD}@matrix_postgres/${WA_DB_NAME}?sslmode=disable"
     export WA_DB_USER WA_DB_PASSWORD WA_DB_URI
 
@@ -178,16 +213,7 @@ generate_config() {
 
     success "config.yaml patched."
 
-    # --- Upsert bridge vars in .env ---
-    info "Upserting WhatsApp bridge variables in .env…"
-    python3 "${PROJECT_ROOT}/scripts/env_upsert.py" \
-        --env-file "$DEPLOY_ENV" \
-        --set "WA_DB_NAME=${WA_DB_NAME}" \
-        --set "WA_DB_USER=${WA_DB_USER}" \
-        --set "WA_DB_PASSWORD=${WA_DB_PASSWORD}" \
-        --set "WA_DB_URI=${WA_DB_URI}" \
-        --set "WA_ADMIN_USERNAME=${WA_ADMIN_USERNAME}"
-    success ".env updated."
+    info "Skipping direct .env edits for WhatsApp module values (managed by apply from deploy.yaml + state)."
 }
 
 # =============================================================================
@@ -293,6 +319,10 @@ EOF
     gather_config
 
     echo
+    echo -e "${BOLD}  Step 3b of 8 — Persist module configuration${RESET}"
+    persist_module_config
+
+    echo
     echo -e "${BOLD}  Step 4 of 8 — PostgreSQL database${RESET}"
     setup_database
 
@@ -315,4 +345,6 @@ EOF
     print_summary
 }
 
-main "$@"
+if [[ "${MED_SOURCE_ONLY:-0}" != "1" ]]; then
+    main "$@"
+fi
