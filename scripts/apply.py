@@ -12,8 +12,16 @@ from pathlib import Path
 
 import yaml
 
-from scripts import synapse_appservice
-from scripts import hookshot_caddy
+try:
+    from scripts import synapse_appservice
+    from scripts import hookshot_caddy
+except ModuleNotFoundError:
+    # When run as scripts/apply.py, Python may not include project root in sys.path.
+    project_root = Path(__file__).resolve().parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from scripts import synapse_appservice
+    from scripts import hookshot_caddy
 
 
 DEFAULT_SECRET_KEYS = [
