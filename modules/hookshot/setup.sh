@@ -30,21 +30,31 @@ IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 # Temp file used in generate_config(); declared here so the EXIT trap can
 # always reference it — local variables go out of scope before EXIT fires.
 VARS_FILE=""
-cleanup() { [[ -n "$VARS_FILE" ]] && rm -f "$VARS_FILE"; }
+cleanup() {
+    if [[ -n "$VARS_FILE" ]]; then
+        rm -f "$VARS_FILE"
+    fi
+    return 0
+}
 trap cleanup EXIT
 
 DEPLOY_ENV="${PROJECT_ROOT}/.env"
+DEPLOY_YAML="${PROJECT_ROOT}/deploy.yaml"
+STATE_SECRETS="${PROJECT_ROOT}/.matrix-easy-deploy/secrets.yaml"
 MODULE_DIR="${SCRIPT_DIR}"
 HOOKSHOT_DATA_DIR="${MODULE_DIR}/hookshot"
 CORE_SYNAPSE_DATA_DIR="${PROJECT_ROOT}/modules/core/synapse_data"
 HOMESERVER_YAML="${PROJECT_ROOT}/modules/core/synapse/homeserver.yaml"
 CADDYFILE="${PROJECT_ROOT}/caddy/Caddyfile"
+APP_SERVICE_CHANGED="0"
 
 # =============================================================================
 # Step 1 — Load existing deployment environment
 # =============================================================================
 load_env() {
     module_load_env "$DEPLOY_ENV" "setup.sh"
+
+    load_module_defaults
 
     # Shared Redis defaults (provided by root setup.sh; fallback for older .env files)
     SHARED_REDIS_HOST="${SHARED_REDIS_HOST:-matrix_redis}"
@@ -54,6 +64,15 @@ load_env() {
     HOOKSHOT_REDIS_URI="${HOOKSHOT_REDIS_URI:-${SHARED_REDIS_URL}/${HOOKSHOT_REDIS_DB}}"
     export SHARED_REDIS_HOST SHARED_REDIS_PORT SHARED_REDIS_URL HOOKSHOT_REDIS_DB HOOKSHOT_REDIS_URI
 
+}
+
+load_module_defaults() {
+    MODULE_HOOKSHOT_DOMAIN_DEFAULT=""
+
+    if [[ -f "$DEPLOY_YAML" ]]; then
+        eval "$(python3 "${PROJECT_ROOT}/scripts/config_edit.py" --deploy-yaml "$DEPLOY_YAML" --print-module-defaults hookshot 2>/dev/null || true)"
+        MODULE_HOOKSHOT_DOMAIN_DEFAULT="${module_domain:-}"
+    fi
 }
 
 # =============================================================================
@@ -67,7 +86,7 @@ gather_config() {
     if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
         local _suggested_hookshot_domain
         _suggested_hookshot_domain="hookshot.$(extract_base_domain "$MATRIX_DOMAIN")"
-        HOOKSHOT_DOMAIN="${MODULE_HOOKSHOT_DOMAIN:-${HOOKSHOT_DOMAIN:-$_suggested_hookshot_domain}}"
+        HOOKSHOT_DOMAIN="${MODULE_HOOKSHOT_DOMAIN:-${MODULE_HOOKSHOT_DOMAIN_DEFAULT:-$_suggested_hookshot_domain}}"
         if [[ -z "$HOOKSHOT_DOMAIN" ]]; then
             die "HOOKSHOT_DOMAIN is required in non-interactive mode."
         fi
@@ -85,7 +104,7 @@ gather_config() {
     _suggested_hookshot_domain="hookshot.$(extract_base_domain "$MATRIX_DOMAIN")"
     ask HOOKSHOT_DOMAIN \
         "Hookshot webhook domain  (e.g. hookshot.example.com)" \
-        "$_suggested_hookshot_domain"
+        "${MODULE_HOOKSHOT_DOMAIN_DEFAULT:-$_suggested_hookshot_domain}"
     while [[ -z "$HOOKSHOT_DOMAIN" ]]; do
         warn "Hookshot domain is required."
         ask HOOKSHOT_DOMAIN "Hookshot webhook domain" "$_suggested_hookshot_domain"
@@ -111,12 +130,39 @@ gather_config() {
 }
 
 # =============================================================================
+# Step 3b - Persist module desired state in deploy.yaml
+# =============================================================================
+persist_module_config() {
+    info "Persisting Hookshot module configuration to deploy.yaml..."
+    python3 "${PROJECT_ROOT}/scripts/config_edit.py" \
+        --deploy-yaml "$DEPLOY_YAML" \
+        --set-module-config "hookshot" \
+        --module-enabled "true" \
+        --module-domain "$HOOKSHOT_DOMAIN"
+    success "deploy.yaml updated."
+}
+
+resolve_hookshot_tokens() {
+    HOOKSHOT_AS_TOKEN="$(python3 "${PROJECT_ROOT}/scripts/state_secrets.py" --secrets-file "$STATE_SECRETS" --get HOOKSHOT_AS_TOKEN 2>/dev/null || true)"
+    HOOKSHOT_HS_TOKEN="$(python3 "${PROJECT_ROOT}/scripts/state_secrets.py" --secrets-file "$STATE_SECRETS" --get HOOKSHOT_HS_TOKEN 2>/dev/null || true)"
+
+    HOOKSHOT_AS_TOKEN="${HOOKSHOT_AS_TOKEN:-$(generate_secret)}"
+    HOOKSHOT_HS_TOKEN="${HOOKSHOT_HS_TOKEN:-$(generate_secret)}"
+
+    python3 "${PROJECT_ROOT}/scripts/state_secrets.py" \
+        --secrets-file "$STATE_SECRETS" \
+        --set "HOOKSHOT_AS_TOKEN=${HOOKSHOT_AS_TOKEN}"
+    python3 "${PROJECT_ROOT}/scripts/state_secrets.py" \
+        --secrets-file "$STATE_SECRETS" \
+        --set "HOOKSHOT_HS_TOKEN=${HOOKSHOT_HS_TOKEN}"
+}
+
+# =============================================================================
 # Step 3 — Generate secrets and render config files
 # =============================================================================
 generate_config() {
     info "Generating appservice tokens…"
-    HOOKSHOT_AS_TOKEN="${HOOKSHOT_AS_TOKEN:-$(generate_secret)}"
-    HOOKSHOT_HS_TOKEN="${HOOKSHOT_HS_TOKEN:-$(generate_secret)}"
+    resolve_hookshot_tokens
     success "Tokens generated."
 
     # Generate RSA passkey for encrypting stored OAuth/API tokens
@@ -135,17 +181,7 @@ generate_config() {
         success "Passkey written to ${passkey_path}."
     fi
 
-    info "Upserting Hookshot variables in .env…"
-    python3 "${PROJECT_ROOT}/scripts/env_upsert.py" \
-        --env-file "$DEPLOY_ENV" \
-        --set "HOOKSHOT_DOMAIN=${HOOKSHOT_DOMAIN}" \
-        --set "HOOKSHOT_AS_TOKEN=${HOOKSHOT_AS_TOKEN}" \
-        --set "HOOKSHOT_HS_TOKEN=${HOOKSHOT_HS_TOKEN}" \
-        --set "HOOKSHOT_REDIS_URI=${HOOKSHOT_REDIS_URI}" \
-        --set "SHARED_REDIS_HOST=${SHARED_REDIS_HOST}" \
-        --set "SHARED_REDIS_PORT=${SHARED_REDIS_PORT}" \
-        --set "SHARED_REDIS_URL=${SHARED_REDIS_URL}"
-    success ".env updated."
+    info "Skipping direct .env edits for Hookshot module values (managed by apply from deploy.yaml + state)."
 
     # Build substitution map
     VARS_FILE="$(mktemp)"
@@ -200,27 +236,9 @@ ensure_synapse_e2ee_flags() {
 register_appservice() {
     local reg_src="${HOOKSHOT_DATA_DIR}/registration.yml"
     local reg_dest="${CORE_SYNAPSE_DATA_DIR}/hookshot-registration.yml"
-
-    info "Copying registration.yml to Synapse data directory…"
-    cp "$reg_src" "$reg_dest"
-    success "Registration file copied to ${reg_dest}."
-
-    # The file is mounted into Synapse as /data/hookshot-registration.yml.
-    # We need to tell Synapse to load it via app_service_config_files.
     local reg_container_path="/data/hookshot-registration.yml"
-
-    if [[ ! -f "$HOMESERVER_YAML" ]]; then
-        die "homeserver.yaml not found at ${HOMESERVER_YAML}. Please run setup.sh first."
-    fi
-
-    if grep -qF "$reg_container_path" "$HOMESERVER_YAML"; then
-        info "Hookshot already registered in homeserver.yaml — skipping."
-    else
-        info "Registering Hookshot appservice in homeserver.yaml…"
-        python3 "${PROJECT_ROOT}/scripts/synapse_appservice.py" \
-            --homeserver-yaml "$HOMESERVER_YAML" \
-            --registration-path "$reg_container_path"
-        success "homeserver.yaml updated."
+    if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_YAML" "$reg_container_path" "Hookshot")" == "1" ]]; then
+        APP_SERVICE_CHANGED="1"
     fi
 }
 
@@ -254,14 +272,7 @@ start_services() {
     success "Hookshot started."
 
     echo
-    info "Restarting Synapse to load the new appservice registration…"
-    if docker ps --format '{{.Names}}' | grep -q '^matrix_synapse$'; then
-        docker restart matrix_synapse
-        success "Synapse restarted."
-    else
-        warn "Synapse (matrix_synapse) is not running."
-        warn "Start the core stack first: cd modules/core && docker compose up -d"
-    fi
+    module_restart_synapse_if_changed "$APP_SERVICE_CHANGED" "$PROJECT_ROOT"
 }
 
 # =============================================================================
@@ -361,6 +372,10 @@ EOF
     gather_config
 
     echo
+    echo -e "${BOLD}  Step 3b of 7 — Persist module configuration${RESET}"
+    persist_module_config
+
+    echo
     echo -e "${BOLD}  Step 4 of 7 — Generating secrets and config files${RESET}"
     generate_config
 
@@ -381,4 +396,6 @@ EOF
     print_summary
 }
 
-main "$@"
+if [[ "${MED_SOURCE_ONLY:-0}" != "1" ]]; then
+    main "$@"
+fi
