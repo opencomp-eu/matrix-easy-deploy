@@ -282,29 +282,11 @@ register_appservice() {
 # Step 5 — Add Caddy reverse-proxy block for the webhook domain
 # =============================================================================
 update_caddy() {
-    if grep -qF "$HOOKSHOT_DOMAIN" "$CADDYFILE"; then
-        info "Caddy block for ${HOOKSHOT_DOMAIN} already exists — skipping."
-        return
-    fi
-
-    info "Appending Hookshot Caddy block to ${CADDYFILE}…"
-    cat >> "$CADDYFILE" <<EOF
-
-# Hookshot bridge — webhook ingress for GitHub, GitLab, generic hooks, etc.
-${HOOKSHOT_DOMAIN} {
-    reverse_proxy matrix-hookshot:9000
-
-    header {
-        X-Content-Type-Options nosniff
-        X-Frame-Options SAMEORIGIN
-        Referrer-Policy strict-origin-when-cross-origin
-        -Server
-    }
-
-    log
-}
-EOF
-    success "Caddy block added."
+    info "Reconciling Hookshot Caddy block in ${CADDYFILE}…"
+    python3 "${PROJECT_ROOT}/scripts/hookshot_caddy.py" \
+        --caddyfile "$CADDYFILE" \
+        --domain "$HOOKSHOT_DOMAIN"
+    success "Caddy block reconciled."
 
     # Reload Caddy to pick up the new site block (this also triggers cert issuance)
     info "Reloading Caddy…"
