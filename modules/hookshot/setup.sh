@@ -189,62 +189,8 @@ ensure_synapse_e2ee_flags() {
     fi
 
     info "Ensuring Synapse MSC3202/MSC2409 compatibility flags are enabled…"
-    python3 - "$HOMESERVER_YAML" <<'PYEOF'
-import sys
-
-filepath = sys.argv[1]
-with open(filepath, 'r', encoding='utf-8') as f:
-    lines = f.read().splitlines()
-
-flags = {
-    'msc3202_device_masquerading': 'true',
-    'msc3202_transaction_extensions': 'true',
-    'msc2409_to_device_messages_enabled': 'true',
-}
-
-exp_idx = next((i for i, line in enumerate(lines) if line.startswith('experimental_features:')), None)
-
-if exp_idx is None:
-    lines.extend([
-        '',
-        'experimental_features:',
-        '  msc3202_device_masquerading: true',
-        '  msc3202_transaction_extensions: true',
-        '  msc2409_to_device_messages_enabled: true',
-    ])
-else:
-    j = exp_idx + 1
-    while j < len(lines):
-        line = lines[j]
-        if line.strip() == '':
-            j += 1
-            continue
-        if not line.startswith('  '):
-            break
-        j += 1
-
-    block_lines = lines[exp_idx + 1:j]
-    existing = {}
-    for idx, line in enumerate(block_lines):
-        stripped = line.strip()
-        if ':' not in stripped:
-            continue
-        key = stripped.split(':', 1)[0].strip()
-        if key in flags:
-            existing[key] = exp_idx + 1 + idx
-
-    for key, value in flags.items():
-        if key in existing:
-            lines[existing[key]] = f'  {key}: {value}'
-        else:
-            lines.insert(j, f'  {key}: {value}')
-            j += 1
-
-with open(filepath, 'w', encoding='utf-8') as f:
-    f.write('\n'.join(lines) + '\n')
-
-print('  Synapse experimental_features updated for Hookshot E2EE.')
-PYEOF
+    python3 "${PROJECT_ROOT}/scripts/hookshot_synapse_features.py" \
+        --homeserver-yaml "$HOMESERVER_YAML"
     success "Synapse encryption compatibility flags ensured."
 }
 
