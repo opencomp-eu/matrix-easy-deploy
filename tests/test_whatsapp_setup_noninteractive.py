@@ -97,6 +97,33 @@ class WhatsAppSetupNonInteractiveTests(unittest.TestCase):
             self.assertEqual(lines[-2], "envadmin")
             self.assertEqual(lines[-1], "mautrix_whatsapp")
 
+    def test_resolve_database_credentials_reuses_persisted_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            secrets_file = tmp_path / "secrets.yaml"
+
+            repo_root = Path(__file__).resolve().parent.parent
+            script = repo_root / "modules/whatsapp-bridge/setup.sh"
+            cmd = (
+                "set -euo pipefail; "
+                "export MED_SOURCE_ONLY=1; "
+                f"source '{script}'; "
+                f"STATE_SECRETS='{secrets_file}'; "
+                "WA_DB_NAME='wa_test'; "
+                "resolve_database_credentials; "
+                "first=\"$WA_DB_PASSWORD\"; "
+                "unset WA_DB_PASSWORD; "
+                "resolve_database_credentials; "
+                "second=\"$WA_DB_PASSWORD\"; "
+                "printf '%s\\n%s\\n' \"$first\" \"$second\""
+            )
+
+            result = subprocess.run(["bash", "-lc", cmd], capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            self.assertGreaterEqual(len(lines), 2)
+            self.assertEqual(lines[-2], lines[-1])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -141,6 +141,19 @@ persist_module_config() {
 # =============================================================================
 # Step 4 — Create a dedicated PostgreSQL database for the bridge
 # =============================================================================
+resolve_database_credentials() {
+    WA_DB_USER="mautrix_whatsapp"
+    WA_DB_PASSWORD="$(python3 "${PROJECT_ROOT}/scripts/state_secrets.py" --secrets-file "$STATE_SECRETS" --get WA_DB_PASSWORD 2>/dev/null || true)"
+    WA_DB_PASSWORD="${WA_DB_PASSWORD:-$(generate_secret)}"
+
+    python3 "${PROJECT_ROOT}/scripts/state_secrets.py" \
+        --secrets-file "$STATE_SECRETS" \
+        --set "WA_DB_PASSWORD=${WA_DB_PASSWORD}"
+
+    WA_DB_URI="postgres://${WA_DB_USER}:${WA_DB_PASSWORD}@matrix_postgres/${WA_DB_NAME}?sslmode=disable"
+    export WA_DB_USER WA_DB_PASSWORD WA_DB_URI
+}
+
 setup_database() {
     info "Setting up PostgreSQL database '${WA_DB_NAME}' for the WhatsApp bridge…"
 
@@ -148,17 +161,8 @@ setup_database() {
         die "POSTGRES_PASSWORD not found in .env. Please re-run the main wizard."
     fi
 
-    # Reuse existing credentials when present to keep re-runs idempotent.
-    WA_DB_USER="mautrix_whatsapp"
-    if [[ -z "${WA_DB_PASSWORD:-}" ]]; then
-        WA_DB_PASSWORD="$(python3 "${PROJECT_ROOT}/scripts/state_secrets.py" --secrets-file "$STATE_SECRETS" --get WA_DB_PASSWORD 2>/dev/null || true)"
-    fi
-    WA_DB_PASSWORD="${WA_DB_PASSWORD:-$(generate_secret)}"
-    python3 "${PROJECT_ROOT}/scripts/state_secrets.py" \
-        --secrets-file "$STATE_SECRETS" \
-        --set "WA_DB_PASSWORD=${WA_DB_PASSWORD}"
-    WA_DB_URI="postgres://${WA_DB_USER}:${WA_DB_PASSWORD}@matrix_postgres/${WA_DB_NAME}?sslmode=disable"
-    export WA_DB_USER WA_DB_PASSWORD WA_DB_URI
+    # Reuse persisted credentials from state secrets to keep re-runs idempotent.
+    resolve_database_credentials
 
     ensure_postgres_role_and_database \
         "${POSTGRES_PASSWORD}" \
