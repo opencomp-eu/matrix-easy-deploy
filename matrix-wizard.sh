@@ -164,22 +164,32 @@ edit_deploy_config() {
         warn "Restarting configuration…"
         echo
         edit_deploy_config
-        return
+        return $?
     fi
 
-        python3 "${SCRIPT_DIR}/scripts/config_edit.py" \
-                --deploy-yaml "$DEPLOY_YAML" \
-                --set-core \
-                --matrix-domain "$MATRIX_DOMAIN" \
-                --server-name "$SERVER_NAME" \
-                --admin-username "$ADMIN_USERNAME" \
-                --registration-enabled "$ENABLE_REGISTRATION" \
-                --federation-enabled "$ENABLE_FEDERATION" \
-                --install-element "$INSTALL_ELEMENT" \
-                --element-domain "$ELEMENT_DOMAIN" \
-                --calls-enabled "$ENABLE_CALLS" \
-                --livekit-domain "$LIVEKIT_DOMAIN"
+    python3 "${SCRIPT_DIR}/scripts/config_edit.py" \
+        --deploy-yaml "$DEPLOY_YAML" \
+        --set-core \
+        --matrix-domain "$MATRIX_DOMAIN" \
+        --server-name "$SERVER_NAME" \
+        --admin-username "$ADMIN_USERNAME" \
+        --registration-enabled "$ENABLE_REGISTRATION" \
+        --federation-enabled "$ENABLE_FEDERATION" \
+        --install-element "$INSTALL_ELEMENT" \
+        --element-domain "$ELEMENT_DOMAIN" \
+        --calls-enabled "$ENABLE_CALLS" \
+        --livekit-domain "$LIVEKIT_DOMAIN"
     success "Configuration saved to deploy.yaml"
+
+    echo
+    ask_yn _proceed_deploy "Proceed to deployment?" "y"
+    if [[ "$_proceed_deploy" != "y" ]]; then
+        info "Stopping after configuration step."
+        info "You can deploy anytime with 'bash apply.sh' followed by 'bash start.sh'."
+        return 1
+    fi
+
+    return 0
 }
 
 run_full_setup() {
@@ -188,7 +198,9 @@ run_full_setup() {
 
     echo
     echo -e "${BOLD}  Step 1 of 5 — Configuration${RESET}"
-    edit_deploy_config
+    if ! edit_deploy_config; then
+        return
+    fi
 
     echo
     echo -e "${BOLD}  Step 2 of 5 — Applying configuration${RESET}"
