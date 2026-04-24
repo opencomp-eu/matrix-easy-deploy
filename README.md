@@ -151,6 +151,12 @@ bash matrix-wizard.sh --full-setup
 bash apply.sh
 ```
 
+To also reconcile running services to match the new desired state immediately:
+
+```bash
+bash apply.sh --reconcile-runtime
+```
+
 3. Start the services:
 
 ```bash
@@ -453,6 +459,7 @@ bash start.sh
 ```
 
 By default, `apply.sh` preserves existing generated secrets and re-renders files deterministically from `deploy.yaml`.
+Use `apply.sh --reconcile-runtime` when you want apply to also run stop/start and align running services with the updated config.
 
 Need migration details from legacy setup behavior? See `MIGRATION.md`.
 

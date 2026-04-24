@@ -66,6 +66,34 @@ def validate_config(config: dict) -> None:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"Missing or invalid matrix.{key} in deploy.yaml")
 
+    features = config.get("features", {})
+    if features is not None and not isinstance(features, dict):
+        raise ValueError("features must be an object when provided")
+
+    modules = config.get("modules", {})
+    if modules is not None and not isinstance(modules, dict):
+        raise ValueError("modules must be an object when provided")
+
+    if isinstance(features, dict):
+        for key in ("registration_enabled", "federation_enabled"):
+            if key in features and not isinstance(features[key], bool):
+                raise ValueError(f"features.{key} must be true/false")
+
+        for section in ("element", "calls", "sso"):
+            if section in features and not isinstance(features.get(section), dict):
+                raise ValueError(f"features.{section} must be an object")
+
+        sso = features.get("sso", {}) if isinstance(features.get("sso", {}), dict) else {}
+        if "providers" in sso and not isinstance(sso.get("providers"), list):
+            raise ValueError("features.sso.providers must be a list")
+
+    if isinstance(modules, dict):
+        for key, value in modules.items():
+            if not isinstance(value, dict):
+                raise ValueError(f"modules.{key} must be an object")
+            if "enabled" in value and not isinstance(value.get("enabled"), bool):
+                raise ValueError(f"modules.{key}.enabled must be true/false")
+
 
 def detect_public_ip() -> str:
     providers = ["https://api4.ipify.org", "https://ifconfig.me"]
@@ -327,6 +355,12 @@ def apply_configuration(ctx: ApplyContext, server_ip: str | None = None, rotate_
     reconcile_module_state(ctx, config)
 
 
+def run_runtime_reconcile(ctx: ApplyContext) -> None:
+    # Reconcile running services to match current desired state.
+    subprocess.run(["bash", str(ctx.project_root / "stop.sh")], check=True)
+    subprocess.run(["bash", str(ctx.project_root / "start.sh")], check=True)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Apply matrix-easy-deploy configuration")
     parser.add_argument(
@@ -344,6 +378,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Rotate generated secrets intentionally (destructive for existing deployments)",
     )
+    parser.add_argument(
+        "--reconcile-runtime",
+        action="store_true",
+        help="After apply, restart services (stop/start) to match desired runtime state",
+    )
     return parser.parse_args(argv)
 
 
@@ -353,8 +392,12 @@ def main(argv: list[str] | None = None) -> int:
     ctx = ApplyContext(project_root)
 
     apply_configuration(ctx, server_ip=args.server_ip, rotate_secrets=args.rotate_secrets)
+    if args.reconcile_runtime:
+        run_runtime_reconcile(ctx)
     print("Configuration applied successfully.")
     print("Generated .env file and rendered templates.")
+    if args.reconcile_runtime:
+        print("Runtime reconciled via stop/start.")
     return 0
 
 

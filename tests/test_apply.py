@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import yaml
@@ -88,6 +89,18 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(derived["OIDC_PROVIDER_NAMES"], "Google")
         self.assertIn('"idp_name":"Google"', derived["OIDC_PROVIDERS_JSON"])
 
+    def test_validate_config_rejects_invalid_modules_shape(self):
+        cfg = self.sample_config()
+        cfg["modules"] = []
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_invalid_enabled_type(self):
+        cfg = self.sample_config()
+        cfg["modules"]["hookshot"]["enabled"] = "yes"
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
         first = apply.create_or_update_secrets(ctx, {})
@@ -140,6 +153,17 @@ class ApplyTests(unittest.TestCase):
         saved_2 = yaml.safe_load((self.root / ".matrix-easy-deploy/secrets.yaml").read_text())
 
         self.assertEqual(saved_1, saved_2)
+
+    def test_run_runtime_reconcile_invokes_stop_then_start(self):
+        ctx = apply.ApplyContext(self.root)
+        with patch("scripts.apply.subprocess.run") as mock_run:
+            apply.run_runtime_reconcile(ctx)
+
+        self.assertEqual(mock_run.call_count, 2)
+        first_args = mock_run.call_args_list[0].args[0]
+        second_args = mock_run.call_args_list[1].args[0]
+        self.assertTrue(str(first_args[1]).endswith("stop.sh"))
+        self.assertTrue(str(second_args[1]).endswith("start.sh"))
 
 
 if __name__ == "__main__":
