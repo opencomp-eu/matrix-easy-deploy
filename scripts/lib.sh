@@ -180,3 +180,18 @@ wait_for_url() {
     echo
     success "${label} is up."
 }
+
+# ---------------------------------------------------------------------------
+# Runtime desired-state loader
+# Uses deploy.yaml/.matrix-easy-deploy state to set runtime feature flags.
+# ---------------------------------------------------------------------------
+load_runtime_desired_state() {
+    local project_root="$1"
+    local state_script="${project_root}/scripts/runtime_state.py"
+    [[ -f "$state_script" ]] || return 0
+
+    local state_exports
+    if state_exports="$(python3 "$state_script" --project-root "$project_root" --emit-shell 2>/dev/null)"; then
+        [[ -n "$state_exports" ]] && eval "$state_exports"
+    fi
+}

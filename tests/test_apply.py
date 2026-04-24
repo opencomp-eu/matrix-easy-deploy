@@ -179,7 +179,14 @@ class ApplyTests(unittest.TestCase):
         cfg["modules"]["hookshot"]["domain"] = "hookshot.example.com"
 
         ctx = apply.ApplyContext(self.root)
+        def _mock_setup(*args, **kwargs):
+            hookshot_dir = self.root / "modules/hookshot/hookshot"
+            hookshot_dir.mkdir(parents=True, exist_ok=True)
+            (hookshot_dir / "config.yml").write_text("ok\n")
+            (hookshot_dir / "registration.yml").write_text("ok\n")
+
         with patch("scripts.apply.subprocess.run") as mock_run:
+            mock_run.side_effect = _mock_setup
             apply.reconcile_module_bootstrap(ctx, cfg)
 
         self.assertEqual(mock_run.call_count, 1)
@@ -202,6 +209,45 @@ class ApplyTests(unittest.TestCase):
             apply.reconcile_module_bootstrap(ctx, cfg)
 
         self.assertEqual(mock_run.call_count, 0)
+
+    def test_module_bootstrap_checks_generated_files_not_only_config_exists(self):
+        cfg = self.sample_config()
+        cfg["modules"]["hookshot"]["enabled"] = True
+
+        (self.root / "modules/hookshot/module.yaml").write_text(
+            "name: hookshot\n"
+            "config_key: hookshot\n"
+            "generated_files:\n"
+            "  - modules/hookshot/hookshot/config.yml\n"
+            "  - modules/hookshot/hookshot/registration.yml\n"
+            "runtime:\n"
+            "  config_exists: modules/hookshot/hookshot/config.yml\n"
+        )
+
+        (self.root / "modules/hookshot/hookshot").mkdir(parents=True)
+        (self.root / "modules/hookshot/hookshot/config.yml").write_text("ok\n")
+
+        ctx = apply.ApplyContext(self.root)
+        def _mock_setup(*args, **kwargs):
+            hookshot_dir = self.root / "modules/hookshot/hookshot"
+            hookshot_dir.mkdir(parents=True, exist_ok=True)
+            (hookshot_dir / "registration.yml").write_text("ok\n")
+
+        with patch("scripts.apply.subprocess.run") as mock_run:
+            mock_run.side_effect = _mock_setup
+            apply.reconcile_module_bootstrap(ctx, cfg)
+
+        self.assertEqual(mock_run.call_count, 1)
+
+    def test_module_bootstrap_raises_when_setup_missing_and_files_missing(self):
+        cfg = self.sample_config()
+        cfg["modules"]["hookshot"]["enabled"] = True
+
+        (self.root / "modules/hookshot/setup.sh").unlink()
+
+        ctx = apply.ApplyContext(self.root)
+        with self.assertRaises(RuntimeError):
+            apply.reconcile_module_bootstrap(ctx, cfg)
 
 
 if __name__ == "__main__":

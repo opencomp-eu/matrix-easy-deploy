@@ -325,6 +325,30 @@ def load_module_manifest(ctx: ApplyContext, module_dir_name: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def module_required_files(ctx: ApplyContext, manifest: dict) -> list[Path]:
+    paths: list[Path] = []
+    generated = manifest.get("generated_files", []) if isinstance(manifest.get("generated_files", []), list) else []
+    for rel in generated:
+        if isinstance(rel, str) and rel.strip():
+            paths.append(ctx.project_root / rel)
+
+    runtime = manifest.get("runtime", {}) if isinstance(manifest.get("runtime", {}), dict) else {}
+    config_exists = runtime.get("config_exists")
+    if isinstance(config_exists, str) and config_exists.strip():
+        config_path = ctx.project_root / config_exists
+        if config_path not in paths:
+            paths.append(config_path)
+
+    return paths
+
+
+def missing_module_files(ctx: ApplyContext, manifest: dict) -> list[Path]:
+    required = module_required_files(ctx, manifest)
+    if not required:
+        return []
+    return [path for path in required if not path.exists()]
+
+
 def reconcile_module_state(ctx: ApplyContext, config: dict) -> None:
     modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
     state = {}
@@ -371,28 +395,25 @@ def module_env_overrides(config: dict, config_key: str) -> dict:
 
 def reconcile_module_bootstrap(ctx: ApplyContext, config: dict) -> None:
     modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+    converged: list[str] = []
+    skipped: list[str] = []
+    failed: list[str] = []
 
     for config_key, dir_name in MODULE_CONFIG_KEY_TO_DIR.items():
         desired = modules_cfg.get(config_key, {}) if isinstance(modules_cfg.get(config_key, {}), dict) else {}
         if not bool(desired.get("enabled", False)):
+            skipped.append(config_key)
             continue
 
         manifest = load_module_manifest(ctx, dir_name)
-        runtime = manifest.get("runtime", {}) if isinstance(manifest.get("runtime", {}), dict) else {}
-        config_exists = runtime.get("config_exists")
-        if not config_exists:
-            continue
-
-        config_path = ctx.project_root / str(config_exists)
-        if config_path.exists():
+        missing_before = missing_module_files(ctx, manifest)
+        if not missing_before:
+            converged.append(config_key)
             continue
 
         setup_script = ctx.project_root / "modules" / dir_name / "setup.sh"
         if not setup_script.exists():
-            print(
-                f"[WARN] Module '{config_key}' is enabled but setup script is missing ({setup_script}).",
-                file=sys.stderr,
-            )
+            failed.append(f"{config_key}: missing setup script ({setup_script})")
             continue
 
         env = dict(os.environ)
@@ -400,7 +421,27 @@ def reconcile_module_bootstrap(ctx: ApplyContext, config: dict) -> None:
         for key, value in module_env_overrides(config, config_key).items():
             env[key] = value
 
-        subprocess.run(["bash", str(setup_script)], check=True, env=env)
+        try:
+            subprocess.run(["bash", str(setup_script)], check=True, env=env)
+        except subprocess.CalledProcessError as exc:
+            failed.append(f"{config_key}: setup failed with exit code {exc.returncode}")
+            continue
+
+        missing_after = missing_module_files(ctx, manifest)
+        if missing_after:
+            missing_list = ", ".join(str(p.relative_to(ctx.project_root)) for p in missing_after)
+            failed.append(f"{config_key}: missing generated files after setup ({missing_list})")
+            continue
+
+        converged.append(config_key)
+
+    if converged:
+        print("Module convergence complete for: " + ", ".join(sorted(converged)))
+    if failed:
+        print("Module convergence failures:", file=sys.stderr)
+        for item in failed:
+            print(f"  - {item}", file=sys.stderr)
+        raise RuntimeError("One or more enabled modules failed to converge")
 
 
 def apply_configuration(

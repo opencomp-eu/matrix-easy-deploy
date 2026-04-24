@@ -16,6 +16,8 @@ if [[ -f "${SCRIPT_DIR}/.env" ]]; then
     set +o allexport
 fi
 
+load_runtime_desired_state "${SCRIPT_DIR}"
+
 _element_profile=""
 if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
     _element_profile="--profile element"
