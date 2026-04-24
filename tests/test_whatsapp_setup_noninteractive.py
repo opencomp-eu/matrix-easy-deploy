@@ -53,6 +53,50 @@ class WhatsAppSetupNonInteractiveTests(unittest.TestCase):
             self.assertEqual(lines[-2], "yamladmin")
             self.assertEqual(lines[-1], "yaml_whatsapp")
 
+    def test_gather_config_does_not_use_legacy_wa_env_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            deploy_yaml = tmp_path / "deploy.yaml"
+            deploy_yaml.write_text(
+                yaml.safe_dump(
+                    {
+                        "matrix": {
+                            "domain": "matrix.example.com",
+                            "server_name": "example.com",
+                            "admin_username": "admin",
+                        },
+                        "modules": {
+                            "whatsapp_bridge": {
+                                "enabled": True,
+                            }
+                        },
+                    },
+                    sort_keys=False,
+                )
+            )
+
+            repo_root = Path(__file__).resolve().parent.parent
+            script = repo_root / "modules/whatsapp-bridge/setup.sh"
+            cmd = (
+                "set -euo pipefail; "
+                "export MED_SOURCE_ONLY=1 MED_NON_INTERACTIVE=1; "
+                f"source '{script}'; "
+                f"DEPLOY_YAML='{deploy_yaml}'; "
+                "ADMIN_USERNAME='envadmin'; "
+                "WA_ADMIN_USERNAME='legacy_wa_admin'; "
+                "WA_DB_NAME='legacy_wa_db'; "
+                "load_module_defaults; "
+                "gather_config >/dev/null; "
+                "printf '%s\\n%s\\n' \"$WA_ADMIN_USERNAME\" \"$WA_DB_NAME\""
+            )
+
+            result = subprocess.run(["bash", "-lc", cmd], capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            self.assertGreaterEqual(len(lines), 2)
+            self.assertEqual(lines[-2], "envadmin")
+            self.assertEqual(lines[-1], "mautrix_whatsapp")
+
 
 if __name__ == "__main__":
     unittest.main()

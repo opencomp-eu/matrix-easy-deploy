@@ -77,8 +77,8 @@ verify_server_name() {
 # =============================================================================
 gather_config() {
     if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
-        WA_ADMIN_USERNAME="${MODULE_WA_ADMIN_USERNAME:-${MODULE_WA_ADMIN_USERNAME_DEFAULT:-${WA_ADMIN_USERNAME:-${ADMIN_USERNAME:-admin}}}}"
-        WA_DB_NAME="${MODULE_WA_DB_NAME:-${MODULE_WA_DB_NAME_DEFAULT:-${WA_DB_NAME:-mautrix_whatsapp}}}"
+        WA_ADMIN_USERNAME="${MODULE_WA_ADMIN_USERNAME:-${MODULE_WA_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}}"
+        WA_DB_NAME="${MODULE_WA_DB_NAME:-${MODULE_WA_DB_NAME_DEFAULT:-mautrix_whatsapp}}"
         if [[ -z "$WA_ADMIN_USERNAME" || -z "$WA_DB_NAME" ]]; then
             die "WA_ADMIN_USERNAME and WA_DB_NAME are required in non-interactive mode."
         fi
@@ -149,7 +149,7 @@ setup_database() {
     fi
 
     # Reuse existing credentials when present to keep re-runs idempotent.
-    WA_DB_USER="${WA_DB_USER:-mautrix_whatsapp}"
+    WA_DB_USER="mautrix_whatsapp"
     if [[ -z "${WA_DB_PASSWORD:-}" ]]; then
         WA_DB_PASSWORD="$(python3 "${PROJECT_ROOT}/scripts/state_secrets.py" --secrets-file "$STATE_SECRETS" --get WA_DB_PASSWORD 2>/dev/null || true)"
     fi
