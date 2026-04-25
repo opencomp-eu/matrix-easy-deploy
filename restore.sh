@@ -108,6 +108,36 @@ postgres_password() {
     read_state_secret "POSTGRES_PASSWORD"
 }
 
+start_postgres_restore_prerequisite() {
+    local inspect_status
+    local attempt=0
+    local max_attempts=30
+
+    ensure_docker_network "caddy_net"
+
+    local docker_compose
+    IFS=' ' read -ra docker_compose <<< "$(docker_compose_cmd)"
+
+    info "Starting PostgreSQL prerequisite for restore..."
+    (cd "${SCRIPT_DIR}/modules/core" && "${docker_compose[@]}" up -d postgres)
+
+    info "Waiting for PostgreSQL to become healthy..."
+    while true; do
+        inspect_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' matrix_postgres 2>/dev/null || true)"
+        if [[ "${inspect_status}" == "healthy" || "${inspect_status}" == "running" ]]; then
+            success "PostgreSQL restore prerequisite is ready."
+            return 0
+        fi
+
+        attempt=$((attempt + 1))
+        if [[ ${attempt} -ge ${max_attempts} ]]; then
+            die "Timed out waiting for matrix_postgres to become ready for restore."
+        fi
+
+        sleep 2
+    done
+}
+
 load_backup_settings() {
     local exports
     exports="$(python3 "${SCRIPT_DIR}/scripts/backup_config.py" --deploy-yaml "${SCRIPT_DIR}/deploy.yaml" --emit-shell)"
@@ -272,6 +302,7 @@ run_restore() {
         restore_path_if_present "$payload_root" "$rel_path"
     done
 
+    start_postgres_restore_prerequisite
     restore_synapse_database_if_present "$payload_root"
 
     info "Final reconciliation after payload restore..."

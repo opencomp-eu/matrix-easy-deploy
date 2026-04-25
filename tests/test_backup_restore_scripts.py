@@ -161,8 +161,12 @@ class BackupRestoreScriptTests(unittest.TestCase):
             self._write_executable(
                 fake_bin / "docker",
                 "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == \"compose\" && \"${2:-}\" == \"version\" ]]; then exit 0; fi\n"
                 "if [[ \"${1:-}\" == \"ps\" ]]; then echo matrix_postgres; exit 0; fi\n"
+                "if [[ \"${1:-}\" == \"inspect\" ]]; then echo healthy; exit 0; fi\n"
                 "if [[ \"${1:-}\" == \"volume\" && \"${2:-}\" == \"inspect\" ]]; then exit 1; fi\n"
+                "if [[ \"${1:-}\" == \"network\" && \"${2:-}\" == \"inspect\" ]]; then exit 0; fi\n"
+                "if [[ \"${1:-}\" == \"compose\" && \"${2:-}\" == \"up\" ]]; then echo docker:$* >> \"$EVENTS\"; exit 0; fi\n"
                 "if [[ \"${1:-}\" == \"exec\" ]]; then echo docker:$* >> \"$EVENTS\"; if [[ \"$*\" == *\" pg_restore \"* ]]; then cat >/dev/null; fi; exit 0; fi\n"
                 "exit 0\n",
             )
@@ -220,6 +224,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
             self.assertIn("borg:extract /tmp", lines[2])
             self.assertIn("::debian-s-1vcpu-2gb-fra1-01-2026-04-25T09:30:59.487313", lines[2])
             self.assertEqual(lines[3], "apply")
+            self.assertTrue(any(line.startswith("docker:compose up -d postgres") for line in lines))
             self.assertTrue(any(line.startswith("docker:exec ") and "DROP DATABASE IF EXISTS synapse" in line for line in lines))
             self.assertTrue(any(line.startswith("docker:exec ") and "CREATE DATABASE synapse" in line for line in lines))
             self.assertTrue(any(line.startswith("docker:exec ") and "pg_restore" in line for line in lines))
