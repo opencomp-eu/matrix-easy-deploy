@@ -98,6 +98,7 @@ source_directories:
   - payload
 repositories:
   - path: ${BACKUP_REPOSITORY_PATH}
+archive_name_format: 'MED_Backup_{now:%Y-%m-%dT%H:%M:%S}'
 keep_daily: ${BACKUP_KEEP_DAILY}
 keep_weekly: ${BACKUP_KEEP_WEEKLY}
 keep_monthly: ${BACKUP_KEEP_MONTHLY}

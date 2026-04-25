@@ -113,6 +113,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
             self.assertNotIn("start", lines)
 
             borgmatic_config = (root / ".matrix-easy-deploy/backup/borgmatic.yaml").read_text()
+            self.assertIn("archive_name_format: 'MED_Backup_{now:%Y-%m-%dT%H:%M:%S}'", borgmatic_config)
             self.assertIn("keep_daily: 7", borgmatic_config)
             self.assertNotIn("retention:", borgmatic_config)
 
@@ -232,6 +233,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
             self.assertEqual(lines[-1], "start")
 
             borgmatic_config = (root / ".matrix-easy-deploy/backup/borgmatic.yaml").read_text()
+            self.assertIn("archive_name_format: 'MED_Backup_{now:%Y-%m-%dT%H:%M:%S}'", borgmatic_config)
             self.assertIn("keep_daily: 7", borgmatic_config)
             self.assertNotIn("retention:", borgmatic_config)
 
