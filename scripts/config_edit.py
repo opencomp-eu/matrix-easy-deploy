@@ -42,6 +42,19 @@ def load_or_init(path: Path) -> dict:
                 "whatsapp_bridge": {"enabled": False, "admin_username": "admin"},
                 "slack_bridge": {"enabled": False, "admin_username": "admin"},
             },
+            "backup": {
+                "enabled": False,
+                "repository": {
+                    "type": "local",
+                    "path": "/var/backups/med-kit",
+                },
+                "retention": {
+                    "keep_daily": 7,
+                    "keep_weekly": 4,
+                    "keep_monthly": 6,
+                    "keep_yearly": 0,
+                },
+            },
         }
 
     with path.open() as f:
@@ -149,6 +162,47 @@ def update_core_config(
     calls["livekit_domain"] = livekit_domain if calls_enabled else ""
 
 
+def update_backup_config(
+    config: dict,
+    enabled: bool | None = None,
+    repository_type: str | None = None,
+    repository_path: str | None = None,
+    keep_daily: int | None = None,
+    keep_weekly: int | None = None,
+    keep_monthly: int | None = None,
+    keep_yearly: int | None = None,
+) -> None:
+    backup = config.setdefault("backup", {})
+    if not isinstance(backup, dict):
+        backup = {}
+        config["backup"] = backup
+
+    repository = backup.setdefault("repository", {})
+    if not isinstance(repository, dict):
+        repository = {}
+        backup["repository"] = repository
+
+    retention = backup.setdefault("retention", {})
+    if not isinstance(retention, dict):
+        retention = {}
+        backup["retention"] = retention
+
+    if enabled is not None:
+        backup["enabled"] = bool(enabled)
+    if repository_type is not None:
+        repository["type"] = repository_type
+    if repository_path is not None:
+        repository["path"] = repository_path
+    if keep_daily is not None:
+        retention["keep_daily"] = int(keep_daily)
+    if keep_weekly is not None:
+        retention["keep_weekly"] = int(keep_weekly)
+    if keep_monthly is not None:
+        retention["keep_monthly"] = int(keep_monthly)
+    if keep_yearly is not None:
+        retention["keep_yearly"] = int(keep_yearly)
+
+
 def shell_bool_default(value: bool, yes_default: str = "y", no_default: str = "n") -> str:
     return yes_default if value else no_default
 
@@ -217,6 +271,27 @@ def emit_module_defaults(config: dict, module_name: str) -> str:
     return "\n".join(lines)
 
 
+def emit_backup_defaults(config: dict) -> str:
+    backup = config.get("backup", {}) if isinstance(config.get("backup", {}), dict) else {}
+    repository = backup.get("repository", {}) if isinstance(backup.get("repository", {}), dict) else {}
+    retention = backup.get("retention", {}) if isinstance(backup.get("retention", {}), dict) else {}
+
+    defaults = {
+        "backup_enabled": "true" if bool(backup.get("enabled", False)) else "false",
+        "backup_repository_type": str(repository.get("type", "local")),
+        "backup_repository_path": str(repository.get("path", "/var/backups/med-kit")),
+        "backup_keep_daily": str(retention.get("keep_daily", 7)),
+        "backup_keep_weekly": str(retention.get("keep_weekly", 4)),
+        "backup_keep_monthly": str(retention.get("keep_monthly", 6)),
+        "backup_keep_yearly": str(retention.get("keep_yearly", 0)),
+    }
+
+    lines = []
+    for out_key, out_value in defaults.items():
+        lines.append(f"{out_key}={shlex.quote(str(out_value))}")
+    return "\n".join(lines)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Edit deploy.yaml")
     parser.add_argument("--deploy-yaml", required=True)
@@ -225,8 +300,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     action.add_argument("--enable-module")
     action.add_argument("--set-module-config")
     action.add_argument("--set-core", action="store_true")
+    action.add_argument("--set-backup-config", action="store_true")
     action.add_argument("--print-wizard-defaults", action="store_true")
     action.add_argument("--print-module-defaults")
+    action.add_argument("--print-backup-defaults", action="store_true")
 
     parser.add_argument("--matrix-domain")
     parser.add_argument("--server-name")
@@ -242,6 +319,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--module-admin-username")
     parser.add_argument("--module-db-name")
     parser.add_argument("--module-domain")
+
+    parser.add_argument("--backup-enabled")
+    parser.add_argument("--backup-repository-type")
+    parser.add_argument("--backup-repository-path")
+    parser.add_argument("--backup-keep-daily")
+    parser.add_argument("--backup-keep-weekly")
+    parser.add_argument("--backup-keep-monthly")
+    parser.add_argument("--backup-keep-yearly")
     return parser.parse_args(argv)
 
 
@@ -256,6 +341,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.print_module_defaults:
         print(emit_module_defaults(config, args.print_module_defaults))
+        return 0
+
+    if args.print_backup_defaults:
+        print(emit_backup_defaults(config))
         return 0
 
     if args.enable_module:
@@ -303,6 +392,27 @@ def main(argv: list[str] | None = None) -> int:
             element_domain=args.element_domain,
             calls_enabled=to_bool(args.calls_enabled),
             livekit_domain=args.livekit_domain,
+        )
+        save(deploy_yaml, config)
+        return 0
+
+    if args.set_backup_config:
+        keep_daily = int(args.backup_keep_daily) if args.backup_keep_daily is not None else None
+        keep_weekly = int(args.backup_keep_weekly) if args.backup_keep_weekly is not None else None
+        keep_monthly = int(args.backup_keep_monthly) if args.backup_keep_monthly is not None else None
+        keep_yearly = int(args.backup_keep_yearly) if args.backup_keep_yearly is not None else None
+
+        enabled = to_bool(args.backup_enabled) if args.backup_enabled is not None else None
+
+        update_backup_config(
+            config=config,
+            enabled=enabled,
+            repository_type=args.backup_repository_type,
+            repository_path=args.backup_repository_path,
+            keep_daily=keep_daily,
+            keep_weekly=keep_weekly,
+            keep_monthly=keep_monthly,
+            keep_yearly=keep_yearly,
         )
         save(deploy_yaml, config)
         return 0

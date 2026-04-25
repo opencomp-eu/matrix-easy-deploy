@@ -262,6 +262,55 @@ bash uninstall.sh --yes
 
 This cleanup removes generated runtime files like `.env`, `.matrix-easy-deploy/`, rendered configs, and module data directories (`modules/core/synapse_data`, `modules/hookshot/hookshot`, `modules/whatsapp-bridge/whatsapp`, `modules/slack-bridge/slack`).
 
+### Backups and restore (borgmatic, local repository)
+
+Backups are configured in `deploy.yaml` under `backup`:
+
+```yaml
+backup:
+  enabled: true
+  repository:
+    type: local
+    path: /var/backups/med-kit
+  retention:
+    keep_daily: 7
+    keep_weekly: 4
+    keep_monthly: 6
+    keep_yearly: 0
+```
+
+Install prerequisites on the host:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y borgbackup borgmatic
+```
+
+Create a backup:
+
+```bash
+bash backup.sh
+```
+
+List available backups:
+
+```bash
+bash backup.sh --list
+```
+
+Restore from an archive:
+
+```bash
+bash restore.sh --archive <archive-name>
+```
+
+Behavior notes:
+
+- `backup.sh` stops services, snapshots configured project data plus exported Docker volumes, runs borgmatic create/prune/check, then restarts services.
+- `restore.sh` is destructive for runtime state: it stops services, extracts the selected archive, restores persisted state, re-runs `bash apply.sh`, and starts services.
+- Use `--keep-stopped` with backup/restore if you prefer to restart manually afterwards.
+- This phase supports only local repository targets (`backup.repository.type: local`).
+
 ### Run with Docker (single command)
 
 If you prefer not to install local dependencies, run the wizard from the published container image:

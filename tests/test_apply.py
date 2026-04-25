@@ -112,6 +112,36 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
+    def test_validate_config_rejects_backup_path_when_relative(self):
+        cfg = self.sample_config()
+        cfg["backup"] = {
+            "enabled": True,
+            "repository": {"type": "local", "path": "relative/path"},
+            "retention": {"keep_daily": 7},
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_backup_type_when_not_local(self):
+        cfg = self.sample_config()
+        cfg["backup"] = {
+            "enabled": True,
+            "repository": {"type": "ssh", "path": "/var/backups/med-kit"},
+            "retention": {"keep_daily": 7},
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_negative_backup_retention(self):
+        cfg = self.sample_config()
+        cfg["backup"] = {
+            "enabled": False,
+            "repository": {"type": "local", "path": "/var/backups/med-kit"},
+            "retention": {"keep_daily": -1},
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
         first = apply.create_or_update_secrets(ctx, {})

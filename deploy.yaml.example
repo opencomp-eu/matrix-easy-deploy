@@ -24,3 +24,13 @@ modules:
   slack_bridge:
     enabled: false
     admin_username: admin
+backup:
+  enabled: false
+  repository:
+    type: local
+    path: /var/backups/med-kit
+  retention:
+    keep_daily: 7
+    keep_weekly: 4
+    keep_monthly: 6
+    keep_yearly: 0

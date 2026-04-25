@@ -439,6 +439,39 @@ run_logs_wizard() {
     pause_screen
 }
 
+run_backup_wizard() {
+    echo
+    ask_yn _keep_stopped "Keep services stopped after backup?" "n"
+    if [[ "$_keep_stopped" == "y" ]]; then
+        bash "${SCRIPT_DIR}/backup.sh" --keep-stopped
+    else
+        bash "${SCRIPT_DIR}/backup.sh"
+    fi
+}
+
+run_restore_wizard() {
+    echo
+    info "Available backups:"
+    if ! bash "${SCRIPT_DIR}/backup.sh" --list; then
+        warn "Unable to list backups. Check backup settings in deploy.yaml."
+        return
+    fi
+
+    local archive_name
+    ask archive_name "Archive name to restore" ""
+    if [[ -z "$archive_name" ]]; then
+        warn "Archive name is required."
+        return
+    fi
+
+    ask_yn _keep_stopped "Keep services stopped after restore?" "n"
+    if [[ "$_keep_stopped" == "y" ]]; then
+        bash "${SCRIPT_DIR}/restore.sh" --archive "$archive_name" --keep-stopped
+    else
+        bash "${SCRIPT_DIR}/restore.sh" --archive "$archive_name"
+    fi
+}
+
 print_wizard_menu() {
     print_banner
     echo -e "${BOLD}  Wizard actions${RESET}"
@@ -453,6 +486,9 @@ print_wizard_menu() {
     echo -e "  ${CYAN}8)${RESET} Show running containers"
     echo -e "  ${CYAN}9)${RESET} Tail service logs"
     echo -e "  ${CYAN}10)${RESET} Uninstall/reset stack"
+    echo -e "  ${CYAN}11)${RESET} Create backup"
+    echo -e "  ${CYAN}12)${RESET} List backups"
+    echo -e "  ${CYAN}13)${RESET} Restore backup"
     echo -e "  ${CYAN}q)${RESET} Exit"
     echo
 }
@@ -501,6 +537,18 @@ run_wizard_hub() {
                 ;;
             10)
                 bash "${SCRIPT_DIR}/uninstall.sh"
+                pause_screen
+                ;;
+            11)
+                run_backup_wizard
+                pause_screen
+                ;;
+            12)
+                bash "${SCRIPT_DIR}/backup.sh" --list
+                pause_screen
+                ;;
+            13)
+                run_restore_wizard
                 pause_screen
                 ;;
             q)
