@@ -170,6 +170,10 @@ class BackupRestoreScriptTests(unittest.TestCase):
                 fake_bin / "borg",
                 "#!/usr/bin/env bash\n"
                 "echo borg:$* >> \"$EVENTS\"\n"
+                "if [[ \"${1:-}\" == \"list\" ]]; then\n"
+                "  echo 'debian-s-1vcpu-2gb-fra1-01-2026-04-25T09:30:59.487313 Sat, 2026-04-25 09:30:59 [74125a60c0a4a76a8b984e799311b8838605430da359ccc054c4ec51e6c41900]'\n"
+                "  exit 0\n"
+                "fi\n"
                 "if [[ \"${1:-}\" == \"extract\" ]]; then\n"
                 "  mkdir -p payload/.matrix-easy-deploy payload/modules/core/synapse_data payload/database\n"
                 "  cat > payload/deploy.yaml <<'EOF'\n"
@@ -201,7 +205,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
             env["EVENTS"] = str(events)
 
             result = subprocess.run(
-                ["bash", "restore.sh", "--archive", "archive-1", "--yes"],
+                ["bash", "restore.sh", "--archive", "74125a60c0a4a76a", "--yes"],
                 cwd=root,
                 env=env,
                 text=True,
@@ -211,9 +215,11 @@ class BackupRestoreScriptTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             lines = events.read_text().splitlines()
-            self.assertEqual(lines[0], "stop")
-            self.assertIn("borg:extract", lines[1])
-            self.assertEqual(lines[2], "apply")
+            self.assertIn("borg:list", lines[0])
+            self.assertEqual(lines[1], "stop")
+            self.assertIn("borg:extract /tmp", lines[2])
+            self.assertIn("::debian-s-1vcpu-2gb-fra1-01-2026-04-25T09:30:59.487313", lines[2])
+            self.assertEqual(lines[3], "apply")
             self.assertTrue(any(line.startswith("docker:exec ") and "DROP DATABASE IF EXISTS synapse" in line for line in lines))
             self.assertTrue(any(line.startswith("docker:exec ") and "CREATE DATABASE synapse" in line for line in lines))
             self.assertTrue(any(line.startswith("docker:exec ") and "pg_restore" in line for line in lines))

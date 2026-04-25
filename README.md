@@ -298,11 +298,15 @@ List available backups:
 bash backup.sh --list
 ```
 
+That command prints the archive names you can paste directly into restore.
+
 Restore from an archive:
 
 ```bash
 bash restore.sh --archive <archive-name>
 ```
+
+You can also pass a unique archive ID prefix from Borg's bracketed ID if you prefer, for example `bash restore.sh --archive 74125a60c0a4a76a`.
 
 Behavior notes:
 

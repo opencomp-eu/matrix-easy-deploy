@@ -42,8 +42,8 @@ Usage:
   bash restore.sh --list
 
 Options:
-  --archive NAME  Archive name to restore.
-  --list          List available archives in the configured repository.
+    --archive NAME  Archive name to restore, or a unique archive ID prefix.
+    --list          List available archive names in the configured repository.
   --yes           Skip destructive confirmation prompt.
   --keep-stopped  Do not restart services after restore.
   -h, --help      Show this help message.
@@ -149,8 +149,40 @@ confirm_restore() {
 }
 
 list_archives() {
-    info "Listing backup archives from ${BACKUP_REPOSITORY_PATH}..."
-    borgmatic --config "${BORG_CONFIG_PATH}" list
+    info "Listing backup archive names from ${BACKUP_REPOSITORY_PATH}..."
+    borg list "${BACKUP_REPOSITORY_PATH}" | awk '{print $1}'
+}
+
+resolve_archive_name() {
+    local requested="$1"
+    local entries
+    local matches
+
+    entries="$(borg list "${BACKUP_REPOSITORY_PATH}")"
+
+    matches="$(printf '%s\n' "${entries}" | awk -v requested="${requested}" '
+        {
+            archive=$1
+            archive_id=$NF
+            gsub(/^\[/, "", archive_id)
+            gsub(/\]$/, "", archive_id)
+            if (archive == requested || index(archive_id, requested) == 1) {
+                print archive
+            }
+        }
+    ')"
+
+    if [[ -z "${matches}" ]]; then
+        die "Archive '${requested}' does not exist. Use 'bash restore.sh --list' and pass the full archive name or a unique ID prefix."
+    fi
+
+    if [[ "$(printf '%s\n' "${matches}" | wc -l)" -gt 1 ]]; then
+        error "Archive reference '${requested}' is ambiguous. Matching archive names:"
+        printf '%s\n' "${matches}" >&2
+        exit 1
+    fi
+
+    printf '%s\n' "${matches}"
 }
 
 restore_path_if_present() {
@@ -291,6 +323,8 @@ main() {
     fi
 
     [[ -n "${ARCHIVE_NAME}" ]] || die "Provide --archive <archive-name> or use --list"
+
+    ARCHIVE_NAME="$(resolve_archive_name "${ARCHIVE_NAME}")"
 
     confirm_restore || {
         info "Restore cancelled."

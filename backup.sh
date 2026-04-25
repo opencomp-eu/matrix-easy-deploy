@@ -175,8 +175,8 @@ EOF
 }
 
 list_archives() {
-    info "Listing backup archives from ${BACKUP_REPOSITORY_PATH}..."
-    borgmatic --config "${BORG_CONFIG_PATH}" list
+    info "Listing backup archive names from ${BACKUP_REPOSITORY_PATH}..."
+    borg list "${BACKUP_REPOSITORY_PATH}" | awk '{print $1}'
 }
 
 create_backup() {
