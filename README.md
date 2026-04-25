@@ -313,6 +313,8 @@ Behavior notes:
 - `backup.sh` is a live backup: it leaves services running, takes a logical `pg_dump -Fc` of the Synapse PostgreSQL database, copies persisted project/module data, exports Caddy state volumes when present, and then runs borgmatic create/prune/check.
 - `restore.sh` is destructive for runtime state: it stops services, extracts the selected archive, restores persisted state, re-runs `bash apply.sh`, restores the filesystem payload, recreates the Synapse database from the logical dump, re-runs `bash apply.sh`, and starts services unless you pass `--keep-stopped`.
 - Generated runtime files such as `.env` and rendered service configs are not treated as canonical backup inputs; restore rebuilds them from `deploy.yaml` and `.matrix-easy-deploy` state.
+- Existing logged-in sessions can keep showing rooms or messages that no longer exist on the restored server. Logging out and back in usually resolves that stale client state.
+- For encrypted history on a new login, users typically need another verified session or their recovery key/secret storage. Registration tokens are unrelated to restoring message access after a rollback.
 - This phase supports only local repository targets (`backup.repository.type: local`).
 
 ### Run with Docker (single command)

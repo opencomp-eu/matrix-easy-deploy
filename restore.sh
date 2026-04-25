@@ -66,6 +66,13 @@ cleanup_and_restart() {
     exit "$rc"
 }
 
+print_post_restore_note() {
+    echo
+    warn "Existing logged-in sessions can keep showing rooms or messages that no longer exist on the restored server."
+    warn "Logging out and back in usually resolves that stale client state."
+    warn "For encrypted history on a new login, users typically need another verified session or their recovery key/secret storage; this is not controlled by registration tokens."
+}
+
 require_command() {
     local cmd="$1"
     command -v "$cmd" &>/dev/null || die "Required command not found: ${cmd}"
@@ -309,6 +316,7 @@ run_restore() {
     bash "${SCRIPT_DIR}/apply.sh"
 
     success "Restore completed successfully."
+    print_post_restore_note
 }
 
 main() {
