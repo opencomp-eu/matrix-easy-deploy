@@ -8,6 +8,7 @@ IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 # Ensure external Docker resources exist for direct apply/start workflows.
 ensure_docker_network "caddy_net"
 ensure_docker_volume "caddy_data"
+ensure_synapse_data_permissions "${SCRIPT_DIR}"
 
 info "Starting Caddy…"
 (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" up -d)
