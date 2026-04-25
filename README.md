@@ -306,9 +306,9 @@ bash restore.sh --archive <archive-name>
 
 Behavior notes:
 
-- `backup.sh` stops services, snapshots configured project data plus exported Docker volumes, runs borgmatic create/prune/check, then restarts services.
-- `restore.sh` is destructive for runtime state: it stops services, extracts the selected archive, restores persisted state, re-runs `bash apply.sh`, and starts services.
-- Use `--keep-stopped` with backup/restore if you prefer to restart manually afterwards.
+- `backup.sh` is a live backup: it leaves services running, takes a logical `pg_dump -Fc` of the Synapse PostgreSQL database, copies persisted project/module data, exports Caddy state volumes when present, and then runs borgmatic create/prune/check.
+- `restore.sh` is destructive for runtime state: it stops services, extracts the selected archive, restores persisted state, re-runs `bash apply.sh`, restores the filesystem payload, recreates the Synapse database from the logical dump, re-runs `bash apply.sh`, and starts services unless you pass `--keep-stopped`.
+- Generated runtime files such as `.env` and rendered service configs are not treated as canonical backup inputs; restore rebuilds them from `deploy.yaml` and `.matrix-easy-deploy` state.
 - This phase supports only local repository targets (`backup.repository.type: local`).
 
 ### Run with Docker (single command)

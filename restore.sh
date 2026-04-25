@@ -10,17 +10,19 @@ ASSUME_YES="false"
 KEEP_STOPPED="false"
 LIST_ONLY="false"
 STACK_STOPPED="false"
+RESTORE_STAGE=""
 
 BACKUP_STATE_DIR="${SCRIPT_DIR}/.matrix-easy-deploy/backup"
 RESTORE_ROOT="${BACKUP_STATE_DIR}/restore"
 BORG_CONFIG_PATH="${BACKUP_STATE_DIR}/borgmatic.yaml"
 
-VOLUME_EXPORTS=(
-    "core_postgres_data"
-    "core_redis_data"
+CADDY_VOLUME_EXPORTS=(
     "caddy_data"
     "caddy_caddy_config"
 )
+
+DATABASE_RESTORE_DIR="database"
+SYNAPSE_DUMP_FILE="${DATABASE_RESTORE_DIR}/synapse.dump"
 
 PERSISTENT_RESTORE_PATHS=(
     "deploy.yaml"
@@ -51,6 +53,8 @@ EOF
 cleanup_and_restart() {
     local rc=$?
 
+    [[ -n "${RESTORE_STAGE}" ]] && rm -rf "${RESTORE_STAGE}" 2>/dev/null || true
+
     if [[ "${STACK_STOPPED}" == "true" && "${KEEP_STOPPED}" != "true" ]]; then
         info "Restarting services after restore flow..."
         if ! bash "${SCRIPT_DIR}/start.sh"; then
@@ -65,6 +69,43 @@ cleanup_and_restart() {
 require_command() {
     local cmd="$1"
     command -v "$cmd" &>/dev/null || die "Required command not found: ${cmd}"
+}
+
+load_runtime_env() {
+    if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+        set -o allexport
+        # shellcheck disable=SC1090
+        source "${SCRIPT_DIR}/.env"
+        set +o allexport
+    fi
+}
+
+read_state_secret() {
+    local key="$1"
+    local secrets_path="${SCRIPT_DIR}/.matrix-easy-deploy/secrets.yaml"
+
+    [[ -f "${secrets_path}" ]] || return 1
+
+    python3 - "$secrets_path" "$key" <<'PY'
+from pathlib import Path
+import sys
+
+import yaml
+
+data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
+value = data.get(sys.argv[2], "")
+if value:
+    print(value)
+PY
+}
+
+postgres_password() {
+    if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
+        printf '%s\n' "${POSTGRES_PASSWORD}"
+        return 0
+    fi
+
+    read_state_secret "POSTGRES_PASSWORD"
 }
 
 load_backup_settings() {
@@ -85,11 +126,10 @@ source_directories:
   - payload
 repositories:
   - path: ${BACKUP_REPOSITORY_PATH}
-retention:
-  keep_daily: ${BACKUP_KEEP_DAILY}
-  keep_weekly: ${BACKUP_KEEP_WEEKLY}
-  keep_monthly: ${BACKUP_KEEP_MONTHLY}
-  keep_yearly: ${BACKUP_KEEP_YEARLY}
+keep_daily: ${BACKUP_KEEP_DAILY}
+keep_weekly: ${BACKUP_KEEP_WEEKLY}
+keep_monthly: ${BACKUP_KEEP_MONTHLY}
+keep_yearly: ${BACKUP_KEEP_YEARLY}
 working_directory: ${BACKUP_STATE_DIR}
 EOF
 }
@@ -141,18 +181,42 @@ import_volume_if_present() {
         alpine:3 sh -c "rm -rf /target/* /target/.[!.]* /target/..?* 2>/dev/null || true; cd /target && tar -xf /backup/${volume_name}.tar"
 }
 
+restore_synapse_database_if_present() {
+    local payload_root="$1"
+    local archive_path="${payload_root}/${SYNAPSE_DUMP_FILE}"
+    local postgres_password_value
+
+    [[ -f "${archive_path}" ]] || return 0
+
+    postgres_password_value="$(postgres_password)"
+    [[ -n "${postgres_password_value}" ]] || die "POSTGRES_PASSWORD not available in .env or .matrix-easy-deploy/secrets.yaml"
+
+    if ! docker ps --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
+        die "matrix_postgres is not running. Start the core stack prerequisites before restoring."
+    fi
+
+    info "Resetting Synapse PostgreSQL database..."
+    docker exec -e PGPASSWORD="${postgres_password_value}" matrix_postgres \
+        psql -U synapse -d postgres -c "DROP DATABASE IF EXISTS synapse WITH (FORCE);"
+    docker exec -e PGPASSWORD="${postgres_password_value}" matrix_postgres \
+        psql -U synapse -d postgres -c "CREATE DATABASE synapse OWNER synapse ENCODING 'UTF8' LC_COLLATE='C' LC_CTYPE='C' TEMPLATE template0;"
+
+    info "Restoring Synapse PostgreSQL database..."
+    docker exec -i -e PGPASSWORD="${postgres_password_value}" matrix_postgres \
+        pg_restore -U synapse -d synapse --no-owner --no-privileges < "${archive_path}"
+}
+
 run_restore() {
-    local restore_stage
     mkdir -p "${RESTORE_ROOT}"
-    restore_stage="$(mktemp -d "${RESTORE_ROOT}/restore.XXXXXX")"
+    RESTORE_STAGE="$(mktemp -d "${RESTORE_ROOT}/restore.XXXXXX")"
 
     info "Extracting archive '${ARCHIVE_NAME}'..."
     (
-        cd "$restore_stage"
+        cd "$RESTORE_STAGE"
         borg extract "${BACKUP_REPOSITORY_PATH}::${ARCHIVE_NAME}" payload
     )
 
-    local payload_root="${restore_stage}/payload"
+    local payload_root="${RESTORE_STAGE}/payload"
     [[ -d "$payload_root" ]] || die "Archive '${ARCHIVE_NAME}' does not contain expected payload/ directory"
 
     # Restore deploy/state inputs first.
@@ -163,7 +227,7 @@ run_restore() {
     info "Regenerating runtime artifacts from restored deploy/state..."
     bash "${SCRIPT_DIR}/apply.sh"
 
-    for volume_name in "${VOLUME_EXPORTS[@]}"; do
+    for volume_name in "${CADDY_VOLUME_EXPORTS[@]}"; do
         import_volume_if_present "$payload_root" "$volume_name"
     done
 
@@ -175,6 +239,8 @@ run_restore() {
         esac
         restore_path_if_present "$payload_root" "$rel_path"
     done
+
+    restore_synapse_database_if_present "$payload_root"
 
     info "Final reconciliation after payload restore..."
     bash "${SCRIPT_DIR}/apply.sh"
@@ -215,6 +281,7 @@ main() {
     require_command borgmatic
     require_command borg
 
+    load_runtime_env
     load_backup_settings
     write_borgmatic_config
 

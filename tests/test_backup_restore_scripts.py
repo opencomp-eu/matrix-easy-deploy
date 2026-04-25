@@ -36,6 +36,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
         (root / "restore.sh").chmod(0o755)
 
         (root / "VERSION").write_text("1.2.3\n")
+        (root / ".env").write_text("POSTGRES_PASSWORD=secret\n")
         (root / ".matrix-easy-deploy/secrets.yaml").write_text("POSTGRES_PASSWORD: secret\n")
         (root / ".matrix-easy-deploy/modules.yaml").write_text("{}\n")
 
@@ -56,7 +57,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
             "    keep_yearly: 0\n"
         )
 
-    def test_backup_stops_then_starts_and_runs_borgmatic_actions(self):
+    def test_backup_uses_live_dump_and_runs_borgmatic_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._create_min_repo(root)
@@ -70,7 +71,9 @@ class BackupRestoreScriptTests(unittest.TestCase):
             self._write_executable(
                 fake_bin / "docker",
                 "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == \"ps\" ]]; then echo matrix_postgres; exit 0; fi\n"
                 "if [[ \"${1:-}\" == \"volume\" && \"${2:-}\" == \"inspect\" ]]; then exit 1; fi\n"
+                "if [[ \"${1:-}\" == \"exec\" ]]; then echo docker:$* >> \"$EVENTS\"; echo dump-bytes; exit 0; fi\n"
                 "exit 0\n",
             )
             self._write_executable(
@@ -100,13 +103,18 @@ class BackupRestoreScriptTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             lines = events.read_text().splitlines()
-            self.assertEqual(lines[0], "stop")
+            self.assertTrue(any(line.startswith("docker:exec ") and "pg_dump" in line for line in lines))
             self.assertIn("borgmatic:--config", lines[1])
             self.assertTrue(any(" repo-create " in line for line in lines))
             self.assertTrue(any(" create " in line for line in lines))
             self.assertTrue(any(" prune" in line for line in lines))
             self.assertTrue(any(" check" in line for line in lines))
-            self.assertEqual(lines[-1], "start")
+            self.assertNotIn("stop", lines)
+            self.assertNotIn("start", lines)
+
+            borgmatic_config = (root / ".matrix-easy-deploy/backup/borgmatic.yaml").read_text()
+            self.assertIn("keep_daily: 7", borgmatic_config)
+            self.assertNotIn("retention:", borgmatic_config)
 
     def test_restore_requires_archive_argument(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -153,7 +161,9 @@ class BackupRestoreScriptTests(unittest.TestCase):
             self._write_executable(
                 fake_bin / "docker",
                 "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == \"ps\" ]]; then echo matrix_postgres; exit 0; fi\n"
                 "if [[ \"${1:-}\" == \"volume\" && \"${2:-}\" == \"inspect\" ]]; then exit 1; fi\n"
+                "if [[ \"${1:-}\" == \"exec\" ]]; then echo docker:$* >> \"$EVENTS\"; if [[ \"$*\" == *\" pg_restore \"* ]]; then cat >/dev/null; fi; exit 0; fi\n"
                 "exit 0\n",
             )
             self._write_executable(
@@ -161,7 +171,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
                 "#!/usr/bin/env bash\n"
                 "echo borg:$* >> \"$EVENTS\"\n"
                 "if [[ \"${1:-}\" == \"extract\" ]]; then\n"
-                "  mkdir -p payload/.matrix-easy-deploy payload/modules/core/synapse_data\n"
+                "  mkdir -p payload/.matrix-easy-deploy payload/modules/core/synapse_data payload/database\n"
                 "  cat > payload/deploy.yaml <<'EOF'\n"
                 "matrix:\n"
                 "  domain: matrix.example.com\n"
@@ -180,6 +190,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
                 "EOF\n"
                 "  echo '{}' > payload/.matrix-easy-deploy/modules.yaml\n"
                 "  echo 'POSTGRES_PASSWORD: restored' > payload/.matrix-easy-deploy/secrets.yaml\n"
+                "  echo dump > payload/database/synapse.dump\n"
                 "fi\n"
                 "exit 0\n",
             )
@@ -203,8 +214,15 @@ class BackupRestoreScriptTests(unittest.TestCase):
             self.assertEqual(lines[0], "stop")
             self.assertIn("borg:extract", lines[1])
             self.assertEqual(lines[2], "apply")
-            self.assertEqual(lines[3], "apply")
+            self.assertTrue(any(line.startswith("docker:exec ") and "DROP DATABASE IF EXISTS synapse" in line for line in lines))
+            self.assertTrue(any(line.startswith("docker:exec ") and "CREATE DATABASE synapse" in line for line in lines))
+            self.assertTrue(any(line.startswith("docker:exec ") and "pg_restore" in line for line in lines))
+            self.assertEqual(lines[-2], "apply")
             self.assertEqual(lines[-1], "start")
+
+            borgmatic_config = (root / ".matrix-easy-deploy/backup/borgmatic.yaml").read_text()
+            self.assertIn("keep_daily: 7", borgmatic_config)
+            self.assertNotIn("retention:", borgmatic_config)
 
 
 if __name__ == "__main__":

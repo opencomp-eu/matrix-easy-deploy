@@ -5,9 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/lib.sh"
 
-KEEP_STOPPED="false"
 LIST_ONLY="false"
-STACK_STOPPED="false"
 
 BACKUP_STATE_DIR="${SCRIPT_DIR}/.matrix-easy-deploy/backup"
 BACKUP_STAGING_ROOT="${BACKUP_STATE_DIR}/staging"
@@ -15,12 +13,13 @@ BACKUP_STAGING_CURRENT="${BACKUP_STAGING_ROOT}/current"
 BACKUP_PAYLOAD_DIR="${BACKUP_STAGING_CURRENT}/payload"
 BORG_CONFIG_PATH="${BACKUP_STATE_DIR}/borgmatic.yaml"
 
-VOLUME_EXPORTS=(
-    "core_postgres_data"
-    "core_redis_data"
+CADDY_VOLUME_EXPORTS=(
     "caddy_data"
     "caddy_caddy_config"
 )
+
+DATABASE_DUMP_DIR="${BACKUP_PAYLOAD_DIR}/database"
+SYNAPSE_DUMP_FILE="${DATABASE_DUMP_DIR}/synapse.dump"
 
 PERSISTENT_PATHS=(
     "deploy.yaml"
@@ -36,34 +35,49 @@ PERSISTENT_PATHS=(
 print_help() {
     cat <<EOF
 Usage:
-  bash backup.sh [--list] [--keep-stopped]
+  bash backup.sh [--list]
 
 Options:
   --list          List available archives in the configured repository.
-  --keep-stopped  Do not restart services after creating a backup.
   -h, --help      Show this help message.
 EOF
 }
 
-cleanup_and_restart() {
-    local rc=$?
-
+cleanup_staging() {
     rm -rf "${BACKUP_STAGING_CURRENT}" 2>/dev/null || true
-
-    if [[ "${STACK_STOPPED}" == "true" && "${KEEP_STOPPED}" != "true" ]]; then
-        info "Restarting services after backup flow..."
-        if ! bash "${SCRIPT_DIR}/start.sh"; then
-            warn "Automatic restart failed; please run 'bash start.sh' manually."
-            rc=1
-        fi
-    fi
-
-    exit "$rc"
 }
 
 require_command() {
     local cmd="$1"
     command -v "$cmd" &>/dev/null || die "Required command not found: ${cmd}"
+}
+
+load_runtime_env() {
+    if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+        set -o allexport
+        # shellcheck disable=SC1090
+        source "${SCRIPT_DIR}/.env"
+        set +o allexport
+    fi
+}
+
+read_state_secret() {
+    local key="$1"
+    local secrets_path="${SCRIPT_DIR}/.matrix-easy-deploy/secrets.yaml"
+
+    [[ -f "${secrets_path}" ]] || return 1
+
+    python3 - "$secrets_path" "$key" <<'PY'
+from pathlib import Path
+import sys
+
+import yaml
+
+data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
+value = data.get(sys.argv[2], "")
+if value:
+    print(value)
+PY
 }
 
 load_backup_settings() {
@@ -84,11 +98,10 @@ source_directories:
   - payload
 repositories:
   - path: ${BACKUP_REPOSITORY_PATH}
-retention:
-  keep_daily: ${BACKUP_KEEP_DAILY}
-  keep_weekly: ${BACKUP_KEEP_WEEKLY}
-  keep_monthly: ${BACKUP_KEEP_MONTHLY}
-  keep_yearly: ${BACKUP_KEEP_YEARLY}
+keep_daily: ${BACKUP_KEEP_DAILY}
+keep_weekly: ${BACKUP_KEEP_WEEKLY}
+keep_monthly: ${BACKUP_KEEP_MONTHLY}
+keep_yearly: ${BACKUP_KEEP_YEARLY}
 working_directory: ${BACKUP_STAGING_CURRENT}
 EOF
 }
@@ -119,6 +132,26 @@ export_volume_if_present() {
         alpine:3 sh -c "cd /source && tar -cf /backup/${volume_name}.tar ."
 }
 
+dump_synapse_database() {
+    local postgres_password="${POSTGRES_PASSWORD:-}"
+
+    if [[ -z "${postgres_password}" ]]; then
+        postgres_password="$(read_state_secret "POSTGRES_PASSWORD")"
+    fi
+    [[ -n "${postgres_password}" ]] || die "POSTGRES_PASSWORD not available in .env or .matrix-easy-deploy/secrets.yaml"
+
+    if ! docker ps --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
+        die "matrix_postgres is not running. Start the core stack before creating a live backup."
+    fi
+
+    mkdir -p "${DATABASE_DUMP_DIR}"
+
+    info "Creating logical PostgreSQL dump for Synapse..."
+    docker exec -e PGPASSWORD="${postgres_password}" matrix_postgres \
+        pg_dump -U synapse -d synapse -Fc --exclude-table-data=e2e_one_time_keys_json \
+        > "${SYNAPSE_DUMP_FILE}"
+}
+
 write_manifest() {
     local manifest_path="${BACKUP_PAYLOAD_DIR}/manifest.json"
     local timestamp
@@ -135,7 +168,8 @@ write_manifest() {
   "created_at": "${timestamp}",
   "version": "${version}",
   "repository_path": "${BACKUP_REPOSITORY_PATH}",
-  "volumes": ["core_postgres_data", "core_redis_data", "caddy_data", "caddy_caddy_config"]
+    "database_dumps": ["database/synapse.dump"],
+    "volumes": ["caddy_data", "caddy_caddy_config"]
 }
 EOF
 }
@@ -153,7 +187,9 @@ create_backup() {
         stage_copy_path "$rel_path"
     done
 
-    for volume_name in "${VOLUME_EXPORTS[@]}"; do
+    dump_synapse_database
+
+    for volume_name in "${CADDY_VOLUME_EXPORTS[@]}"; do
         export_volume_if_present "$volume_name" "${BACKUP_PAYLOAD_DIR}/docker-volumes"
     done
 
@@ -181,9 +217,6 @@ main() {
             --list)
                 LIST_ONLY="true"
                 ;;
-            --keep-stopped)
-                KEEP_STOPPED="true"
-                ;;
             -h|--help)
                 print_help
                 exit 0
@@ -200,6 +233,7 @@ main() {
     require_command borgmatic
     require_command borg
 
+    load_runtime_env
     load_backup_settings
     write_borgmatic_config
 
@@ -208,11 +242,7 @@ main() {
         exit 0
     fi
 
-    trap cleanup_and_restart EXIT
-
-    info "Stopping services before backup..."
-    bash "${SCRIPT_DIR}/stop.sh"
-    STACK_STOPPED="true"
+    trap cleanup_staging EXIT
 
     create_backup
 }
