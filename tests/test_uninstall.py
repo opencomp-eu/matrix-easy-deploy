@@ -54,6 +54,11 @@ class UninstallScriptTests(unittest.TestCase):
             )
 
             docker_log = root / "docker.log"
+            systemctl_log = root / "systemctl.log"
+            unit_dir = root / "systemd"
+            unit_dir.mkdir(parents=True)
+            (unit_dir / "matrix-easy-deploy-backup.service").write_text("service\n")
+            (unit_dir / "matrix-easy-deploy-backup.timer").write_text("timer\n")
             fake_bin = root / "bin"
             fake_bin.mkdir(parents=True)
             self._write_executable(
@@ -72,10 +77,19 @@ class UninstallScriptTests(unittest.TestCase):
                 "fi\n"
                 "exit 0\n",
             )
+            self._write_executable(
+                fake_bin / "systemctl",
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "printf '%s\n' \"$*\" >> \"$SYSTEMCTL_LOG\"\n"
+                "exit 0\n",
+            )
 
             env = os.environ.copy()
             env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
             env["DOCKER_LOG"] = str(docker_log)
+            env["SYSTEMCTL_LOG"] = str(systemctl_log)
+            env["MED_SYSTEMD_UNIT_DIR"] = str(unit_dir)
 
             result = subprocess.run(
                 ["bash", "uninstall.sh", "--yes"],
@@ -101,11 +115,17 @@ class UninstallScriptTests(unittest.TestCase):
             self.assertFalse((root / "modules/hookshot/hookshot").exists())
             self.assertFalse((root / "modules/whatsapp-bridge/whatsapp").exists())
             self.assertFalse((root / "modules/slack-bridge/slack").exists())
+            self.assertFalse((unit_dir / "matrix-easy-deploy-backup.service").exists())
+            self.assertFalse((unit_dir / "matrix-easy-deploy-backup.timer").exists())
 
             docker_calls = docker_log.read_text()
             self.assertIn("rm -f matrix_synapse", docker_calls)
             self.assertIn("volume rm core_postgres_data", docker_calls)
             self.assertIn("network rm caddy_net", docker_calls)
+
+            systemctl_calls = systemctl_log.read_text()
+            self.assertIn("disable --now matrix-easy-deploy-backup.timer", systemctl_calls)
+            self.assertIn("daemon-reload", systemctl_calls)
 
 
 if __name__ == "__main__":

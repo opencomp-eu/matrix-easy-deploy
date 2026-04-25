@@ -64,6 +64,34 @@ remove_docker_network_if_present() {
     fi
 }
 
+remove_backup_schedule_if_present() {
+    local unit_dir="${MED_SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
+    local service_path="${unit_dir}/matrix-easy-deploy-backup.service"
+    local timer_path="${unit_dir}/matrix-easy-deploy-backup.timer"
+    local had_units="false"
+
+    if [[ -f "$service_path" || -f "$timer_path" ]]; then
+        had_units="true"
+    fi
+
+    if command -v systemctl &>/dev/null; then
+        systemctl disable --now matrix-easy-deploy-backup.timer >/dev/null 2>&1 || true
+    fi
+
+    if [[ -f "$service_path" ]]; then
+        rm -f "$service_path"
+        info "Removed automatic backup service unit"
+    fi
+    if [[ -f "$timer_path" ]]; then
+        rm -f "$timer_path"
+        info "Removed automatic backup timer unit"
+    fi
+
+    if command -v systemctl &>/dev/null && [[ "$had_units" == "true" ]]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+}
+
 confirm_uninstall() {
     echo
     warn "This will remove Matrix services, runtime data, and generated files from this repository."
@@ -152,6 +180,8 @@ main() {
     else
         warn "Docker is not installed or not in PATH. Skipping Docker resource cleanup."
     fi
+
+    remove_backup_schedule_if_present
 
     local generated_paths=(
         ".env"
