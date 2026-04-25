@@ -142,6 +142,37 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
+    def test_validate_config_rejects_empty_backup_schedule_calendar_when_enabled(self):
+        cfg = self.sample_config()
+        cfg["backup"] = {
+            "enabled": True,
+            "repository": {"type": "local", "path": "/var/backups/med-kit"},
+            "schedule": {"enabled": True, "calendar": ""},
+            "retention": {"keep_daily": 7},
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_invalid_backup_schedule_persistent_type(self):
+        cfg = self.sample_config()
+        cfg["backup"] = {
+            "enabled": False,
+            "schedule": {"enabled": False, "persistent": "yes"},
+            "repository": {"type": "local", "path": "/var/backups/med-kit"},
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_enabled_schedule_when_backup_disabled(self):
+        cfg = self.sample_config()
+        cfg["backup"] = {
+            "enabled": False,
+            "repository": {"type": "local", "path": "/var/backups/med-kit"},
+            "schedule": {"enabled": True, "calendar": "daily", "persistent": True},
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
         first = apply.create_or_update_secrets(ctx, {})
@@ -366,6 +397,22 @@ class ApplyTests(unittest.TestCase):
         saved_2 = yaml.safe_load((self.root / ".matrix-easy-deploy/secrets.yaml").read_text())
 
         self.assertEqual(saved_1, saved_2)
+
+    def test_apply_configuration_reconciles_backup_schedule(self):
+        cfg = self.sample_config()
+        cfg["backup"] = {
+            "enabled": True,
+            "repository": {"type": "local", "path": "/var/backups/med-kit"},
+            "schedule": {"enabled": True, "calendar": "daily", "persistent": True},
+            "retention": {"keep_daily": 7},
+        }
+        self.write_config(cfg)
+        ctx = apply.ApplyContext(self.root)
+
+        with patch("scripts.apply.backup_schedule.reconcile", return_value="Automatic backup timer installed or updated.") as mock_reconcile:
+            apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        mock_reconcile.assert_called_once_with(ctx.project_root, cfg)
 
     def test_run_runtime_reconcile_invokes_stop_then_start(self):
         ctx = apply.ApplyContext(self.root)

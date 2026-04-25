@@ -218,6 +218,11 @@ class ConfigEditTests(unittest.TestCase):
                     "backup": {
                         "enabled": False,
                         "repository": {"type": "local", "path": "/var/backups/med-kit"},
+                        "schedule": {
+                            "enabled": False,
+                            "calendar": "*-*-* 03:00:00",
+                            "persistent": True,
+                        },
                         "retention": {
                             "keep_daily": 7,
                             "keep_weekly": 4,
@@ -241,6 +246,12 @@ class ConfigEditTests(unittest.TestCase):
                 "local",
                 "--backup-repository-path",
                 "/srv/med-kit-backups",
+                "--backup-schedule-enabled",
+                "true",
+                "--backup-schedule-calendar",
+                "daily",
+                "--backup-schedule-persistent",
+                "false",
                 "--backup-keep-daily",
                 "14",
                 "--backup-keep-weekly",
@@ -258,6 +269,9 @@ class ConfigEditTests(unittest.TestCase):
         self.assertTrue(backup["enabled"])
         self.assertEqual(backup["repository"]["type"], "local")
         self.assertEqual(backup["repository"]["path"], "/srv/med-kit-backups")
+        self.assertTrue(backup["schedule"]["enabled"])
+        self.assertEqual(backup["schedule"]["calendar"], "daily")
+        self.assertFalse(backup["schedule"]["persistent"])
         self.assertEqual(backup["retention"]["keep_daily"], 14)
         self.assertEqual(backup["retention"]["keep_weekly"], 8)
         self.assertEqual(backup["retention"]["keep_monthly"], 12)
@@ -275,6 +289,11 @@ class ConfigEditTests(unittest.TestCase):
                     "backup": {
                         "enabled": True,
                         "repository": {"type": "local", "path": "/srv/med-kit-backups"},
+                        "schedule": {
+                            "enabled": True,
+                            "calendar": "daily",
+                            "persistent": False,
+                        },
                         "retention": {
                             "keep_daily": 10,
                             "keep_weekly": 5,
@@ -291,6 +310,9 @@ class ConfigEditTests(unittest.TestCase):
         self.assertIn("backup_enabled=true", defaults)
         self.assertIn("backup_repository_type=local", defaults)
         self.assertIn("backup_repository_path=/srv/med-kit-backups", defaults)
+        self.assertIn("backup_schedule_enabled=true", defaults)
+        self.assertIn("backup_schedule_calendar=daily", defaults)
+        self.assertIn("backup_schedule_persistent=false", defaults)
         self.assertIn("backup_keep_daily=10", defaults)
         self.assertIn("backup_keep_weekly=5", defaults)
         self.assertIn("backup_keep_monthly=9", defaults)

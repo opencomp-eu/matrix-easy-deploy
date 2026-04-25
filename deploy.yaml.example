@@ -29,6 +29,10 @@ backup:
   repository:
     type: local
     path: /var/backups/med-kit
+  schedule:
+    enabled: false
+    calendar: '*-*-* 03:00:00'
+    persistent: true
   retention:
     keep_daily: 7
     keep_weekly: 4

@@ -84,6 +84,45 @@ class BackupConfigTests(unittest.TestCase):
         self.assertIn("BACKUP_KEEP_MONTHLY=12", shell)
         self.assertIn("BACKUP_KEEP_YEARLY=1", shell)
 
+    def test_load_backup_settings_includes_schedule_defaults(self):
+        self._write(
+            {
+                "matrix": {
+                    "domain": "matrix.example.com",
+                    "server_name": "example.com",
+                    "admin_username": "admin",
+                },
+                "backup": {
+                    "enabled": True,
+                    "repository": {"type": "local", "path": "/srv/backups"},
+                },
+            }
+        )
+
+        cfg = backup_config.load_backup_settings(self.deploy_yaml)
+        self.assertFalse(cfg["schedule"]["enabled"])
+        self.assertEqual(cfg["schedule"]["calendar"], "*-*-* 03:00:00")
+        self.assertTrue(cfg["schedule"]["persistent"])
+
+    def test_load_backup_settings_rejects_empty_schedule_calendar_when_enabled(self):
+        self._write(
+            {
+                "matrix": {
+                    "domain": "matrix.example.com",
+                    "server_name": "example.com",
+                    "admin_username": "admin",
+                },
+                "backup": {
+                    "enabled": True,
+                    "repository": {"type": "local", "path": "/srv/backups"},
+                    "schedule": {"enabled": True, "calendar": ""},
+                },
+            }
+        )
+
+        with self.assertRaises(backup_config.BackupConfigError):
+            backup_config.load_backup_settings(self.deploy_yaml)
+
 
 if __name__ == "__main__":
     unittest.main()

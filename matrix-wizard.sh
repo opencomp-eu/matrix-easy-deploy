@@ -441,12 +441,7 @@ run_logs_wizard() {
 
 run_backup_wizard() {
     echo
-    ask_yn _keep_stopped "Keep services stopped after backup?" "n"
-    if [[ "$_keep_stopped" == "y" ]]; then
-        bash "${SCRIPT_DIR}/backup.sh" --keep-stopped
-    else
-        bash "${SCRIPT_DIR}/backup.sh"
-    fi
+    bash "${SCRIPT_DIR}/backup.sh"
 }
 
 run_restore_wizard() {

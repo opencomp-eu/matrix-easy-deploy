@@ -16,6 +16,11 @@ DEFAULTS = {
         "type": "local",
         "path": "/var/backups/med-kit",
     },
+    "schedule": {
+        "enabled": False,
+        "calendar": "*-*-* 03:00:00",
+        "persistent": True,
+    },
     "retention": {
         "keep_daily": 7,
         "keep_weekly": 4,
@@ -64,6 +69,12 @@ def load_backup_settings(path: Path) -> dict:
     if not isinstance(repository, dict):
         raise BackupConfigError("backup.repository must be an object when provided")
 
+    schedule = backup.get("schedule", {})
+    if schedule is None:
+        schedule = {}
+    if not isinstance(schedule, dict):
+        raise BackupConfigError("backup.schedule must be an object when provided")
+
     retention = backup.get("retention", {})
     if retention is None:
         retention = {}
@@ -72,6 +83,17 @@ def load_backup_settings(path: Path) -> dict:
 
     repo_type = repository.get("type", DEFAULTS["repository"]["type"])
     repo_path = repository.get("path", DEFAULTS["repository"]["path"])
+    schedule_enabled = schedule.get("enabled", DEFAULTS["schedule"]["enabled"])
+    schedule_calendar = schedule.get("calendar", DEFAULTS["schedule"]["calendar"])
+    schedule_persistent = schedule.get("persistent", DEFAULTS["schedule"]["persistent"])
+
+    if not isinstance(schedule_enabled, bool):
+        raise BackupConfigError("backup.schedule.enabled must be true/false")
+    if schedule_enabled:
+        if not isinstance(schedule_calendar, str) or not schedule_calendar.strip():
+            raise BackupConfigError("backup.schedule.calendar must be a non-empty string when backup.schedule.enabled is true")
+    if not isinstance(schedule_persistent, bool):
+        raise BackupConfigError("backup.schedule.persistent must be true/false")
 
     if enabled:
         if repo_type != "local":
@@ -100,6 +122,11 @@ def load_backup_settings(path: Path) -> dict:
             "type": str(repo_type),
             "path": str(repo_path),
         },
+        "schedule": {
+            "enabled": schedule_enabled,
+            "calendar": str(schedule_calendar),
+            "persistent": schedule_persistent,
+        },
         "retention": {
             "keep_daily": keep_daily,
             "keep_weekly": keep_weekly,
@@ -112,10 +139,14 @@ def load_backup_settings(path: Path) -> dict:
 def _emit_shell(settings: dict) -> str:
     retention = settings["retention"]
     repository = settings["repository"]
+    schedule = settings["schedule"]
     values = {
         "BACKUP_ENABLED": "true" if settings["enabled"] else "false",
         "BACKUP_REPOSITORY_TYPE": repository["type"],
         "BACKUP_REPOSITORY_PATH": repository["path"],
+        "BACKUP_SCHEDULE_ENABLED": "true" if schedule["enabled"] else "false",
+        "BACKUP_SCHEDULE_CALENDAR": schedule["calendar"],
+        "BACKUP_SCHEDULE_PERSISTENT": "true" if schedule["persistent"] else "false",
         "BACKUP_KEEP_DAILY": str(retention["keep_daily"]),
         "BACKUP_KEEP_WEEKLY": str(retention["keep_weekly"]),
         "BACKUP_KEEP_MONTHLY": str(retention["keep_monthly"]),

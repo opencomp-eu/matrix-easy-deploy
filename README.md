@@ -272,12 +272,20 @@ backup:
   repository:
     type: local
     path: /var/backups/med-kit
+  schedule:
+    enabled: false
+    calendar: '*-*-* 03:00:00'
+    persistent: true
   retention:
     keep_daily: 7
     keep_weekly: 4
     keep_monthly: 6
     keep_yearly: 0
 ```
+
+The `keep_*` values are retention settings only. They tell Borg/Borgmatic how many archives to keep when `bash backup.sh` runs; they do not schedule automatic backups on their own.
+
+If `backup.schedule.enabled` is true, `bash apply.sh` installs or updates a systemd timer that runs `bash backup.sh` automatically. `backup.schedule.calendar` is passed directly to systemd `OnCalendar`, and `backup.schedule.persistent` controls whether missed runs should fire after reboot.
 
 Install prerequisites on the host:
 
@@ -290,6 +298,22 @@ Create a backup:
 
 ```bash
 bash backup.sh
+```
+
+If scheduling is disabled, backups only run when you call `bash backup.sh` yourself. Enabling `backup.schedule` lets the repo manage a systemd timer for you.
+
+To enable the built-in systemd timer, set `backup.schedule.enabled: true` and run:
+
+```bash
+bash apply.sh
+```
+
+Useful status commands:
+
+```bash
+systemctl status matrix-easy-deploy-backup.timer
+systemctl list-timers matrix-easy-deploy-backup.timer
+journalctl -u matrix-easy-deploy-backup.service
 ```
 
 List available backups:

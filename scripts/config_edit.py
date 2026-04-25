@@ -48,6 +48,11 @@ def load_or_init(path: Path) -> dict:
                     "type": "local",
                     "path": "/var/backups/med-kit",
                 },
+                "schedule": {
+                    "enabled": False,
+                    "calendar": "*-*-* 03:00:00",
+                    "persistent": True,
+                },
                 "retention": {
                     "keep_daily": 7,
                     "keep_weekly": 4,
@@ -167,6 +172,9 @@ def update_backup_config(
     enabled: bool | None = None,
     repository_type: str | None = None,
     repository_path: str | None = None,
+    schedule_enabled: bool | None = None,
+    schedule_calendar: str | None = None,
+    schedule_persistent: bool | None = None,
     keep_daily: int | None = None,
     keep_weekly: int | None = None,
     keep_monthly: int | None = None,
@@ -182,6 +190,11 @@ def update_backup_config(
         repository = {}
         backup["repository"] = repository
 
+    schedule = backup.setdefault("schedule", {})
+    if not isinstance(schedule, dict):
+        schedule = {}
+        backup["schedule"] = schedule
+
     retention = backup.setdefault("retention", {})
     if not isinstance(retention, dict):
         retention = {}
@@ -193,6 +206,12 @@ def update_backup_config(
         repository["type"] = repository_type
     if repository_path is not None:
         repository["path"] = repository_path
+    if schedule_enabled is not None:
+        schedule["enabled"] = bool(schedule_enabled)
+    if schedule_calendar is not None:
+        schedule["calendar"] = schedule_calendar
+    if schedule_persistent is not None:
+        schedule["persistent"] = bool(schedule_persistent)
     if keep_daily is not None:
         retention["keep_daily"] = int(keep_daily)
     if keep_weekly is not None:
@@ -274,12 +293,16 @@ def emit_module_defaults(config: dict, module_name: str) -> str:
 def emit_backup_defaults(config: dict) -> str:
     backup = config.get("backup", {}) if isinstance(config.get("backup", {}), dict) else {}
     repository = backup.get("repository", {}) if isinstance(backup.get("repository", {}), dict) else {}
+    schedule = backup.get("schedule", {}) if isinstance(backup.get("schedule", {}), dict) else {}
     retention = backup.get("retention", {}) if isinstance(backup.get("retention", {}), dict) else {}
 
     defaults = {
         "backup_enabled": "true" if bool(backup.get("enabled", False)) else "false",
         "backup_repository_type": str(repository.get("type", "local")),
         "backup_repository_path": str(repository.get("path", "/var/backups/med-kit")),
+        "backup_schedule_enabled": "true" if bool(schedule.get("enabled", False)) else "false",
+        "backup_schedule_calendar": str(schedule.get("calendar", "*-*-* 03:00:00")),
+        "backup_schedule_persistent": "true" if bool(schedule.get("persistent", True)) else "false",
         "backup_keep_daily": str(retention.get("keep_daily", 7)),
         "backup_keep_weekly": str(retention.get("keep_weekly", 4)),
         "backup_keep_monthly": str(retention.get("keep_monthly", 6)),
@@ -323,6 +346,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--backup-enabled")
     parser.add_argument("--backup-repository-type")
     parser.add_argument("--backup-repository-path")
+    parser.add_argument("--backup-schedule-enabled")
+    parser.add_argument("--backup-schedule-calendar")
+    parser.add_argument("--backup-schedule-persistent")
     parser.add_argument("--backup-keep-daily")
     parser.add_argument("--backup-keep-weekly")
     parser.add_argument("--backup-keep-monthly")
@@ -403,12 +429,17 @@ def main(argv: list[str] | None = None) -> int:
         keep_yearly = int(args.backup_keep_yearly) if args.backup_keep_yearly is not None else None
 
         enabled = to_bool(args.backup_enabled) if args.backup_enabled is not None else None
+        schedule_enabled = to_bool(args.backup_schedule_enabled) if args.backup_schedule_enabled is not None else None
+        schedule_persistent = to_bool(args.backup_schedule_persistent) if args.backup_schedule_persistent is not None else None
 
         update_backup_config(
             config=config,
             enabled=enabled,
             repository_type=args.backup_repository_type,
             repository_path=args.backup_repository_path,
+            schedule_enabled=schedule_enabled,
+            schedule_calendar=args.backup_schedule_calendar,
+            schedule_persistent=schedule_persistent,
             keep_daily=keep_daily,
             keep_weekly=keep_weekly,
             keep_monthly=keep_monthly,

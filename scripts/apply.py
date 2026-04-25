@@ -15,6 +15,7 @@ import yaml
 try:
     from scripts import synapse_appservice
     from scripts import hookshot_caddy
+    from scripts import backup_schedule
 except ModuleNotFoundError:
     # When run as scripts/apply.py, Python may not include project root in sys.path.
     project_root = Path(__file__).resolve().parent.parent
@@ -22,6 +23,7 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(project_root))
     from scripts import synapse_appservice
     from scripts import hookshot_caddy
+    from scripts import backup_schedule
 
 
 DEFAULT_SECRET_KEYS = [
@@ -150,6 +152,26 @@ def validate_config(config: dict) -> None:
         enabled = backup.get("enabled", False)
         if "enabled" in backup and not isinstance(enabled, bool):
             raise ValueError("backup.enabled must be true/false")
+
+        schedule = backup.get("schedule", {}) if isinstance(backup.get("schedule", {}), dict) else backup.get("schedule")
+        if schedule is not None and not isinstance(schedule, dict):
+            raise ValueError("backup.schedule must be an object when provided")
+
+        if isinstance(schedule, dict):
+            schedule_enabled = schedule.get("enabled", False)
+            if "enabled" in schedule and not isinstance(schedule_enabled, bool):
+                raise ValueError("backup.schedule.enabled must be true/false")
+
+            if schedule_enabled and not enabled:
+                raise ValueError("backup.schedule.enabled requires backup.enabled=true")
+
+            if schedule_enabled:
+                calendar = schedule.get("calendar")
+                if not isinstance(calendar, str) or not calendar.strip():
+                    raise ValueError("backup.schedule.calendar must be a non-empty string when backup.schedule.enabled is true")
+
+            if "persistent" in schedule and not isinstance(schedule.get("persistent"), bool):
+                raise ValueError("backup.schedule.persistent must be true/false")
 
         retention = backup.get("retention", {}) if isinstance(backup.get("retention", {}), dict) else backup.get("retention")
         if retention is not None and not isinstance(retention, dict):
@@ -659,6 +681,9 @@ def apply_configuration(
         reconcile_module_bootstrap(ctx, config)
     reconcile_bridge_appservices(ctx, config)
     reconcile_hookshot_caddy(ctx, config, derived)
+    schedule_status = backup_schedule.reconcile(ctx.project_root, config)
+    if schedule_status:
+        print(schedule_status)
 
 
 def run_runtime_reconcile(ctx: ApplyContext) -> None:
