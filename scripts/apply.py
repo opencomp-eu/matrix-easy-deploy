@@ -415,6 +415,34 @@ def render_template(src: Path, dest: Path, values: dict) -> None:
     dest.write_text(content)
 
 
+def strip_empty_caddy_site_blocks(content: str) -> str:
+    lines = content.splitlines()
+    kept: list[str] = []
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+
+        if stripped in {'"" {', '{'}:
+            while kept and not kept[-1].strip():
+                kept.pop()
+            if kept and kept[-1].lstrip().startswith("#"):
+                kept.pop()
+
+            depth = line.count("{") - line.count("}")
+            index += 1
+            while index < len(lines) and depth > 0:
+                depth += lines[index].count("{") - lines[index].count("}")
+                index += 1
+            continue
+
+        kept.append(line)
+        index += 1
+
+    return "\n".join(kept) + ("\n" if content.endswith("\n") else "")
+
+
 def fail_if_unresolved_placeholder(path: Path) -> None:
     content = path.read_text()
     if "{{" in content:
@@ -428,6 +456,7 @@ def render_templates(ctx: ApplyContext, env_vars: dict) -> None:
     )
     caddy_dest = ctx.project_root / "caddy" / "Caddyfile"
     render_template(caddy_template, caddy_dest, env_vars)
+    caddy_dest.write_text(strip_empty_caddy_site_blocks(caddy_dest.read_text()))
     fail_if_unresolved_placeholder(caddy_dest)
 
     synapse_template = ctx.project_root / "modules" / "core" / "synapse" / "homeserver.yaml.template"

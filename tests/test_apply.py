@@ -214,6 +214,29 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("hookshot", modules_state)
         self.assertFalse(modules_state["hookshot"]["enabled"])
 
+    def test_apply_configuration_strips_disabled_livekit_caddy_block(self):
+        cfg = self.sample_config()
+        cfg["features"]["calls"] = {"enabled": False, "livekit_domain": "livekit.example.com"}
+        self.write_config(cfg)
+        (self.root / "caddy/Caddyfile.template").write_text(
+            "matrix.example.com {\n"
+            "    reverse_proxy matrix_synapse:8008\n"
+            "}\n\n"
+            "# LiveKit SFU\n"
+            "{{LIVEKIT_DOMAIN}} {\n"
+            "    reverse_proxy matrix_livekit:7880\n"
+            "}\n"
+        )
+        ctx = apply.ApplyContext(self.root)
+
+        apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        caddy = (self.root / "caddy/Caddyfile").read_text()
+        self.assertIn("matrix.example.com {", caddy)
+        self.assertNotIn("matrix_livekit:7880", caddy)
+        self.assertNotIn('"" {', caddy)
+        self.assertNotIn("# LiveKit SFU", caddy)
+
     def test_apply_configuration_writes_bridge_env_values(self):
         cfg = self.sample_config()
         cfg["modules"]["whatsapp_bridge"] = {
