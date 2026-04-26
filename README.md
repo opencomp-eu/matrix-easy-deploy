@@ -330,6 +330,12 @@ Restore from an archive:
 bash restore.sh --archive <archive-name>
 ```
 
+For unattended or automation-driven restores, skip the destructive confirmation prompts with:
+
+```bash
+bash restore.sh --archive <archive-name> --yes
+```
+
 You can also pass a unique archive ID prefix from Borg's bracketed ID if you prefer, for example `bash restore.sh --archive 74125a60c0a4a76a`.
 
 Behavior notes:
