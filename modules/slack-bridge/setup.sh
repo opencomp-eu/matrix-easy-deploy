@@ -49,8 +49,6 @@ load_env() {
     module_load_env "$DEPLOY_ENV" "the main setup wizard"
 
     load_module_defaults
-
-    ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 }
 
 load_module_defaults() {
@@ -76,7 +74,7 @@ verify_server_name() {
 # =============================================================================
 gather_config() {
     if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
-        SL_ADMIN_USERNAME="${MODULE_SL_ADMIN_USERNAME:-${MODULE_SL_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}}"
+        SL_ADMIN_USERNAME="${MODULE_SL_ADMIN_USERNAME:-${MODULE_SL_ADMIN_USERNAME_DEFAULT:-admin}}"
         SL_DB_NAME="${MODULE_SL_DB_NAME:-${MODULE_SL_DB_NAME_DEFAULT:-mautrix_slack}}"
         if [[ -z "$SL_ADMIN_USERNAME" || -z "$SL_DB_NAME" ]]; then
             die "SL_ADMIN_USERNAME and SL_DB_NAME are required in non-interactive mode."
@@ -93,10 +91,10 @@ gather_config() {
 
     ask SL_ADMIN_USERNAME \
         "Matrix admin username for full bridge access (without @/server part)" \
-        "${MODULE_SL_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}"
+        "${MODULE_SL_ADMIN_USERNAME_DEFAULT:-admin}"
     while [[ -z "$SL_ADMIN_USERNAME" ]]; do
         warn "Admin username is required."
-        ask SL_ADMIN_USERNAME "Matrix admin username" "${ADMIN_USERNAME:-admin}"
+        ask SL_ADMIN_USERNAME "Matrix admin username" "admin"
     done
 
     ask SL_DB_NAME \

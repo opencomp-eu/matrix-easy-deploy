@@ -111,10 +111,9 @@ def validate_config(config: dict) -> None:
     if not isinstance(matrix, dict):
         raise ValueError("Missing 'matrix' section in deploy.yaml")
 
-    for key in ("domain", "admin_username"):
-        value = matrix.get(key)
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"Missing or invalid matrix.{key} in deploy.yaml")
+    value = matrix.get("domain")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Missing or invalid matrix.domain in deploy.yaml")
 
     features = config.get("features", {})
     if features is not None and not isinstance(features, dict):
@@ -354,7 +353,6 @@ def build_env_vars(config: dict, derived: dict, state_secrets: dict) -> dict:
     env_vars = {
         "MATRIX_DOMAIN": config["matrix"]["domain"],
         "SERVER_NAME": derived["SERVER_NAME"],
-        "ADMIN_USERNAME": config["matrix"]["admin_username"],
     }
 
     modules = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
@@ -370,9 +368,7 @@ def build_env_vars(config: dict, derived: dict, state_secrets: dict) -> dict:
     env_vars["WA_DB_URI"] = (
         f"postgres://{wa_db_user}:{wa_db_password}@matrix_postgres/{wa_db_name}?sslmode=disable"
     )
-    env_vars["WA_ADMIN_USERNAME"] = str(
-        whatsapp.get("admin_username", config["matrix"].get("admin_username", "admin"))
-    )
+    env_vars["WA_ADMIN_USERNAME"] = str(whatsapp.get("admin_username", "admin"))
 
     sl_db_name = str(slack.get("db_name", "mautrix_slack"))
     sl_db_user = "mautrix_slack"
@@ -383,9 +379,7 @@ def build_env_vars(config: dict, derived: dict, state_secrets: dict) -> dict:
     env_vars["SL_DB_URI"] = (
         f"postgres://{sl_db_user}:{sl_db_password}@matrix_postgres/{sl_db_name}?sslmode=disable"
     )
-    env_vars["SL_ADMIN_USERNAME"] = str(
-        slack.get("admin_username", config["matrix"].get("admin_username", "admin"))
-    )
+    env_vars["SL_ADMIN_USERNAME"] = str(slack.get("admin_username", "admin"))
 
     env_vars.update(derived)
     env_vars.update(state_secrets)
@@ -505,7 +499,6 @@ def reconcile_module_state(ctx: ApplyContext, config: dict) -> None:
 
 
 def module_env_overrides(config: dict, config_key: str) -> dict:
-    matrix = config.get("matrix", {}) if isinstance(config.get("matrix", {}), dict) else {}
     modules = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
     module_cfg = modules.get(config_key, {}) if isinstance(modules.get(config_key, {}), dict) else {}
 
@@ -516,13 +509,13 @@ def module_env_overrides(config: dict, config_key: str) -> dict:
 
     if config_key == "whatsapp_bridge":
         return {
-            "MODULE_WA_ADMIN_USERNAME": str(module_cfg.get("admin_username", matrix.get("admin_username", "admin"))),
+            "MODULE_WA_ADMIN_USERNAME": str(module_cfg.get("admin_username", "admin")),
             "MODULE_WA_DB_NAME": str(module_cfg.get("db_name", "mautrix_whatsapp")),
         }
 
     if config_key == "slack_bridge":
         return {
-            "MODULE_SL_ADMIN_USERNAME": str(module_cfg.get("admin_username", matrix.get("admin_username", "admin"))),
+            "MODULE_SL_ADMIN_USERNAME": str(module_cfg.get("admin_username", "admin")),
             "MODULE_SL_DB_NAME": str(module_cfg.get("db_name", "mautrix_slack")),
         }
 

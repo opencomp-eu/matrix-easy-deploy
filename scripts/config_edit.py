@@ -28,7 +28,6 @@ def load_or_init(path: Path) -> dict:
             "matrix": {
                 "domain": "matrix.example.com",
                 "server_name": "example.com",
-                "admin_username": "admin",
             },
             "features": {
                 "registration_enabled": False,
@@ -128,7 +127,6 @@ def update_core_config(
     config: dict,
     matrix_domain: str,
     server_name: str,
-    admin_username: str,
     registration_enabled: bool,
     federation_enabled: bool,
     install_element: bool,
@@ -142,7 +140,6 @@ def update_core_config(
         config["matrix"] = matrix
     matrix["domain"] = matrix_domain
     matrix["server_name"] = server_name
-    matrix["admin_username"] = admin_username
 
     features = config.setdefault("features", {})
     if not isinstance(features, dict):
@@ -235,12 +232,9 @@ def emit_wizard_defaults(config: dict) -> str:
 
     matrix_domain = matrix.get("domain", "matrix.example.com")
     server_name = matrix.get("server_name", "example.com")
-    admin_username = matrix.get("admin_username", "admin")
-
     defaults = {
         "config_matrix_domain": matrix_domain,
         "config_server_name": server_name,
-        "config_admin_username": admin_username,
         "config_registration_default": shell_bool_default(
             to_bool(features.get("registration_enabled", False)), yes_default="y", no_default="n"
         ),
@@ -330,7 +324,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     parser.add_argument("--matrix-domain")
     parser.add_argument("--server-name")
-    parser.add_argument("--admin-username")
     parser.add_argument("--registration-enabled")
     parser.add_argument("--federation-enabled")
     parser.add_argument("--install-element")
@@ -395,7 +388,6 @@ def main(argv: list[str] | None = None) -> int:
         required = {
             "matrix_domain": args.matrix_domain,
             "server_name": args.server_name,
-            "admin_username": args.admin_username,
             "registration_enabled": args.registration_enabled,
             "federation_enabled": args.federation_enabled,
             "install_element": args.install_element,
@@ -411,7 +403,6 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             matrix_domain=args.matrix_domain,
             server_name=args.server_name,
-            admin_username=args.admin_username,
             registration_enabled=to_bool(args.registration_enabled),
             federation_enabled=to_bool(args.federation_enabled),
             install_element=to_bool(args.install_element),

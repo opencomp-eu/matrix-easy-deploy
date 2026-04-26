@@ -46,7 +46,6 @@ class ApplyTests(unittest.TestCase):
             "matrix": {
                 "domain": "matrix.example.com",
                 "server_name": "example.com",
-                "admin_username": "admin",
             },
             "features": {
                 "registration_enabled": False,

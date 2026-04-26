@@ -17,7 +17,6 @@ class WhatsAppSetupNonInteractiveTests(unittest.TestCase):
                         "matrix": {
                             "domain": "matrix.example.com",
                             "server_name": "example.com",
-                            "admin_username": "admin",
                         },
                         "modules": {
                             "whatsapp_bridge": {
@@ -38,7 +37,6 @@ class WhatsAppSetupNonInteractiveTests(unittest.TestCase):
                 "export MED_SOURCE_ONLY=1 MED_NON_INTERACTIVE=1; "
                 f"source '{script}'; "
                 f"DEPLOY_YAML='{deploy_yaml}'; "
-                "ADMIN_USERNAME='envadmin'; "
                 "WA_ADMIN_USERNAME='from_env'; "
                 "WA_DB_NAME='from_env_db'; "
                 "load_module_defaults; "
@@ -63,7 +61,6 @@ class WhatsAppSetupNonInteractiveTests(unittest.TestCase):
                         "matrix": {
                             "domain": "matrix.example.com",
                             "server_name": "example.com",
-                            "admin_username": "admin",
                         },
                         "modules": {
                             "whatsapp_bridge": {
@@ -82,7 +79,6 @@ class WhatsAppSetupNonInteractiveTests(unittest.TestCase):
                 "export MED_SOURCE_ONLY=1 MED_NON_INTERACTIVE=1; "
                 f"source '{script}'; "
                 f"DEPLOY_YAML='{deploy_yaml}'; "
-                "ADMIN_USERNAME='envadmin'; "
                 "WA_ADMIN_USERNAME='legacy_wa_admin'; "
                 "WA_DB_NAME='legacy_wa_db'; "
                 "load_module_defaults; "
@@ -94,7 +90,7 @@ class WhatsAppSetupNonInteractiveTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
             self.assertGreaterEqual(len(lines), 2)
-            self.assertEqual(lines[-2], "envadmin")
+            self.assertEqual(lines[-2], "admin")
             self.assertEqual(lines[-1], "mautrix_whatsapp")
 
     def test_resolve_database_credentials_reuses_persisted_secret(self):

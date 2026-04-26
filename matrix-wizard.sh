@@ -39,7 +39,6 @@ edit_deploy_config() {
     # Load existing config defaults
     local config_matrix_domain="matrix.example.com"
     local config_server_name="example.com"
-    local config_admin_username="admin"
     local config_registration_default="n"
     local config_federation_default="y"
     local config_element_default="y"
@@ -65,12 +64,6 @@ edit_deploy_config() {
     ask SERVER_NAME \
         "Matrix server name (used in user IDs: @user:SERVER_NAME)" \
         "${config_server_name:-$_suggested_server_name}"
-
-    ask ADMIN_USERNAME "Admin username" "$config_admin_username"
-    while [[ -z "$ADMIN_USERNAME" ]]; do
-        warn "Admin username is required."
-        ask ADMIN_USERNAME "Admin username" "$config_admin_username"
-    done
 
     echo
     echo -e "  ${BOLD}Optional features${RESET}"
@@ -130,8 +123,7 @@ edit_deploy_config() {
     echo -e "${BOLD}  Configuration summary${RESET}"
     echo -e "  ─────────────────────────────────────────────────────"
     echo -e "  Matrix domain   : ${CYAN}${MATRIX_DOMAIN}${RESET}"
-    echo -e "  Server name     : ${CYAN}${SERVER_NAME}${RESET}  (IDs look like @${ADMIN_USERNAME}:${SERVER_NAME})"
-    echo -e "  Admin user      : ${CYAN}${ADMIN_USERNAME}${RESET}"
+    echo -e "  Server name     : ${CYAN}${SERVER_NAME}${RESET}  (IDs look like @user:${SERVER_NAME})"
     echo -e "  Public reg.     : ${CYAN}${ENABLE_REGISTRATION}${RESET}"
     echo -e "  Federation      : ${CYAN}${ENABLE_FEDERATION_INPUT}${RESET}"
     echo -e "  SSO (OIDC)      : ${CYAN}disabled${RESET}"
@@ -172,7 +164,6 @@ edit_deploy_config() {
         --set-core \
         --matrix-domain "$MATRIX_DOMAIN" \
         --server-name "$SERVER_NAME" \
-        --admin-username "$ADMIN_USERNAME" \
         --registration-enabled "$ENABLE_REGISTRATION" \
         --federation-enabled "$ENABLE_FEDERATION" \
         --install-element "$INSTALL_ELEMENT" \
@@ -223,7 +214,7 @@ run_full_setup() {
     start_services
 
     echo
-    echo -e "${BOLD}  Step 5 of 5 — Creating admin user${RESET}"
+    echo -e "${BOLD}  Step 5 of 5 — Optional admin bootstrap${RESET}"
     setup_admin
 
     print_summary

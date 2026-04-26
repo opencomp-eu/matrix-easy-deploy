@@ -49,9 +49,6 @@ load_env() {
     module_load_env "$DEPLOY_ENV" "the main setup wizard"
 
     load_module_defaults
-
-    # Derive a sensible default admin username from .env if available
-    ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 }
 
 load_module_defaults() {
@@ -77,7 +74,7 @@ verify_server_name() {
 # =============================================================================
 gather_config() {
     if [[ "${MED_NON_INTERACTIVE:-0}" == "1" ]]; then
-        WA_ADMIN_USERNAME="${MODULE_WA_ADMIN_USERNAME:-${MODULE_WA_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}}"
+        WA_ADMIN_USERNAME="${MODULE_WA_ADMIN_USERNAME:-${MODULE_WA_ADMIN_USERNAME_DEFAULT:-admin}}"
         WA_DB_NAME="${MODULE_WA_DB_NAME:-${MODULE_WA_DB_NAME_DEFAULT:-mautrix_whatsapp}}"
         if [[ -z "$WA_ADMIN_USERNAME" || -z "$WA_DB_NAME" ]]; then
             die "WA_ADMIN_USERNAME and WA_DB_NAME are required in non-interactive mode."
@@ -96,10 +93,10 @@ gather_config() {
     # Admin user on the homeserver
     ask WA_ADMIN_USERNAME \
         "Matrix admin username for full bridge access (without @/server part)" \
-        "${MODULE_WA_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}"
+        "${MODULE_WA_ADMIN_USERNAME_DEFAULT:-admin}"
     while [[ -z "$WA_ADMIN_USERNAME" ]]; do
         warn "Admin username is required."
-        ask WA_ADMIN_USERNAME "Matrix admin username" "${ADMIN_USERNAME:-admin}"
+        ask WA_ADMIN_USERNAME "Matrix admin username" "admin"
     done
 
     # Database name for the bridge

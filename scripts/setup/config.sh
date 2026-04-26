@@ -22,30 +22,6 @@ gather_config() {
         "$_suggested_server_name"
 
     echo
-    echo -e "  ${BOLD}Admin account${RESET}"
-    ask ADMIN_USERNAME "Admin username" "admin"
-    while [[ -z "$ADMIN_USERNAME" ]]; do
-        warn "Admin username is required."
-        ask ADMIN_USERNAME "Admin username" "admin"
-    done
-
-    local pw_a pw_b
-    while true; do
-        ask_secret pw_a "Admin password"
-        if [[ ${#pw_a} -lt 10 ]]; then
-            warn "Password must be at least 10 characters. Try again."
-            continue
-        fi
-        ask_secret pw_b "Confirm admin password"
-        if [[ "$pw_a" != "$pw_b" ]]; then
-            warn "Passwords do not match. Try again."
-        else
-            break
-        fi
-    done
-    ADMIN_PASSWORD="$pw_a"
-
-    echo
     echo -e "  ${BOLD}Optional features${RESET}"
 
     ask_yn ENABLE_REGISTRATION_INPUT \
@@ -105,8 +81,7 @@ gather_config() {
     echo -e "${BOLD}  Configuration summary${RESET}"
     echo -e "  ─────────────────────────────────────────────────────"
     echo -e "  Matrix domain   : ${CYAN}${MATRIX_DOMAIN}${RESET}"
-    echo -e "  Server name     : ${CYAN}${SERVER_NAME}${RESET}  (IDs look like @${ADMIN_USERNAME}:${SERVER_NAME})"
-    echo -e "  Admin user      : ${CYAN}${ADMIN_USERNAME}${RESET}"
+    echo -e "  Server name     : ${CYAN}${SERVER_NAME}${RESET}  (IDs look like @user:${SERVER_NAME})"
     echo -e "  Public reg.     : ${CYAN}${ENABLE_REGISTRATION}${RESET}"
     echo -e "  Federation      : ${CYAN}${ENABLE_FEDERATION_INPUT}${RESET}"
     if [[ "$ENABLE_SSO" == "true" ]]; then

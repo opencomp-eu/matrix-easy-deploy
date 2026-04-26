@@ -44,6 +44,10 @@ class SetupRuntimeTests(unittest.TestCase):
                 info() { :; }
                 warn() { :; }
                 success() { :; }
+                ask_yn() {
+                    local _var="$1"
+                    printf -v "$_var" '%s' "y"
+                }
 
                 ask_secret() {
                     echo "ask_secret should not be called when ADMIN_PASSWORD is set" >&2
@@ -109,6 +113,14 @@ class SetupRuntimeTests(unittest.TestCase):
                 info() { :; }
                 warn() { :; }
                 success() { :; }
+                ask_yn() {
+                    local _var="$1"
+                    printf -v "$_var" '%s' "y"
+                }
+                ask() {
+                    local _var="$1"
+                    printf -v "$_var" '%s' "admin"
+                }
 
                 ASK_COUNT=0
                 ask_secret() {
@@ -134,7 +146,6 @@ class SetupRuntimeTests(unittest.TestCase):
                 SCRIPT_DIR="$TMP_DIR"
                 MATRIX_DOMAIN="matrix.example.com"
                 REGISTRATION_SHARED_SECRET="reg-secret"
-                ADMIN_USERNAME="admin"
                 SERVER_NAME="example.com"
 
                 setup_admin

@@ -21,7 +21,8 @@ EOF
     echo -e "  ${BOLD}TURN server${RESET}        ${MATRIX_DOMAIN}:3478 (UDP/TCP) and :5349 (TLS)"
     echo -e "  ${BOLD}Synapse admin${RESET}      https://${MATRIX_DOMAIN}/_synapse/admin/v1/"
     echo
-    echo -e "  ${BOLD}Your admin ID${RESET}      @${ADMIN_USERNAME}:${SERVER_NAME}"
+    echo -e "  ${BOLD}Create admin later${RESET}  bash matrix-wizard.sh --create-admin"
+    echo -e "  ${BOLD}Manual alternative${RESET}  bash scripts/create-admin.sh https://${MATRIX_DOMAIN} <registration_shared_secret> <admin_username> <password>"
     echo
     echo -e "  ${BOLD}Useful commands${RESET}"
     echo -e "    See logs (Synapse):     ${CYAN}docker logs -f matrix_synapse${RESET}"

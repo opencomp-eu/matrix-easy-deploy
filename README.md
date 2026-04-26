@@ -144,7 +144,16 @@ bash apply.sh
 bash start.sh
 # or
 bash apply.sh --reconcile-runtime
+
+# 4) Create the initial admin after Synapse is healthy
+bash scripts/create-admin.sh \
+  "https://<your-matrix-domain>" \
+  "<registration_shared_secret>" \
+  "<admin_username>" \
+  "<admin_password>"
 ```
+
+`deploy.yaml` no longer stores the initial Matrix admin username. Bring the stack up first, then create the first admin account as a separate bootstrap step.
 
 By default, `bash apply.sh` also attempts non-interactive bootstrap for enabled modules when required generated files are missing.
 To skip bootstrap:
@@ -160,6 +169,8 @@ bash matrix-wizard.sh
 ```
 
 The wizard is a convenience layer over the same YAML-first model. It edits `deploy.yaml`, runs apply, and offers module/user/runtime shortcuts.
+
+During `--full-setup`, the wizard can still create the initial admin for you after Synapse is healthy, but that username is prompted at runtime and is not stored in top-level desired state.
 
 For first-time setup without the menu:
 
@@ -209,7 +220,7 @@ set +o allexport
 bash scripts/create-admin.sh \
   "https://${MATRIX_DOMAIN}" \
   "${REGISTRATION_SHARED_SECRET}" \
-  "${ADMIN_USERNAME}" \
+  "admin" \
   'replace-with-a-long-random-password'
 ```
 
@@ -217,6 +228,7 @@ Notes:
 
 - `bash apply.sh --reconcile-runtime` is also valid if you want apply to run stop/start for you.
 - `scripts/create-admin.sh` is safe to re-run; if the user already exists it will warn and skip.
+- The initial admin username is not stored in top-level `deploy.yaml` or generated `.env`; choose it when you run `create-admin.sh` or when the wizard prompts during runtime bootstrap.
 - Keep the admin password out of `deploy.yaml` and `.env`. Pass it at execution time or inject it through your automation/secret manager.
 - Enabled modules are bootstrapped non-interactively during `bash apply.sh` when their required generated config is missing.
 - Bridge/module enable-disable transitions are reconciled by `bash apply.sh`; use `--reconcile-runtime` to apply those changes to running containers immediately.
@@ -362,21 +374,22 @@ The wizard will ask you:
 
 1. **Your Matrix domain** — something like `matrix.example.com`
 2. **Your server name** — appears in Matrix IDs like `@you:example.com` (defaults to the base domain)
-3. **Admin username and password**
-4. Whether to allow public registration
-5. Whether to enable federation
-6. Whether to enable SSO (OIDC/OAuth2)
-7. If SSO is enabled: one or more providers (loop: add provider, then optionally add another)
-8. For each provider: name, issuer URL, client ID, client secret
-9. For each provider: whether unknown users can auto-register via that provider
-10. For each provider: optional OIDC claim allowlist (org/group/domain control)
-11. Whether to install Element Web, and on which domain
-12. **Your LiveKit domain** — something like `livekit.example.com` (defaults to `livekit.<basedomain>`)
+3. Whether to allow public registration
+4. Whether to enable federation
+5. Whether to enable SSO (OIDC/OAuth2)
+6. If SSO is enabled: one or more providers (loop: add provider, then optionally add another)
+7. For each provider: name, issuer URL, client ID, client secret
+8. For each provider: whether unknown users can auto-register via that provider
+9. For each provider: optional OIDC claim allowlist (org/group/domain control)
+10. Whether to install Element Web, and on which domain
+11. **Your LiveKit domain** — something like `livekit.example.com` (defaults to `livekit.<basedomain>`)
+12. After services are healthy, whether to create the initial admin now, plus the username/password if you do
 
 ### Configuration model
 
 - `deploy.yaml` is the operator-owned source of truth.
 - `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered templates, module state metadata).
+- The initial Matrix admin account is not part of top-level desired state; create it later with `bash scripts/create-admin.sh` or via `bash matrix-wizard.sh --create-admin`.
 - Re-running `bash apply.sh` is idempotent by default: existing generated secrets are re-used.
 - Enabled modules converge deterministically: if required generated files are missing, setup runs non-interactively.
 - Bridge appservice registrations converge deterministically in Synapse:
@@ -721,7 +734,7 @@ bash scripts/hookshot-check.sh
 bash matrix-wizard.sh --module whatsapp-bridge
 ```
 
-The wizard will ask for your Matrix admin username and relay mode preference, then handle everything: database creation, config generation, appservice registration with Synapse, and starting the container.
+The wizard will ask for the Matrix account that should have bridge-admin permissions, then handle everything: database creation, config generation, appservice registration with Synapse, and starting the container.
 
 **After setup:**
 1. Open a DM with `@whatsappbot:<your-server>` in Element
@@ -757,7 +770,7 @@ docker restart mautrix-whatsapp
 bash matrix-wizard.sh --module slack-bridge
 ```
 
-The wizard will ask for your Matrix admin username, then handle everything: database creation, config generation, appservice registration with Synapse, and starting the container.
+The wizard will ask for the Matrix account that should have bridge-admin permissions, then handle everything: database creation, config generation, appservice registration with Synapse, and starting the container.
 
 **After setup:**
 1. Open a DM with `@slackbot:<your-server>` in Element
@@ -818,12 +831,12 @@ On first boot, Synapse runs database migrations. If your VPS is modest, give it 
 
 **The admin user wasn't created**
 
-If Synapse wasn't responding in time, the wizard prints the manual command:
+If Synapse wasn't responding in time, or if you chose to skip admin bootstrap during setup, use the manual command:
 ```bash
 bash scripts/create-admin.sh \
     https://matrix.example.com \
     <your_registration_shared_secret> \
-    admin \
+  <admin_username> \
     <your_password>
 ```
 The `REGISTRATION_SHARED_SECRET` is in your `.env` file.

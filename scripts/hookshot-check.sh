@@ -47,11 +47,12 @@ for var in MATRIX_DOMAIN SERVER_NAME HOOKSHOT_DOMAIN HOOKSHOT_AS_TOKEN HOOKSHOT_
         check_fail "${var} is missing from .env"
     fi
 done
-
+    check_warn "Could not obtain admin token — skipping ping test"
+    check_warn "Export ADMIN_USERNAME and ADMIN_PASSWORD explicitly if you want the authenticated ping check."
 SHARED_REDIS_HOST="${SHARED_REDIS_HOST:-matrix_redis}"
 SHARED_REDIS_PORT="${SHARED_REDIS_PORT:-6379}"
 SHARED_REDIS_URL="${SHARED_REDIS_URL:-redis://${SHARED_REDIS_HOST}:${SHARED_REDIS_PORT}}"
-HOOKSHOT_REDIS_DB="${HOOKSHOT_REDIS_DB:-1}"
+    echo  "      -d '{\"type\":\"m.login.password\",\"user\":\"YOUR_ADMIN_USERNAME\",\"password\":\"YOUR_PW\"}' | python3 -c \"import sys,json; print(json.load(sys.stdin)['access_token'])\")"
 EXPECTED_HOOKSHOT_REDIS_URI="${HOOKSHOT_REDIS_URI:-${SHARED_REDIS_URL}/${HOOKSHOT_REDIS_DB}}"
 
 # ---------------------------------------------------------------------------

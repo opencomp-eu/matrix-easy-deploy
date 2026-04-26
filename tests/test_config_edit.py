@@ -21,7 +21,6 @@ class ConfigEditTests(unittest.TestCase):
             "matrix": {
                 "domain": "matrix.example.com",
                 "server_name": "example.com",
-                "admin_username": "admin",
             },
             "modules": {
                 "hookshot": {"enabled": False, "domain": "hookshot.example.com"},
@@ -59,7 +58,6 @@ class ConfigEditTests(unittest.TestCase):
             "matrix": {
                 "domain": "matrix.example.com",
                 "server_name": "example.com",
-                "admin_username": "admin",
             },
             "features": {
                 "registration_enabled": False,
@@ -82,8 +80,6 @@ class ConfigEditTests(unittest.TestCase):
             "matrix.new.example.com",
             "--server-name",
             "new.example.com",
-            "--admin-username",
-            "root",
             "--registration-enabled",
             "true",
             "--federation-enabled",
@@ -102,7 +98,6 @@ class ConfigEditTests(unittest.TestCase):
         updated = yaml.safe_load(self.deploy_yaml.read_text())
         self.assertEqual(updated["matrix"]["domain"], "matrix.new.example.com")
         self.assertEqual(updated["matrix"]["server_name"], "new.example.com")
-        self.assertEqual(updated["matrix"]["admin_username"], "root")
         self.assertTrue(updated["features"]["registration_enabled"])
         self.assertFalse(updated["features"]["federation_enabled"])
         self.assertFalse(updated["features"]["element"]["enabled"])
@@ -119,7 +114,6 @@ class ConfigEditTests(unittest.TestCase):
                         "matrix": {
                             "domain": "matrix.example.com",
                             "server_name": "example.com",
-                            "admin_username": "admin",
                         },
                         "modules": {
                             "whatsapp_bridge": {
@@ -160,7 +154,6 @@ class ConfigEditTests(unittest.TestCase):
             "matrix": {
                 "domain": "matrix.example.com",
                 "server_name": "example.com",
-                "admin_username": "admin",
             },
             "modules": {
                 "whatsapp_bridge": {
@@ -184,7 +177,6 @@ class ConfigEditTests(unittest.TestCase):
             "matrix": {
                 "domain": "matrix.dev.local",
                 "server_name": "dev.local",
-                "admin_username": "operator",
             },
             "features": {
                 "registration_enabled": True,
@@ -200,7 +192,6 @@ class ConfigEditTests(unittest.TestCase):
 
         self.assertIn("config_matrix_domain=matrix.dev.local", defaults)
         self.assertIn("config_server_name=dev.local", defaults)
-        self.assertIn("config_admin_username=operator", defaults)
         self.assertIn("config_registration_default=y", defaults)
         self.assertIn("config_federation_default=n", defaults)
         self.assertIn("config_element_default=n", defaults)
@@ -213,7 +204,6 @@ class ConfigEditTests(unittest.TestCase):
                     "matrix": {
                         "domain": "matrix.example.com",
                         "server_name": "example.com",
-                        "admin_username": "admin",
                     },
                     "backup": {
                         "enabled": False,

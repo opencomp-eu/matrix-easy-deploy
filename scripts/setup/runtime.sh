@@ -98,7 +98,7 @@ setup_admin() {
             echo -e "  ${CYAN}bash scripts/create-admin.sh \\\"
             echo -e "      https://${MATRIX_DOMAIN} \\\"
             echo -e "      <registration_shared_secret> \\\"
-            echo -e "      ${ADMIN_USERNAME} \\\"
+            echo -e "      <admin_username> \\\" 
             echo -e "      <your_password>${RESET}"
             echo
             return 0
@@ -110,13 +110,37 @@ setup_admin() {
     success "Synapse is responding."
 
     echo
+    if [[ -z "${ADMIN_USERNAME:-}" || -z "${ADMIN_PASSWORD:-}" ]]; then
+        local _create_now="y"
+        ask_yn _create_now "Create the initial admin user now?" "y"
+        if [[ "$_create_now" != "y" ]]; then
+            info "Skipping admin creation. You can run it later with:"
+            echo -e "  ${CYAN}bash scripts/create-admin.sh \\\" 
+            echo -e "      https://${MATRIX_DOMAIN} \\\" 
+            echo -e "      ${REGISTRATION_SHARED_SECRET} \\\" 
+            echo -e "      <admin_username> \\\" 
+            echo -e "      <your_password>${RESET}"
+            echo
+            return 0
+        fi
+    fi
+
+    local _admin_username="${ADMIN_USERNAME:-}"
+    if [[ -z "$_admin_username" ]]; then
+        ask _admin_username "Admin username" "admin"
+        while [[ -z "$_admin_username" ]]; do
+            warn "Admin username is required."
+            ask _admin_username "Admin username" "admin"
+        done
+    fi
+
     local _admin_password=""
     if [[ -n "${ADMIN_PASSWORD:-}" ]]; then
         info "Using ADMIN_PASSWORD from environment for non-interactive admin bootstrap."
         _admin_password="${ADMIN_PASSWORD}"
     else
         local _pw_confirm=""
-        info "Set a password for '@${ADMIN_USERNAME}:${SERVER_NAME}'"
+        info "Set a password for '@${_admin_username}:${SERVER_NAME}'"
         while true; do
             ask_secret _admin_password "Admin password"
             if [[ ${#_admin_password} -lt 10 ]]; then
@@ -134,12 +158,13 @@ setup_admin() {
         unset _pw_confirm
     fi
 
-    info "Creating admin user '@${ADMIN_USERNAME}:${SERVER_NAME}'…"
+    info "Creating admin user '@${_admin_username}:${SERVER_NAME}'…"
     bash "${SCRIPT_DIR}/scripts/create-admin.sh" \
         "https://${MATRIX_DOMAIN}" \
         "${REGISTRATION_SHARED_SECRET}" \
-        "${ADMIN_USERNAME}" \
+        "${_admin_username}" \
         "${_admin_password}"
 
+    unset _admin_username
     unset _admin_password
 }
