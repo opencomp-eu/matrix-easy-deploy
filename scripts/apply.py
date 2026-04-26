@@ -15,6 +15,7 @@ import yaml
 try:
     from scripts import synapse_appservice
     from scripts import hookshot_caddy
+    from scripts import backup_schedule
 except ModuleNotFoundError:
     # When run as scripts/apply.py, Python may not include project root in sys.path.
     project_root = Path(__file__).resolve().parent.parent
@@ -22,6 +23,7 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(project_root))
     from scripts import synapse_appservice
     from scripts import hookshot_caddy
+    from scripts import backup_schedule
 
 
 DEFAULT_SECRET_KEYS = [
@@ -122,6 +124,10 @@ def validate_config(config: dict) -> None:
     if modules is not None and not isinstance(modules, dict):
         raise ValueError("modules must be an object when provided")
 
+    backup = config.get("backup", {})
+    if backup is not None and not isinstance(backup, dict):
+        raise ValueError("backup must be an object when provided")
+
     if isinstance(features, dict):
         for key in ("registration_enabled", "federation_enabled"):
             if key in features and not isinstance(features[key], bool):
@@ -141,6 +147,58 @@ def validate_config(config: dict) -> None:
                 raise ValueError(f"modules.{key} must be an object")
             if "enabled" in value and not isinstance(value.get("enabled"), bool):
                 raise ValueError(f"modules.{key}.enabled must be true/false")
+
+    if isinstance(backup, dict):
+        enabled = backup.get("enabled", False)
+        if "enabled" in backup and not isinstance(enabled, bool):
+            raise ValueError("backup.enabled must be true/false")
+
+        schedule = backup.get("schedule", {}) if isinstance(backup.get("schedule", {}), dict) else backup.get("schedule")
+        if schedule is not None and not isinstance(schedule, dict):
+            raise ValueError("backup.schedule must be an object when provided")
+
+        if isinstance(schedule, dict):
+            schedule_enabled = schedule.get("enabled", False)
+            if "enabled" in schedule and not isinstance(schedule_enabled, bool):
+                raise ValueError("backup.schedule.enabled must be true/false")
+
+            if schedule_enabled and not enabled:
+                raise ValueError("backup.schedule.enabled requires backup.enabled=true")
+
+            if schedule_enabled:
+                calendar = schedule.get("calendar")
+                if not isinstance(calendar, str) or not calendar.strip():
+                    raise ValueError("backup.schedule.calendar must be a non-empty string when backup.schedule.enabled is true")
+
+            if "persistent" in schedule and not isinstance(schedule.get("persistent"), bool):
+                raise ValueError("backup.schedule.persistent must be true/false")
+
+        retention = backup.get("retention", {}) if isinstance(backup.get("retention", {}), dict) else backup.get("retention")
+        if retention is not None and not isinstance(retention, dict):
+            raise ValueError("backup.retention must be an object when provided")
+
+        if isinstance(retention, dict):
+            for key in ("keep_daily", "keep_weekly", "keep_monthly", "keep_yearly"):
+                if key not in retention:
+                    continue
+                value = retention.get(key)
+                if not isinstance(value, int) or value < 0:
+                    raise ValueError(f"backup.retention.{key} must be a non-negative integer")
+
+        if enabled:
+            repository = backup.get("repository")
+            if not isinstance(repository, dict):
+                raise ValueError("backup.repository must be an object when backup.enabled is true")
+
+            repo_type = repository.get("type")
+            if repo_type != "local":
+                raise ValueError("backup.repository.type must be 'local' in phase 1")
+
+            repo_path = repository.get("path")
+            if not isinstance(repo_path, str) or not repo_path.strip():
+                raise ValueError("backup.repository.path must be a non-empty string when backup.enabled is true")
+            if not repo_path.startswith("/"):
+                raise ValueError("backup.repository.path must be an absolute path")
 
 
 def detect_public_ip() -> str:
@@ -623,6 +681,9 @@ def apply_configuration(
         reconcile_module_bootstrap(ctx, config)
     reconcile_bridge_appservices(ctx, config)
     reconcile_hookshot_caddy(ctx, config, derived)
+    schedule_status = backup_schedule.reconcile(ctx.project_root, config)
+    if schedule_status:
+        print(schedule_status)
 
 
 def run_runtime_reconcile(ctx: ApplyContext) -> None:

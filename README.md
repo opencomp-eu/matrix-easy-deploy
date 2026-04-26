@@ -262,6 +262,85 @@ bash uninstall.sh --yes
 
 This cleanup removes generated runtime files like `.env`, `.matrix-easy-deploy/`, rendered configs, and module data directories (`modules/core/synapse_data`, `modules/hookshot/hookshot`, `modules/whatsapp-bridge/whatsapp`, `modules/slack-bridge/slack`).
 
+### Backups and restore (borgmatic, local repository)
+
+Backups are configured in `deploy.yaml` under `backup`:
+
+```yaml
+backup:
+  enabled: true
+  repository:
+    type: local
+    path: /var/backups/med-kit
+  schedule:
+    enabled: false
+    calendar: '*-*-* 03:00:00'
+    persistent: true
+  retention:
+    keep_daily: 7
+    keep_weekly: 4
+    keep_monthly: 6
+    keep_yearly: 0
+```
+
+The `keep_*` values are retention settings only. They tell Borg/Borgmatic how many archives to keep when `bash backup.sh` runs; they do not schedule automatic backups on their own.
+
+If `backup.schedule.enabled` is true, `bash apply.sh` installs or updates a systemd timer that runs `bash backup.sh` automatically. `backup.schedule.calendar` is passed directly to systemd `OnCalendar`, and `backup.schedule.persistent` controls whether missed runs should fire after reboot.
+
+Install prerequisites on the host:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y borgbackup borgmatic
+```
+
+Create a backup:
+
+```bash
+bash backup.sh
+```
+
+If scheduling is disabled, backups only run when you call `bash backup.sh` yourself. Enabling `backup.schedule` lets the repo manage a systemd timer for you.
+
+To enable the built-in systemd timer, set `backup.schedule.enabled: true` and run:
+
+```bash
+bash apply.sh
+```
+
+Useful status commands:
+
+```bash
+systemctl status matrix-easy-deploy-backup.timer
+systemctl list-timers matrix-easy-deploy-backup.timer
+journalctl -u matrix-easy-deploy-backup.service
+```
+
+List available backups:
+
+```bash
+bash backup.sh --list
+```
+
+That command prints the archive names you can paste directly into restore.
+
+Restore from an archive:
+
+```bash
+bash restore.sh --archive <archive-name>
+```
+
+You can also pass a unique archive ID prefix from Borg's bracketed ID if you prefer, for example `bash restore.sh --archive 74125a60c0a4a76a`.
+
+Behavior notes:
+
+- `backup.sh` is a live backup: it leaves services running, takes a logical `pg_dump -Fc` of the Synapse PostgreSQL database, copies persisted project/module data, exports Caddy state volumes when present, and then runs borgmatic create/prune/check.
+- `restore.sh` is destructive for runtime state: it stops services, extracts the selected archive, restores persisted state, re-runs `bash apply.sh`, restores the filesystem payload, recreates the Synapse database from the logical dump, re-runs `bash apply.sh`, and starts services unless you pass `--keep-stopped`.
+- Generated runtime files such as `.env` and rendered service configs are not treated as canonical backup inputs; restore rebuilds them from `deploy.yaml` and `.matrix-easy-deploy` state.
+- Existing logged-in sessions can keep showing rooms or messages that no longer exist on the restored server. Logging out and back in usually resolves that stale client state.
+- For encrypted history on a new login, users typically need another verified session or their recovery key/secret storage. Registration tokens are unrelated to restoring message access after a rollback.
+- This phase supports only local repository targets (`backup.repository.type: local`).
+
 ### Run with Docker (single command)
 
 If you prefer not to install local dependencies, run the wizard from the published container image:

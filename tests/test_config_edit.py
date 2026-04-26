@@ -206,6 +206,118 @@ class ConfigEditTests(unittest.TestCase):
         self.assertIn("config_element_default=n", defaults)
         self.assertIn("config_calls_default=y", defaults)
 
+    def test_set_backup_config_updates_backup_fields(self):
+        self.deploy_yaml.write_text(
+            yaml.safe_dump(
+                {
+                    "matrix": {
+                        "domain": "matrix.example.com",
+                        "server_name": "example.com",
+                        "admin_username": "admin",
+                    },
+                    "backup": {
+                        "enabled": False,
+                        "repository": {"type": "local", "path": "/var/backups/med-kit"},
+                        "schedule": {
+                            "enabled": False,
+                            "calendar": "*-*-* 03:00:00",
+                            "persistent": True,
+                        },
+                        "retention": {
+                            "keep_daily": 7,
+                            "keep_weekly": 4,
+                            "keep_monthly": 6,
+                            "keep_yearly": 0,
+                        },
+                    },
+                },
+                sort_keys=False,
+            )
+        )
+
+        rc = config_edit.main(
+            [
+                "--deploy-yaml",
+                str(self.deploy_yaml),
+                "--set-backup-config",
+                "--backup-enabled",
+                "true",
+                "--backup-repository-type",
+                "local",
+                "--backup-repository-path",
+                "/srv/med-kit-backups",
+                "--backup-schedule-enabled",
+                "true",
+                "--backup-schedule-calendar",
+                "daily",
+                "--backup-schedule-persistent",
+                "false",
+                "--backup-keep-daily",
+                "14",
+                "--backup-keep-weekly",
+                "8",
+                "--backup-keep-monthly",
+                "12",
+                "--backup-keep-yearly",
+                "2",
+            ]
+        )
+
+        self.assertEqual(rc, 0)
+        updated = yaml.safe_load(self.deploy_yaml.read_text())
+        backup = updated["backup"]
+        self.assertTrue(backup["enabled"])
+        self.assertEqual(backup["repository"]["type"], "local")
+        self.assertEqual(backup["repository"]["path"], "/srv/med-kit-backups")
+        self.assertTrue(backup["schedule"]["enabled"])
+        self.assertEqual(backup["schedule"]["calendar"], "daily")
+        self.assertFalse(backup["schedule"]["persistent"])
+        self.assertEqual(backup["retention"]["keep_daily"], 14)
+        self.assertEqual(backup["retention"]["keep_weekly"], 8)
+        self.assertEqual(backup["retention"]["keep_monthly"], 12)
+        self.assertEqual(backup["retention"]["keep_yearly"], 2)
+
+    def test_print_backup_defaults_uses_existing_values(self):
+        self.deploy_yaml.write_text(
+            yaml.safe_dump(
+                {
+                    "matrix": {
+                        "domain": "matrix.example.com",
+                        "server_name": "example.com",
+                        "admin_username": "admin",
+                    },
+                    "backup": {
+                        "enabled": True,
+                        "repository": {"type": "local", "path": "/srv/med-kit-backups"},
+                        "schedule": {
+                            "enabled": True,
+                            "calendar": "daily",
+                            "persistent": False,
+                        },
+                        "retention": {
+                            "keep_daily": 10,
+                            "keep_weekly": 5,
+                            "keep_monthly": 9,
+                            "keep_yearly": 1,
+                        },
+                    },
+                },
+                sort_keys=False,
+            )
+        )
+
+        defaults = config_edit.emit_backup_defaults(config_edit.load_or_init(self.deploy_yaml))
+        self.assertIn("backup_enabled=true", defaults)
+        self.assertIn("backup_repository_type=local", defaults)
+        self.assertIn("backup_repository_path=/srv/med-kit-backups", defaults)
+        self.assertIn("backup_schedule_enabled=true", defaults)
+        self.assertIn("backup_schedule_calendar=daily", defaults)
+        self.assertIn("backup_schedule_persistent=false", defaults)
+        self.assertIn("backup_keep_daily=10", defaults)
+        self.assertIn("backup_keep_weekly=5", defaults)
+        self.assertIn("backup_keep_monthly=9", defaults)
+        self.assertIn("backup_keep_yearly=1", defaults)
+
 
 if __name__ == "__main__":
     unittest.main()

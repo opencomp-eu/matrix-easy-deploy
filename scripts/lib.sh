@@ -195,3 +195,46 @@ load_runtime_desired_state() {
         [[ -n "$state_exports" ]] && eval "$state_exports"
     fi
 }
+
+# ---------------------------------------------------------------------------
+# Synapse data directory permissions
+# Ensures modules/core/synapse_data is writable by Synapse (UID 991).
+# ---------------------------------------------------------------------------
+ensure_synapse_data_permissions() {
+    local project_root="$1"
+    local synapse_data_dir="${project_root}/modules/core/synapse_data"
+
+    mkdir -p "$synapse_data_dir"
+
+    # Try host-side ownership/permissions first.
+    local chown_ok="false"
+    if chown -R 991:991 "$synapse_data_dir" 2>/dev/null; then
+        chown_ok="true"
+    fi
+    find "$synapse_data_dir" -type d -exec chmod 750 {} + 2>/dev/null || true
+    find "$synapse_data_dir" -type f -exec chmod 640 {} + 2>/dev/null || true
+
+    # If host-side chown failed, try normalizing via Docker (works even when
+    # host user cannot directly chown numeric IDs).
+    if [[ "$chown_ok" != "true" ]] && command -v docker &>/dev/null; then
+        info "Normalizing Synapse data permissions via helper container…"
+        if docker run --rm \
+            -v "${synapse_data_dir}:/data" \
+            alpine:3 \
+            sh -c "chown -R 991:991 /data && find /data -type d -exec chmod 750 {} + && find /data -type f -exec chmod 640 {} +" \
+            >/dev/null 2>&1; then
+            chown_ok="true"
+        else
+            warn "Could not normalize Synapse data ownership via helper container."
+        fi
+    fi
+
+    # Final fallback to keep deployment usable if ownership normalization fails.
+    local write_test="${synapse_data_dir}/.med-write-test"
+    if ! touch "$write_test" 2>/dev/null; then
+        warn "Synapse data directory is still not writable. Applying permissive fallback permissions."
+        chmod -R a+rwX "$synapse_data_dir" 2>/dev/null || true
+    else
+        rm -f "$write_test"
+    fi
+}

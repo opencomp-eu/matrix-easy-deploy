@@ -439,6 +439,95 @@ run_logs_wizard() {
     pause_screen
 }
 
+run_backup_wizard() {
+    echo
+    bash "${SCRIPT_DIR}/backup.sh"
+}
+
+run_backup_config_wizard() {
+    echo
+    echo -e "${BOLD}  Backup configuration${RESET}"
+    echo -e "  ─────────────────────────────────────────────────────"
+
+    local backup_enabled="false"
+    local backup_repository_path="/var/backups/med-kit"
+    local backup_schedule_enabled="false"
+    local backup_schedule_calendar="*-*-* 03:00:00"
+    local backup_schedule_persistent="true"
+    local backup_keep_daily="7"
+    local backup_keep_weekly="4"
+    local backup_keep_monthly="6"
+    local backup_keep_yearly="0"
+
+    if [[ -f "$DEPLOY_YAML" ]]; then
+        eval "$(python3 "${SCRIPT_DIR}/scripts/config_edit.py" --deploy-yaml "$DEPLOY_YAML" --print-backup-defaults)"
+    fi
+
+    ask_yn _backup_enabled "Enable backups?" "$( [[ "$backup_enabled" == "true" ]] && echo y || echo n )"
+    backup_enabled="$([ "$_backup_enabled" == "y" ] && echo "true" || echo "false")"
+
+    ask backup_repository_path "Backup repository path" "$backup_repository_path"
+
+    ask_yn _schedule_enabled "Enable automatic backup timer?" "$( [[ "$backup_schedule_enabled" == "true" ]] && echo y || echo n )"
+    backup_schedule_enabled="$([ "$_schedule_enabled" == "y" ] && echo "true" || echo "false")"
+
+    if [[ "$backup_schedule_enabled" == "true" ]]; then
+        ask backup_schedule_calendar "systemd OnCalendar schedule" "$backup_schedule_calendar"
+        while [[ -z "$backup_schedule_calendar" ]]; do
+            warn "A schedule is required when automatic backups are enabled."
+            ask backup_schedule_calendar "systemd OnCalendar schedule" "$backup_schedule_calendar"
+        done
+
+        ask_yn _schedule_persistent "Run missed backups after reboot?" "$( [[ "$backup_schedule_persistent" == "true" ]] && echo y || echo n )"
+        backup_schedule_persistent="$([ "$_schedule_persistent" == "y" ] && echo "true" || echo "false")"
+    fi
+
+    ask backup_keep_daily "Keep daily backups" "$backup_keep_daily"
+    ask backup_keep_weekly "Keep weekly backups" "$backup_keep_weekly"
+    ask backup_keep_monthly "Keep monthly backups" "$backup_keep_monthly"
+    ask backup_keep_yearly "Keep yearly backups" "$backup_keep_yearly"
+
+    python3 "${SCRIPT_DIR}/scripts/config_edit.py" \
+        --deploy-yaml "$DEPLOY_YAML" \
+        --set-backup-config \
+        --backup-enabled "$backup_enabled" \
+        --backup-repository-type local \
+        --backup-repository-path "$backup_repository_path" \
+        --backup-schedule-enabled "$backup_schedule_enabled" \
+        --backup-schedule-calendar "$backup_schedule_calendar" \
+        --backup-schedule-persistent "$backup_schedule_persistent" \
+        --backup-keep-daily "$backup_keep_daily" \
+        --backup-keep-weekly "$backup_keep_weekly" \
+        --backup-keep-monthly "$backup_keep_monthly" \
+        --backup-keep-yearly "$backup_keep_yearly"
+
+    info "Applying updated backup configuration..."
+    bash "${SCRIPT_DIR}/apply.sh"
+}
+
+run_restore_wizard() {
+    echo
+    info "Available backups:"
+    if ! bash "${SCRIPT_DIR}/backup.sh" --list; then
+        warn "Unable to list backups. Check backup settings in deploy.yaml."
+        return
+    fi
+
+    local archive_name
+    ask archive_name "Archive name to restore" ""
+    if [[ -z "$archive_name" ]]; then
+        warn "Archive name is required."
+        return
+    fi
+
+    ask_yn _keep_stopped "Keep services stopped after restore?" "n"
+    if [[ "$_keep_stopped" == "y" ]]; then
+        bash "${SCRIPT_DIR}/restore.sh" --archive "$archive_name" --keep-stopped
+    else
+        bash "${SCRIPT_DIR}/restore.sh" --archive "$archive_name"
+    fi
+}
+
 print_wizard_menu() {
     print_banner
     echo -e "${BOLD}  Wizard actions${RESET}"
@@ -453,6 +542,10 @@ print_wizard_menu() {
     echo -e "  ${CYAN}8)${RESET} Show running containers"
     echo -e "  ${CYAN}9)${RESET} Tail service logs"
     echo -e "  ${CYAN}10)${RESET} Uninstall/reset stack"
+    echo -e "  ${CYAN}11)${RESET} Create backup"
+    echo -e "  ${CYAN}12)${RESET} List backups"
+    echo -e "  ${CYAN}13)${RESET} Restore backup"
+    echo -e "  ${CYAN}14)${RESET} Configure backup settings"
     echo -e "  ${CYAN}q)${RESET} Exit"
     echo
 }
@@ -501,6 +594,22 @@ run_wizard_hub() {
                 ;;
             10)
                 bash "${SCRIPT_DIR}/uninstall.sh"
+                pause_screen
+                ;;
+            11)
+                run_backup_wizard
+                pause_screen
+                ;;
+            12)
+                bash "${SCRIPT_DIR}/backup.sh" --list
+                pause_screen
+                ;;
+            13)
+                run_restore_wizard
+                pause_screen
+                ;;
+            14)
+                run_backup_config_wizard
                 pause_screen
                 ;;
             q)
