@@ -127,20 +127,40 @@ cd matrix-easy-deploy-kit
 
 The primary operating model is:
 
-1. Edit `deploy.yaml`.
-2. Run `bash apply.sh`.
-3. Optionally run `bash apply.sh --reconcile-runtime` to apply changes to running containers immediately.
+1. Ensure host dependencies are installed.
+2. Edit `deploy.yaml`.
+3. Run `bash apply.sh`.
+4. Optionally run `bash apply.sh --reconcile-runtime` to apply changes to running containers immediately.
+
+For first-time setup on a fresh host, install dependencies non-interactively with:
+
+```bash
+bash ensure_dependencies.sh
+```
+
+Supported package managers are detected in this order: `apt-get`, `dnf`, then `pacman`.
+If you want that to happen automatically before apply, use:
+
+```bash
+bash apply.sh --ensure-dependencies
+```
 
 Minimal flow:
 
 ```bash
-# 1) Edit desired state
+# 1) Ensure host dependencies are present
+bash ensure_dependencies.sh
+
+# 2) Edit desired state
 $EDITOR deploy.yaml
 
-# 2) Converge generated artifacts and module state
+# 3) Converge generated artifacts and module state
 bash apply.sh
 
-# 3) Start services (first run) or reconcile live runtime (subsequent changes)
+# Or do dependency install + apply in one step
+# bash apply.sh --ensure-dependencies
+
+# 4) Start services (first run) or reconcile live runtime (subsequent changes)
 bash start.sh
 # or
 bash apply.sh --reconcile-runtime
@@ -166,6 +186,8 @@ For first-time setup without the menu:
 ```bash
 bash matrix-wizard.sh --full-setup
 ```
+
+The wizard still checks dependencies, but `bash ensure_dependencies.sh` is the faster non-interactive path when you already know you want a standard install.
 
 For unattended wizard automation, you can optionally set `ADMIN_PASSWORD` before `--full-setup`:
 
@@ -568,6 +590,7 @@ matrix-easy-deploy/
     │   ├── summary.sh            # Final post-setup summary
     │   └── modules.sh            # --module dispatcher helper
     └── create-admin.sh           # Admin user registration helper
+├── ensure_dependencies.sh       # Non-interactive host dependency installer
 ```
 
 Modules live in `modules/`. The core stack is itself a module — bridges, bots, and other additions will each have their own directory under `modules/` with their own `docker-compose.yml` and `setup.sh`.
