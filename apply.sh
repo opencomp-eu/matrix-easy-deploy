@@ -5,4 +5,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}" && pwd)"
 
-python3 "${SCRIPT_DIR}/scripts/apply.py" "$@"
+ensure_dependencies="false"
+python_args=()
+
+for arg in "$@"; do
+	case "$arg" in
+		--ensure-dependencies)
+			ensure_dependencies="true"
+			;;
+		*)
+			python_args+=("$arg")
+			;;
+	esac
+done
+
+if [[ "$ensure_dependencies" == "true" ]]; then
+	bash "${SCRIPT_DIR}/ensure_dependencies.sh"
+fi
+
+python3 "${SCRIPT_DIR}/scripts/apply.py" "${python_args[@]}"
