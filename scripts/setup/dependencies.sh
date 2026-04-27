@@ -63,23 +63,21 @@ dependency_packages_for_manager() {
     local dep="$2"
 
     case "$manager:$dep" in
-        apt-get:docker) echo "docker.io" ;;
-        apt-get:docker-compose) echo "docker-compose-plugin" ;;
         apt-get:openssl) echo "openssl" ;;
         apt-get:curl) echo "curl" ;;
         apt-get:python3) echo "python3" ;;
-        dnf:docker) echo "docker" ;;
-        dnf:docker-compose) echo "docker-compose-plugin" ;;
         dnf:openssl) echo "openssl" ;;
         dnf:curl) echo "curl" ;;
         dnf:python3) echo "python3" ;;
-        pacman:docker) echo "docker" ;;
-        pacman:docker-compose) echo "docker-compose" ;;
         pacman:openssl) echo "openssl" ;;
         pacman:curl) echo "curl" ;;
         pacman:python3) echo "python" ;;
         *) die "No package mapping for ${dep} via ${manager}" ;;
     esac
+}
+
+docker_install_required() {
+    is_dependency_missing "docker" || is_dependency_missing "docker-compose"
 }
 
 command_prefix_for_privileged_install() {
@@ -112,9 +110,15 @@ install_missing_dependencies() {
 
     local packages=()
     local -A seen_packages=()
+    local install_docker="false"
     local dep
     local package
     for dep in "${missing[@]}"; do
+        if [[ "$dep" == "docker" || "$dep" == "docker-compose" ]]; then
+            install_docker="true"
+            continue
+        fi
+
         package="$(dependency_packages_for_manager "$manager" "$dep")"
         if [[ -z "${seen_packages[$package]:-}" ]]; then
             packages+=("$package")
@@ -122,36 +126,54 @@ install_missing_dependencies() {
         fi
     done
 
-    info "Installing missing dependencies with ${manager}: ${packages[*]}"
+    if [[ ${#packages[@]} -gt 0 ]]; then
+        info "Installing missing dependencies with ${manager}: ${packages[*]}"
 
-    case "$manager" in
-        apt-get)
-            if [[ -n "$prefix_cmd" ]]; then
-                DEBIAN_FRONTEND=noninteractive "$prefix_cmd" apt-get update
-                DEBIAN_FRONTEND=noninteractive "$prefix_cmd" apt-get install -y "${packages[@]}"
-            else
-                DEBIAN_FRONTEND=noninteractive apt-get update
-                DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
-            fi
-            ;;
-        dnf)
-            if [[ -n "$prefix_cmd" ]]; then
-                "$prefix_cmd" dnf install -y "${packages[@]}"
-            else
-                dnf install -y "${packages[@]}"
-            fi
-            ;;
-        pacman)
-            if [[ -n "$prefix_cmd" ]]; then
-                "$prefix_cmd" pacman -Sy --noconfirm --needed "${packages[@]}"
-            else
-                pacman -Sy --noconfirm --needed "${packages[@]}"
-            fi
-            ;;
-        *)
-            die "Unsupported package manager: ${manager}"
-            ;;
-    esac
+        case "$manager" in
+            apt-get)
+                if [[ -n "$prefix_cmd" ]]; then
+                    DEBIAN_FRONTEND=noninteractive "$prefix_cmd" apt-get update
+                    DEBIAN_FRONTEND=noninteractive "$prefix_cmd" apt-get install -y "${packages[@]}"
+                else
+                    DEBIAN_FRONTEND=noninteractive apt-get update
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
+                fi
+                ;;
+            dnf)
+                if [[ -n "$prefix_cmd" ]]; then
+                    "$prefix_cmd" dnf install -y "${packages[@]}"
+                else
+                    dnf install -y "${packages[@]}"
+                fi
+                ;;
+            pacman)
+                if [[ -n "$prefix_cmd" ]]; then
+                    "$prefix_cmd" pacman -Sy --noconfirm --needed "${packages[@]}"
+                else
+                    pacman -Sy --noconfirm --needed "${packages[@]}"
+                fi
+                ;;
+            *)
+                die "Unsupported package manager: ${manager}"
+                ;;
+        esac
+    fi
+
+    if [[ "$install_docker" == "true" ]]; then
+        local docker_script
+        docker_script="$(mktemp "${TMPDIR:-/tmp}/get-docker.XXXXXX.sh")"
+
+        info "Installing Docker with the official convenience script."
+        curl -fsSL https://get.docker.com -o "$docker_script"
+
+        if [[ -n "$prefix_cmd" ]]; then
+            "$prefix_cmd" sh "$docker_script"
+        else
+            sh "$docker_script"
+        fi
+
+        rm -f "$docker_script"
+    fi
 }
 
 ensure_docker_daemon_running() {
@@ -236,15 +258,23 @@ check_dependencies() {
         local dnf_packages=()
         local pacman_packages=()
         for dep in "${missing[@]}"; do
+            if [[ "$dep" == "docker" || "$dep" == "docker-compose" ]]; then
+                continue
+            fi
             apt_packages+=("$(dependency_packages_for_manager "apt-get" "$dep")")
             dnf_packages+=("$(dependency_packages_for_manager "dnf" "$dep")")
             pacman_packages+=("$(dependency_packages_for_manager "pacman" "$dep")")
         done
 
         echo
-        echo "  On Ubuntu/Debian:  sudo apt-get install -y ${apt_packages[*]}"
-        echo "  On Fedora/RHEL:    sudo dnf install -y ${dnf_packages[*]}"
-        echo "  On Arch Linux:     sudo pacman -Sy --noconfirm --needed ${pacman_packages[*]}"
+        if [[ ${#apt_packages[@]} -gt 0 ]]; then
+            echo "  On Ubuntu/Debian:  sudo apt-get install -y ${apt_packages[*]}"
+            echo "  On Fedora/RHEL:    sudo dnf install -y ${dnf_packages[*]}"
+            echo "  On Arch Linux:     sudo pacman -Sy --noconfirm --needed ${pacman_packages[*]}"
+        fi
+        if docker_install_required; then
+            echo "  For Docker/Compose: curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh ./get-docker.sh"
+        fi
         echo "  Or run:            bash ensure_dependencies.sh"
         echo
         die "Please install the missing dependencies and re-run setup.sh."

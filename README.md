@@ -139,6 +139,7 @@ bash ensure_dependencies.sh
 ```
 
 Supported package managers are detected in this order: `apt-get`, `dnf`, then `pacman`.
+Docker itself is installed through the official `get.docker.com` convenience script so Docker packaging differences stay delegated upstream.
 If you want that to happen automatically before apply, use:
 
 ```bash
