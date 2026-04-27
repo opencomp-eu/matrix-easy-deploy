@@ -65,7 +65,7 @@ class ShellEntrypointTests(unittest.TestCase):
             self.assertIn("scripts/apply.py --project-root /srv/med --rotate-secrets", lines[1])
             self.assertNotIn("--ensure-dependencies", lines[1])
 
-    def test_ensure_dependencies_uses_apt_and_starts_docker(self):
+    def test_ensure_dependencies_uses_official_docker_script_and_starts_docker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             events = root / "events.log"
@@ -89,17 +89,29 @@ class ShellEntrypointTests(unittest.TestCase):
                 "fi\n",
             )
             self._write_executable(
+                fake_bin / "mktemp",
+                "#!/bin/bash\n"
+                "printf '%s\n' \"${TMPDIR:-/tmp}/get-docker.test.sh\"\n",
+            )
+            self._write_executable(
+                fake_bin / "rm",
+                "#!/bin/bash\n"
+                "exec /bin/rm \"$@\"\n",
+            )
+            self._write_executable(
                 fake_bin / "sudo",
                 "#!/bin/bash\n"
+                "if [[ \"${1:-}\" == \"sh\" ]]; then\n"
+                "  shift\n"
+                "  exec /bin/sh \"$@\"\n"
+                "fi\n"
                 "exec \"$@\"\n",
             )
             self._write_executable(
                 fake_bin / "apt-get",
                 "#!/bin/bash\n"
                 "echo apt-get:$* >> \"$EVENTS\"\n"
-                "if [[ \"${1:-}\" == \"install\" ]]; then\n"
-                "  /bin/touch \"$STATE/docker_compose\"\n"
-                "fi\n",
+                "exit 0\n",
             )
             self._write_executable(
                 fake_bin / "systemctl",
@@ -123,7 +135,22 @@ class ShellEntrypointTests(unittest.TestCase):
                 "exit 0\n",
             )
             self._write_executable(fake_bin / "openssl", "#!/bin/bash\nexit 0\n")
-            self._write_executable(fake_bin / "curl", "#!/bin/bash\nexit 0\n")
+            self._write_executable(
+                fake_bin / "curl",
+                "#!/bin/bash\n"
+                "echo curl:$* >> \"$EVENTS\"\n"
+                "if [[ \"${1:-}\" == \"-fsSL\" && \"${2:-}\" == \"https://get.docker.com\" && \"${3:-}\" == \"-o\" ]]; then\n"
+                "  /bin/cat > \"${4}\" <<'EOF'\n"
+                "#!/bin/bash\n"
+                "echo docker-script:$* >> \"$EVENTS\"\n"
+                "if [[ -n \"${STATE:-}\" ]]; then\n"
+                "  /bin/touch \"$STATE/docker_compose\"\n"
+                "fi\n"
+                "EOF\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+            )
             self._write_executable(fake_bin / "python3", "#!/bin/bash\nexit 0\n")
 
             env = os.environ.copy()
@@ -142,8 +169,9 @@ class ShellEntrypointTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             lines = events.read_text().splitlines()
-            self.assertIn("apt-get:update", lines)
-            self.assertIn("apt-get:install -y docker-compose-plugin", lines)
+            self.assertFalse(any(line.startswith("apt-get:install") for line in lines))
+            self.assertTrue(any(line.startswith("curl:-fsSL https://get.docker.com -o ") for line in lines))
+            self.assertTrue(any(line.startswith("docker-script:") for line in lines))
             self.assertIn("systemctl:enable --now docker", lines)
             self.assertIn("All dependencies satisfied.", result.stdout)
 
