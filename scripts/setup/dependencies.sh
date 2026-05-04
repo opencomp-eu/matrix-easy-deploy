@@ -2,7 +2,7 @@
 # Host dependency checks for setup wizard.
 
 required_dependency_keys() {
-    printf '%s\n' docker docker-compose openssl curl python3
+    printf '%s\n' docker docker-compose openssl curl python3 borg borgmatic
 }
 
 is_dependency_missing() {
@@ -17,6 +17,12 @@ is_dependency_missing() {
             ;;
         openssl|curl|python3)
             ! command -v "$dep" &>/dev/null
+            ;;
+        borg)
+            ! command -v borg &>/dev/null
+            ;;
+        borgmatic)
+            ! command -v borgmatic &>/dev/null
             ;;
         *)
             die "Unknown dependency key: ${dep}"
@@ -66,12 +72,18 @@ dependency_packages_for_manager() {
         apt-get:openssl) echo "openssl" ;;
         apt-get:curl) echo "curl" ;;
         apt-get:python3) echo "python3" ;;
+        apt-get:borg) echo "borgbackup" ;;
+        apt-get:borgmatic) echo "borgmatic" ;;
         dnf:openssl) echo "openssl" ;;
         dnf:curl) echo "curl" ;;
         dnf:python3) echo "python3" ;;
+        dnf:borg) echo "borgbackup" ;;
+        dnf:borgmatic) echo "borgmatic" ;;
         pacman:openssl) echo "openssl" ;;
         pacman:curl) echo "curl" ;;
         pacman:python3) echo "python" ;;
+        pacman:borg) echo "borg" ;;
+        pacman:borgmatic) echo "borgmatic" ;;
         *) die "No package mapping for ${dep} via ${manager}" ;;
     esac
 }
