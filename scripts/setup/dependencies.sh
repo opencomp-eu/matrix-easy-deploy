@@ -146,23 +146,41 @@ install_missing_dependencies() {
                 if [[ -n "$prefix_cmd" ]]; then
                     DEBIAN_FRONTEND=noninteractive "$prefix_cmd" apt-get update
                     DEBIAN_FRONTEND=noninteractive "$prefix_cmd" apt-get install -y "${packages[@]}"
+                    if [[ $? -ne 0 ]]; then
+                        die "Failed to install packages with apt-get"
+                    fi
                 else
                     DEBIAN_FRONTEND=noninteractive apt-get update
                     DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
+                    if [[ $? -ne 0 ]]; then
+                        die "Failed to install packages with apt-get"
+                    fi
                 fi
                 ;;
             dnf)
                 if [[ -n "$prefix_cmd" ]]; then
                     "$prefix_cmd" dnf install -y "${packages[@]}"
+                    if [[ $? -ne 0 ]]; then
+                        die "Failed to install packages with dnf"
+                    fi
                 else
                     dnf install -y "${packages[@]}"
+                    if [[ $? -ne 0 ]]; then
+                        die "Failed to install packages with dnf"
+                    fi
                 fi
                 ;;
             pacman)
                 if [[ -n "$prefix_cmd" ]]; then
                     "$prefix_cmd" pacman -Sy --noconfirm --needed "${packages[@]}"
+                    if [[ $? -ne 0 ]]; then
+                        die "Failed to install packages with pacman"
+                    fi
                 else
                     pacman -Sy --noconfirm --needed "${packages[@]}"
+                    if [[ $? -ne 0 ]]; then
+                        die "Failed to install packages with pacman"
+                    fi
                 fi
                 ;;
             *)
@@ -180,8 +198,14 @@ install_missing_dependencies() {
 
         if [[ -n "$prefix_cmd" ]]; then
             "$prefix_cmd" sh "$docker_script"
+            if [[ $? -ne 0 ]]; then
+                die "Failed to install Docker"
+            fi
         else
             sh "$docker_script"
+            if [[ $? -ne 0 ]]; then
+                die "Failed to install Docker"
+            fi
         fi
 
         rm -f "$docker_script"
