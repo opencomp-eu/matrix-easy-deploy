@@ -130,7 +130,7 @@ The primary operating model is:
 1. Ensure host dependencies are installed.
 2. Edit `deploy.yaml`.
 3. Run `bash apply.sh`.
-4. Optionally run `bash apply.sh --reconcile-runtime` to apply changes to running containers immediately.
+4. If you only want to render config without touching running containers, use `bash apply.sh --no-reconcile-runtime`.
 
 For first-time setup on a fresh host, install dependencies non-interactively with:
 
@@ -155,16 +155,14 @@ bash ensure_dependencies.sh
 # 2) Edit desired state
 $EDITOR deploy.yaml
 
-# 3) Converge generated artifacts and module state
+# 3) Converge generated artifacts, module state, and running services
 bash apply.sh
 
 # Or do dependency install + apply in one step
 # bash apply.sh --ensure-dependencies
 
-# 4) Start services (first run) or reconcile live runtime (subsequent changes)
-bash start.sh
-# or
-bash apply.sh --reconcile-runtime
+# Render/apply config only, without stop/start
+# bash apply.sh --no-reconcile-runtime
 ```
 
 By default, `bash apply.sh` also attempts non-interactive bootstrap for enabled modules when required generated files are missing.
@@ -204,27 +202,23 @@ Avoid storing `ADMIN_PASSWORD` in `.env` or `deploy.yaml`.
 
 If you already have a complete `deploy.yaml` and want to bootstrap the server without the interactive wizard, use this flow:
 
-1. Apply the config to generate `.env` and rendered files.
-2. Start the stack.
-3. Wait for Synapse to become healthy.
-4. Create the initial admin user non-interactively.
+1. Apply the config. This also starts or reconciles the stack by default.
+2. Wait for Synapse to become healthy.
+3. Create the initial admin user non-interactively.
 
 Example:
 
 ```bash
-# 1. Render runtime files from deploy.yaml
+# 1. Render runtime files from deploy.yaml and reconcile runtime
 bash apply.sh
 
-# 2. Start the stack
-bash start.sh
-
-# 3. Wait until Synapse is healthy
+# 2. Wait until Synapse is healthy
 until [[ "$(docker inspect --format='{{.State.Health.Status}}' matrix_synapse 2>/dev/null)" == "healthy" ]]; do
   echo "Waiting for Synapse..."
   sleep 5
 done
 
-# 4. Load generated values and create the initial admin user
+# 3. Load generated values and create the initial admin user
 set -o allexport
 source ./.env
 set +o allexport
@@ -238,11 +232,12 @@ bash scripts/create-admin.sh \
 
 Notes:
 
-- `bash apply.sh --reconcile-runtime` is also valid if you want apply to run stop/start for you.
+- `bash apply.sh` now runs stop/start by default so generated config and running containers stay aligned.
+- Use `bash apply.sh --no-reconcile-runtime` when you want render-only behavior.
 - `scripts/create-admin.sh` is safe to re-run; if the user already exists it will warn and skip.
 - Keep the admin password out of `deploy.yaml` and `.env`. Pass it at execution time or inject it through your automation/secret manager.
 - Enabled modules are bootstrapped non-interactively during `bash apply.sh` when their required generated config is missing.
-- Bridge/module enable-disable transitions are reconciled by `bash apply.sh`; use `--reconcile-runtime` to apply those changes to running containers immediately.
+- Bridge/module enable-disable transitions are reconciled by `bash apply.sh` by default; use `--no-reconcile-runtime` to skip the stop/start step.
 
 ### Smoke verification checklist
 
@@ -692,7 +687,7 @@ bash start.sh
 ```
 
 By default, `apply.sh` preserves existing generated secrets and re-renders files deterministically from `deploy.yaml`.
-Use `apply.sh --reconcile-runtime` when you want apply to also run stop/start and align running services with the updated config.
+By default, `apply.sh` also runs stop/start to align running services with updated config. Use `apply.sh --no-reconcile-runtime` to skip that step.
 
 Need migration details from legacy setup behavior? See `MIGRATION.md`.
 

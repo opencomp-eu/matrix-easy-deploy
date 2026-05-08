@@ -752,11 +752,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Rotate generated secrets intentionally (destructive for existing deployments)",
     )
-    parser.add_argument(
+    reconcile_group = parser.add_mutually_exclusive_group()
+    reconcile_group.add_argument(
         "--reconcile-runtime",
+        dest="reconcile_runtime",
         action="store_true",
-        help="After apply, restart services (stop/start) to match desired runtime state",
+        help="After apply, restart services (stop/start) to match desired runtime state (default)",
     )
+    reconcile_group.add_argument(
+        "--no-reconcile-runtime",
+        dest="reconcile_runtime",
+        action="store_false",
+        help="Apply config without restarting services",
+    )
+    parser.set_defaults(reconcile_runtime=True)
     parser.add_argument(
         "--skip-module-bootstrap",
         action="store_true",
