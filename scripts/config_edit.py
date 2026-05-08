@@ -33,6 +33,7 @@ def load_or_init(path: Path) -> dict:
             "features": {
                 "registration_enabled": False,
                 "federation_enabled": True,
+                "password_login_enabled": True,
                 "element": {"enabled": True, "domain": "element.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
                 "sso": {"enabled": False, "providers": []},
@@ -151,6 +152,7 @@ def update_core_config(
 
     features["registration_enabled"] = bool(registration_enabled)
     features["federation_enabled"] = bool(federation_enabled)
+    features.setdefault("password_login_enabled", True)
 
     element = features.setdefault("element", {})
     if not isinstance(element, dict):

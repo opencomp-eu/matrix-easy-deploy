@@ -407,6 +407,7 @@ The wizard will ask you:
 - `deploy.yaml` is the operator-owned source of truth.
 - `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered templates, module state metadata).
 - Re-running `bash apply.sh` is idempotent by default: existing generated secrets are re-used.
+- `features.password_login_enabled: false` disables Synapse password login for SSO-only deployments. `bash apply.sh` rejects this unless SSO is enabled and at least one OIDC provider is configured.
 - Enabled modules converge deterministically: if required generated files are missing, setup runs non-interactively.
 - Bridge appservice registrations converge deterministically in Synapse:
   - enabled modules are synced into `modules/core/synapse_data` and added to `app_service_config_files`,
@@ -436,6 +437,22 @@ Everything else — database passwords, signing keys, TURN secrets, LiveKit API 
 ## SSO (OIDC / OAuth2)
 
 This project configures Synapse `oidc_providers`, which works with Google and other OIDC-compatible identity providers.
+
+To allow only SSO login, set this in `deploy.yaml`:
+
+```yaml
+features:
+  password_login_enabled: false
+  sso:
+    enabled: true
+    providers:
+      - name: Google
+        issuer: https://accounts.google.com/
+        client_id: your-client-id
+        client_secret: your-client-secret
+```
+
+This renders Synapse `password_config.enabled: false`. Local Matrix password login is disabled, so users must authenticate through one of the configured SSO providers.
 
 During setup (default: enabled), provide:
 - Provider display name (for login UI)
@@ -521,6 +538,7 @@ bash scripts/create-user.sh
 ```
 
 You can disable SSO in the wizard if you only want local Matrix passwords.
+If password login is disabled, pre-created local accounts still exist in Synapse, but sign-in must still happen through configured SSO providers.
 
 ---
 

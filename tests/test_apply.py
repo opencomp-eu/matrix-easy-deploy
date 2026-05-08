@@ -26,7 +26,11 @@ class ApplyTests(unittest.TestCase):
 
         (self.root / "caddy/Caddyfile.template").write_text("{{MATRIX_DOMAIN}} {{CADDY_MATRIX_HOSTS}}")
         (self.root / "caddy/Caddyfile-no-element.template").write_text("no-element {{MATRIX_DOMAIN}}")
-        (self.root / "modules/core/synapse/homeserver.yaml.template").write_text("server_name: {{SERVER_NAME}}\npublic_baseurl: https://{{MATRIX_DOMAIN}}")
+        (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
+            "server_name: {{SERVER_NAME}}\n"
+            "public_baseurl: https://{{MATRIX_DOMAIN}}\n"
+            "password_config:\n  enabled: {{PASSWORD_LOGIN_ENABLED}}\n"
+        )
         (self.root / "modules/core/element/config.json.template").write_text('{"base_url":"https://{{MATRIX_DOMAIN}}"}')
         (self.root / "modules/calls/coturn/turnserver.conf.template").write_text("realm={{MATRIX_DOMAIN}}")
         (self.root / "modules/calls/livekit/livekit.yaml.template").write_text("keys:\n  {{LIVEKIT_KEY}}: {{LIVEKIT_SECRET}}")
@@ -51,6 +55,7 @@ class ApplyTests(unittest.TestCase):
             "features": {
                 "registration_enabled": False,
                 "federation_enabled": True,
+                "password_login_enabled": True,
                 "element": {"enabled": True, "domain": "element.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
                 "sso": {"enabled": False, "providers": []},
@@ -100,6 +105,18 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(derived["OIDC_PROVIDER_NAMES"], "Google")
         self.assertIn('"idp_name":"Google"', derived["OIDC_PROVIDERS_JSON"])
 
+    def test_derive_values_password_login_disabled(self):
+        cfg = self.sample_config()
+        cfg["features"]["password_login_enabled"] = False
+        cfg["features"]["sso"] = {
+            "enabled": True,
+            "providers": [{"name": "Google", "issuer": "https://accounts.google.com/"}],
+        }
+
+        derived = apply.derive_values(cfg, server_ip="1.2.3.4")
+
+        self.assertEqual(derived["PASSWORD_LOGIN_ENABLED"], "false")
+
     def test_validate_config_rejects_invalid_modules_shape(self):
         cfg = self.sample_config()
         cfg["modules"] = []
@@ -109,6 +126,25 @@ class ApplyTests(unittest.TestCase):
     def test_validate_config_rejects_invalid_enabled_type(self):
         cfg = self.sample_config()
         cfg["modules"]["hookshot"]["enabled"] = "yes"
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_invalid_password_login_enabled_type(self):
+        cfg = self.sample_config()
+        cfg["features"]["password_login_enabled"] = "no"
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_password_login_disabled_without_sso(self):
+        cfg = self.sample_config()
+        cfg["features"]["password_login_enabled"] = False
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_password_login_disabled_without_sso_providers(self):
+        cfg = self.sample_config()
+        cfg["features"]["password_login_enabled"] = False
+        cfg["features"]["sso"] = {"enabled": True, "providers": []}
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
@@ -201,6 +237,7 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("MATRIX_DOMAIN=matrix.example.com", env_text)
         self.assertIn("SERVER_IP=9.8.7.6", env_text)
         self.assertIn("HOOKSHOT_ENABLED=false", env_text)
+        self.assertIn("PASSWORD_LOGIN_ENABLED=true", env_text)
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
         self.assertIn("matrix.example.com", caddy)
@@ -208,11 +245,32 @@ class ApplyTests(unittest.TestCase):
 
         synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
         self.assertIn("server_name: example.com", synapse)
+        self.assertIn("enabled: true", synapse)
         self.assertNotIn("{{", synapse)
 
         modules_state = yaml.safe_load((self.root / ".matrix-easy-deploy/modules.yaml").read_text())
         self.assertIn("hookshot", modules_state)
         self.assertFalse(modules_state["hookshot"]["enabled"])
+
+    def test_apply_configuration_renders_sso_only_password_setting(self):
+        cfg = self.sample_config()
+        cfg["features"]["password_login_enabled"] = False
+        cfg["features"]["sso"] = {
+            "enabled": True,
+            "providers": [{"name": "Google", "issuer": "https://accounts.google.com/"}],
+        }
+        self.write_config(cfg)
+        (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
+            "password_config:\n  enabled: {{PASSWORD_LOGIN_ENABLED}}\n"
+            "oidc_providers: {{OIDC_PROVIDERS_JSON}}\n"
+        )
+        ctx = apply.ApplyContext(self.root)
+
+        apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
+        self.assertIn("password_config:\n  enabled: false", synapse)
+        self.assertIn("oidc_providers: [{", synapse)
 
     def test_apply_configuration_strips_disabled_livekit_caddy_block(self):
         cfg = self.sample_config()

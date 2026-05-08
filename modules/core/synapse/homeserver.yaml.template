@@ -72,6 +72,10 @@ report_stats: false
 login_via_existing_session:
   enabled: true
 
+# Allow local Matrix password login. Set false for SSO-only login.
+password_config:
+  enabled: {{PASSWORD_LOGIN_ENABLED}}
+
 # ----------------------------------------------------------------------------
 # Registration
 # ----------------------------------------------------------------------------
