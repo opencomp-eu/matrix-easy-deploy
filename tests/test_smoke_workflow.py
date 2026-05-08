@@ -61,7 +61,7 @@ class SmokeWorkflowTests(unittest.TestCase):
             },
             "features": {
                 "registration_enabled": False,
-                "federation_enabled": True,
+                "federation": {"enabled": True, "domain_whitelist": []},
                 "element": {"enabled": True, "domain": "element.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
                 "sso": {"enabled": False, "providers": []},

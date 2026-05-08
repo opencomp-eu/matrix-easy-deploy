@@ -133,9 +133,21 @@ def validate_config(config: dict) -> None:
             if key in features and not isinstance(features[key], bool):
                 raise ValueError(f"features.{key} must be true/false")
 
-        for section in ("element", "calls", "sso"):
+        for section in ("federation", "element", "calls", "sso"):
             if section in features and not isinstance(features.get(section), dict):
                 raise ValueError(f"features.{section} must be an object")
+
+        federation = features.get("federation", {}) if isinstance(features.get("federation", {}), dict) else {}
+        if "enabled" in federation and not isinstance(federation.get("enabled"), bool):
+            raise ValueError("features.federation.enabled must be true/false")
+
+        if "domain_whitelist" in federation:
+            whitelist = federation.get("domain_whitelist")
+            if not isinstance(whitelist, list):
+                raise ValueError("features.federation.domain_whitelist must be a list")
+            for entry in whitelist:
+                if not isinstance(entry, str) or not entry.strip():
+                    raise ValueError("features.federation.domain_whitelist entries must be non-empty strings")
 
         sso = features.get("sso", {}) if isinstance(features.get("sso", {}), dict) else {}
         if "providers" in sso and not isinstance(sso.get("providers"), list):
@@ -256,6 +268,33 @@ def build_oidc_providers_json(providers: list) -> str:
     return json.dumps(normalized, separators=(",", ":"))
 
 
+def get_federation_config(features: dict | None) -> tuple[bool, list[str]]:
+    if not isinstance(features, dict):
+        return True, []
+
+    federation = features.get("federation")
+    if isinstance(federation, dict):
+        enabled = bool(federation.get("enabled", True))
+        raw_whitelist = federation.get("domain_whitelist", [])
+        if not isinstance(raw_whitelist, list):
+            raw_whitelist = []
+
+        whitelist: list[str] = []
+        seen: set[str] = set()
+        for entry in raw_whitelist:
+            if not isinstance(entry, str):
+                continue
+            value = entry.strip()
+            if not value or value in seen:
+                continue
+            whitelist.append(value)
+            seen.add(value)
+        return enabled, whitelist
+
+    enabled = bool(features.get("federation_enabled", True))
+    return enabled, []
+
+
 def derive_values(config: dict, server_ip: str | None = None) -> dict:
     derived = {}
 
@@ -267,8 +306,13 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     server_name = matrix.get("server_name") or extract_base_domain(matrix_domain)
     derived["SERVER_NAME"] = server_name
 
-    fed_enabled = bool(features.get("federation_enabled", True))
-    derived["FEDERATION_WHITELIST"] = "~" if fed_enabled else "[]"
+    fed_enabled, federation_domain_whitelist = get_federation_config(features)
+    if not fed_enabled:
+        derived["FEDERATION_WHITELIST"] = "[]"
+    elif federation_domain_whitelist:
+        derived["FEDERATION_WHITELIST"] = json.dumps(federation_domain_whitelist, separators=(",", ":"))
+    else:
+        derived["FEDERATION_WHITELIST"] = "~"
     derived["ALLOW_PUBLIC_ROOMS_FEDERATION"] = "true" if fed_enabled else "false"
 
     reg_enabled = bool(features.get("registration_enabled", False))

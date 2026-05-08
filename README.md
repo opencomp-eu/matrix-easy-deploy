@@ -394,14 +394,20 @@ The wizard will ask you:
 8. For each provider: name, issuer URL, client ID, client secret
 9. For each provider: whether unknown users can auto-register via that provider
 10. For each provider: optional OIDC claim allowlist (org/group/domain control)
-11. Whether to install Element Web, and on which domain
-12. **Your LiveKit domain** — something like `livekit.example.com` (defaults to `livekit.<basedomain>`)
+10. Whether to enable federation only for specific homeservers
+11. If yes: comma-separated Matrix server names to allow (blank = unrestricted federation)
+12. Whether to install Element Web, and on which domain
+13. **Your LiveKit domain** — something like `livekit.example.com` (defaults to `livekit.<basedomain>`)
 
 ### Configuration model
 
 - `deploy.yaml` is the operator-owned source of truth.
 - `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered templates, module state metadata).
 - Re-running `bash apply.sh` is idempotent by default: existing generated secrets are re-used.
+- Federation config lives under `features.federation`:
+  - `enabled: false` disables federation
+  - `enabled: true` with empty `domain_whitelist` allows normal federation
+  - `enabled: true` with populated `domain_whitelist` restricts federation to those homeservers
 - `features.local_login_enabled: false` disables Synapse password login for SSO-only deployments. `bash apply.sh` rejects this unless SSO is enabled and at least one OIDC provider is configured.
 - Enabled modules converge deterministically: if required generated files are missing, setup runs non-interactively.
 - Bridge appservice registrations converge deterministically in Synapse:
@@ -428,6 +434,27 @@ If these are different, federation discovery still starts from `SERVER_NAME`, so
 This project now generates Caddy config that serves Matrix endpoints on both hostnames automatically.
 
 Everything else — database passwords, signing keys, TURN secrets, LiveKit API keys, internal secrets — is generated automatically. The wizard also auto-detects your server's public IP for coturn's NAT traversal configuration.
+
+## Private federation / server allowlist
+
+If Org A should federate only with Org B, set this in `deploy.yaml`:
+
+```yaml
+features:
+  federation:
+    enabled: true
+    domain_whitelist:
+      - org-a.example.com
+      - org-b.example.com
+```
+
+Behavior:
+
+- `enabled: false` blocks federation entirely.
+- Empty or missing `domain_whitelist` keeps federation unrestricted.
+- Populated `domain_whitelist` maps to Synapse `federation_domain_whitelist`.
+
+This is application-layer filtering. For a real private federation, firewall inbound federation traffic too, as Synapse docs recommend.
 
 ## SSO (OIDC / OAuth2)
 

@@ -4,7 +4,9 @@ matrix:
   admin_username: admin
 features:
   registration_enabled: false
-  federation_enabled: true
+  federation:
+    enabled: true
+    domain_whitelist: []
   local_login_enabled: true
   element:
     enabled: true

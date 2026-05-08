@@ -63,7 +63,7 @@ class ConfigEditTests(unittest.TestCase):
             },
             "features": {
                 "registration_enabled": False,
-                "federation_enabled": True,
+                "federation": {"enabled": True, "domain_whitelist": []},
                 "element": {"enabled": True, "domain": "element.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
                 "sso": {"enabled": True, "providers": [{"name": "Google"}]},
@@ -88,6 +88,8 @@ class ConfigEditTests(unittest.TestCase):
             "true",
             "--federation-enabled",
             "false",
+            "--federation-domain-whitelist",
+            "",
             "--install-element",
             "false",
             "--element-domain",
@@ -104,11 +106,55 @@ class ConfigEditTests(unittest.TestCase):
         self.assertEqual(updated["matrix"]["server_name"], "new.example.com")
         self.assertEqual(updated["matrix"]["admin_username"], "root")
         self.assertTrue(updated["features"]["registration_enabled"])
-        self.assertFalse(updated["features"]["federation_enabled"])
+        self.assertFalse(updated["features"]["federation"]["enabled"])
+        self.assertEqual(updated["features"]["federation"]["domain_whitelist"], [])
         self.assertFalse(updated["features"]["element"]["enabled"])
         self.assertFalse(updated["features"]["calls"]["enabled"])
         self.assertTrue(updated["modules"]["hookshot"]["enabled"])
         self.assertTrue(updated["features"]["sso"]["enabled"])
+
+    def test_set_core_updates_federation_whitelist(self):
+        initial = {
+            "matrix": {
+                "domain": "matrix.example.com",
+                "server_name": "example.com",
+                "admin_username": "admin",
+            },
+        }
+        self.deploy_yaml.write_text(yaml.safe_dump(initial, sort_keys=False))
+
+        rc = config_edit.main([
+            "--deploy-yaml",
+            str(self.deploy_yaml),
+            "--set-core",
+            "--matrix-domain",
+            "matrix.example.com",
+            "--server-name",
+            "example.com",
+            "--admin-username",
+            "admin",
+            "--registration-enabled",
+            "false",
+            "--federation-enabled",
+            "true",
+            "--federation-domain-whitelist",
+            "org-b.example.com, org-c.example.com, org-b.example.com",
+            "--install-element",
+            "true",
+            "--element-domain",
+            "element.example.com",
+            "--calls-enabled",
+            "true",
+            "--livekit-domain",
+            "livekit.example.com",
+        ])
+
+        self.assertEqual(rc, 0)
+        updated = yaml.safe_load(self.deploy_yaml.read_text())
+        self.assertEqual(
+            updated["features"]["federation"]["domain_whitelist"],
+            ["org-b.example.com", "org-c.example.com"],
+        )
 
     def test_set_module_config_updates_whatsapp_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -188,7 +234,10 @@ class ConfigEditTests(unittest.TestCase):
             },
             "features": {
                 "registration_enabled": True,
-                "federation_enabled": False,
+                "federation": {
+                    "enabled": False,
+                    "domain_whitelist": ["org-b.example.com"],
+                },
                 "element": {"enabled": False, "domain": ""},
                 "calls": {"enabled": True, "livekit_domain": "calls.dev.local"},
             },
@@ -203,8 +252,29 @@ class ConfigEditTests(unittest.TestCase):
         self.assertIn("config_admin_username=operator", defaults)
         self.assertIn("config_registration_default=y", defaults)
         self.assertIn("config_federation_default=n", defaults)
+        self.assertIn("config_federation_domain_whitelist=org-b.example.com", defaults)
         self.assertIn("config_element_default=n", defaults)
         self.assertIn("config_calls_default=y", defaults)
+
+    def test_print_wizard_defaults_reads_legacy_federation_flag(self):
+        initial = {
+            "matrix": {
+                "domain": "matrix.dev.local",
+                "server_name": "dev.local",
+                "admin_username": "operator",
+            },
+            "features": {
+                "registration_enabled": True,
+                "federation_enabled": False,
+            },
+        }
+        self.deploy_yaml.write_text(yaml.safe_dump(initial, sort_keys=False))
+
+        config = config_edit.load_or_init(self.deploy_yaml)
+        defaults = config_edit.emit_wizard_defaults(config)
+
+        self.assertIn("config_federation_default=n", defaults)
+        self.assertIn("config_federation_domain_whitelist=''", defaults)
 
     def test_set_backup_config_updates_backup_fields(self):
         self.deploy_yaml.write_text(

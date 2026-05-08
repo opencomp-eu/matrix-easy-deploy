@@ -42,6 +42,7 @@ edit_deploy_config() {
     local config_admin_username="admin"
     local config_registration_default="n"
     local config_federation_default="y"
+    local config_federation_domain_whitelist=""
     local config_element_default="y"
     local config_element_domain=""
     local config_calls_default="y"
@@ -84,6 +85,13 @@ edit_deploy_config() {
         "Enable federation with other Matrix servers?" \
         "$config_federation_default"
     ENABLE_FEDERATION="$([ "$ENABLE_FEDERATION_INPUT" == "y" ] && echo "true" || echo "false")"
+    local FEDERATION_DOMAIN_WHITELIST=""
+    if [[ "$ENABLE_FEDERATION" == "true" ]]; then
+        echo
+        ask FEDERATION_DOMAIN_WHITELIST \
+            "Allowlist federation with these server names only? (comma-separated, blank = allow all)" \
+            "$config_federation_domain_whitelist"
+    fi
 
     # SSO placeholder
     ENABLE_SSO="false"
@@ -134,6 +142,9 @@ edit_deploy_config() {
     echo -e "  Admin user      : ${CYAN}${ADMIN_USERNAME}${RESET}"
     echo -e "  Public reg.     : ${CYAN}${ENABLE_REGISTRATION}${RESET}"
     echo -e "  Federation      : ${CYAN}${ENABLE_FEDERATION_INPUT}${RESET}"
+    if [[ "$ENABLE_FEDERATION" == "true" && -n "${FEDERATION_DOMAIN_WHITELIST// }" ]]; then
+        echo -e "  Fed allowlist   : ${CYAN}${FEDERATION_DOMAIN_WHITELIST}${RESET}"
+    fi
     echo -e "  SSO (OIDC)      : ${CYAN}disabled${RESET}"
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         echo -e "  Element client  : ${CYAN}${ELEMENT_DOMAIN}${RESET}"
@@ -175,6 +186,7 @@ edit_deploy_config() {
         --admin-username "$ADMIN_USERNAME" \
         --registration-enabled "$ENABLE_REGISTRATION" \
         --federation-enabled "$ENABLE_FEDERATION" \
+        --federation-domain-whitelist "$FEDERATION_DOMAIN_WHITELIST" \
         --install-element "$INSTALL_ELEMENT" \
         --element-domain "$ELEMENT_DOMAIN" \
         --calls-enabled "$ENABLE_CALLS" \

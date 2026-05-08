@@ -32,7 +32,10 @@ def load_or_init(path: Path) -> dict:
             },
             "features": {
                 "registration_enabled": False,
-                "federation_enabled": True,
+                "federation": {
+                    "enabled": True,
+                    "domain_whitelist": [],
+                },
                 "local_login_enabled": True,
                 "element": {"enabled": True, "domain": "element.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
@@ -132,6 +135,7 @@ def update_core_config(
     admin_username: str,
     registration_enabled: bool,
     federation_enabled: bool,
+    federation_domain_whitelist: list[str],
     install_element: bool,
     element_domain: str,
     calls_enabled: bool,
@@ -151,7 +155,13 @@ def update_core_config(
         config["features"] = features
 
     features["registration_enabled"] = bool(registration_enabled)
-    features["federation_enabled"] = bool(federation_enabled)
+    features.pop("federation_enabled", None)
+    federation = features.setdefault("federation", {})
+    if not isinstance(federation, dict):
+        federation = {}
+        features["federation"] = federation
+    federation["enabled"] = bool(federation_enabled)
+    federation["domain_whitelist"] = list(federation_domain_whitelist)
     features.setdefault("local_login_enabled", True)
 
     element = features.setdefault("element", {})
@@ -228,6 +238,35 @@ def shell_bool_default(value: bool, yes_default: str = "y", no_default: str = "n
     return yes_default if value else no_default
 
 
+def parse_csv_list(value: str | None) -> list[str]:
+    if value is None:
+        return []
+
+    items: list[str] = []
+    seen: set[str] = set()
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if not item or item in seen:
+            continue
+        items.append(item)
+        seen.add(item)
+    return items
+
+
+def get_federation_config(config: dict) -> tuple[bool, list[str]]:
+    features = config.get("features", {}) if isinstance(config.get("features", {}), dict) else {}
+    federation = features.get("federation", {}) if isinstance(features.get("federation", {}), dict) else {}
+
+    if federation:
+        enabled = to_bool(federation.get("enabled", True))
+        whitelist = federation.get("domain_whitelist", [])
+        if not isinstance(whitelist, list):
+            whitelist = []
+        return enabled, parse_csv_list(",".join(str(item) for item in whitelist if isinstance(item, str)))
+
+    return to_bool(features.get("federation_enabled", True)), []
+
+
 def emit_wizard_defaults(config: dict) -> str:
     matrix = config.get("matrix", {}) if isinstance(config.get("matrix", {}), dict) else {}
     features = config.get("features", {}) if isinstance(config.get("features", {}), dict) else {}
@@ -238,6 +277,7 @@ def emit_wizard_defaults(config: dict) -> str:
     matrix_domain = matrix.get("domain", "matrix.example.com")
     server_name = matrix.get("server_name", "example.com")
     admin_username = matrix.get("admin_username", "admin")
+    federation_enabled, federation_domain_whitelist = get_federation_config(config)
 
     defaults = {
         "config_matrix_domain": matrix_domain,
@@ -246,9 +286,8 @@ def emit_wizard_defaults(config: dict) -> str:
         "config_registration_default": shell_bool_default(
             to_bool(features.get("registration_enabled", False)), yes_default="y", no_default="n"
         ),
-        "config_federation_default": shell_bool_default(
-            to_bool(features.get("federation_enabled", True)), yes_default="y", no_default="n"
-        ),
+        "config_federation_default": shell_bool_default(federation_enabled, yes_default="y", no_default="n"),
+        "config_federation_domain_whitelist": ",".join(federation_domain_whitelist),
         "config_element_default": shell_bool_default(
             to_bool(element.get("enabled", True)), yes_default="y", no_default="n"
         ),
@@ -335,6 +374,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--admin-username")
     parser.add_argument("--registration-enabled")
     parser.add_argument("--federation-enabled")
+    parser.add_argument("--federation-domain-whitelist")
     parser.add_argument("--install-element")
     parser.add_argument("--element-domain")
     parser.add_argument("--calls-enabled")
@@ -400,6 +440,7 @@ def main(argv: list[str] | None = None) -> int:
             "admin_username": args.admin_username,
             "registration_enabled": args.registration_enabled,
             "federation_enabled": args.federation_enabled,
+            "federation_domain_whitelist": args.federation_domain_whitelist,
             "install_element": args.install_element,
             "element_domain": args.element_domain,
             "calls_enabled": args.calls_enabled,
@@ -416,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
             admin_username=args.admin_username,
             registration_enabled=to_bool(args.registration_enabled),
             federation_enabled=to_bool(args.federation_enabled),
+            federation_domain_whitelist=parse_csv_list(args.federation_domain_whitelist),
             install_element=to_bool(args.install_element),
             element_domain=args.element_domain,
             calls_enabled=to_bool(args.calls_enabled),

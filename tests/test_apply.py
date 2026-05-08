@@ -55,7 +55,7 @@ class ApplyTests(unittest.TestCase):
             },
             "features": {
                 "registration_enabled": False,
-                "federation_enabled": True,
+                "federation": {"enabled": True, "domain_whitelist": []},
                 "local_login_enabled": True,
                 "element": {"enabled": True, "domain": "element.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
@@ -73,7 +73,7 @@ class ApplyTests(unittest.TestCase):
 
     def test_derive_values_federation_and_modules(self):
         cfg = self.sample_config()
-        cfg["features"]["federation_enabled"] = False
+        cfg["features"]["federation"]["enabled"] = False
         cfg["modules"]["hookshot"]["enabled"] = True
 
         derived = apply.derive_values(cfg, server_ip="1.2.3.4")
@@ -83,6 +83,28 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(derived["SERVER_IP"], "1.2.3.4")
         self.assertEqual(derived["HOOKSHOT_ENABLED"], "true")
         self.assertEqual(derived["WHATSAPP_BRIDGE_ENABLED"], "false")
+
+    def test_derive_values_with_federation_domain_whitelist(self):
+        cfg = self.sample_config()
+        cfg["features"]["federation"]["domain_whitelist"] = [
+            "org-b.example.com",
+            "org-c.example.com",
+            "org-b.example.com",
+        ]
+
+        derived = apply.derive_values(cfg, server_ip="1.2.3.4")
+
+        self.assertEqual(derived["FEDERATION_WHITELIST"], '["org-b.example.com","org-c.example.com"]')
+        self.assertEqual(derived["ALLOW_PUBLIC_ROOMS_FEDERATION"], "true")
+
+    def test_derive_values_legacy_federation_flag_fallback(self):
+        cfg = self.sample_config()
+        cfg["features"].pop("federation", None)
+        cfg["features"]["federation_enabled"] = False
+
+        derived = apply.derive_values(cfg, server_ip="1.2.3.4")
+
+        self.assertEqual(derived["FEDERATION_WHITELIST"], "[]")
 
     def test_derive_values_with_oidc_providers(self):
         cfg = self.sample_config()
@@ -133,6 +155,18 @@ class ApplyTests(unittest.TestCase):
     def test_validate_config_rejects_invalid_local_login_enabled_type(self):
         cfg = self.sample_config()
         cfg["features"]["local_login_enabled"] = "no"
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_invalid_federation_whitelist_shape(self):
+        cfg = self.sample_config()
+        cfg["features"]["federation"]["domain_whitelist"] = "org-b.example.com"
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_invalid_federation_whitelist_entry(self):
+        cfg = self.sample_config()
+        cfg["features"]["federation"]["domain_whitelist"] = [""]
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
