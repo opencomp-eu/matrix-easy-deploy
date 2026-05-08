@@ -129,7 +129,7 @@ def validate_config(config: dict) -> None:
         raise ValueError("backup must be an object when provided")
 
     if isinstance(features, dict):
-        for key in ("registration_enabled", "federation_enabled", "password_login_enabled"):
+        for key in ("registration_enabled", "federation_enabled", "local_login_enabled"):
             if key in features and not isinstance(features[key], bool):
                 raise ValueError(f"features.{key} must be true/false")
 
@@ -141,15 +141,15 @@ def validate_config(config: dict) -> None:
         if "providers" in sso and not isinstance(sso.get("providers"), list):
             raise ValueError("features.sso.providers must be a list")
 
-        password_login_enabled = bool(features.get("password_login_enabled", True))
-        if not password_login_enabled:
+        local_login_enabled = bool(features.get("local_login_enabled", True))
+        if not local_login_enabled:
             if not bool(sso.get("enabled", False)):
-                raise ValueError("features.password_login_enabled=false requires features.sso.enabled=true")
+                raise ValueError("features.local_login_enabled=false requires features.sso.enabled=true")
 
             providers = sso.get("providers", []) if isinstance(sso.get("providers", []), list) else []
             if not providers:
                 raise ValueError(
-                    "features.password_login_enabled=false requires at least one features.sso.providers entry"
+                    "features.local_login_enabled=false requires at least one features.sso.providers entry"
                 )
 
     if isinstance(modules, dict):
@@ -274,8 +274,8 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     reg_enabled = bool(features.get("registration_enabled", False))
     derived["ENABLE_REGISTRATION"] = "true" if reg_enabled else "false"
 
-    password_login_enabled = bool(features.get("password_login_enabled", True))
-    derived["PASSWORD_LOGIN_ENABLED"] = "true" if password_login_enabled else "false"
+    local_login_enabled = bool(features.get("local_login_enabled", True))
+    derived["LOCAL_LOGIN_ENABLED"] = "true" if local_login_enabled else "false"
 
     element = features.get("element", {}) if isinstance(features.get("element", {}), dict) else {}
     element_enabled = bool(element.get("enabled", True))

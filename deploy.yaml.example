@@ -5,7 +5,7 @@ matrix:
 features:
   registration_enabled: false
   federation_enabled: true
-  password_login_enabled: true
+  local_login_enabled: true
   element:
     enabled: true
     domain: element.example.com

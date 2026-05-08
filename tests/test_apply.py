@@ -29,7 +29,7 @@ class ApplyTests(unittest.TestCase):
         (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
             "server_name: {{SERVER_NAME}}\n"
             "public_baseurl: https://{{MATRIX_DOMAIN}}\n"
-            "password_config:\n  enabled: {{PASSWORD_LOGIN_ENABLED}}\n"
+            "password_config:\n  enabled: {{LOCAL_LOGIN_ENABLED}}\n"
         )
         (self.root / "modules/core/element/config.json.template").write_text('{"base_url":"https://{{MATRIX_DOMAIN}}"}')
         (self.root / "modules/calls/coturn/turnserver.conf.template").write_text("realm={{MATRIX_DOMAIN}}")
@@ -55,7 +55,7 @@ class ApplyTests(unittest.TestCase):
             "features": {
                 "registration_enabled": False,
                 "federation_enabled": True,
-                "password_login_enabled": True,
+                "local_login_enabled": True,
                 "element": {"enabled": True, "domain": "element.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
                 "sso": {"enabled": False, "providers": []},
@@ -107,7 +107,7 @@ class ApplyTests(unittest.TestCase):
 
     def test_derive_values_password_login_disabled(self):
         cfg = self.sample_config()
-        cfg["features"]["password_login_enabled"] = False
+        cfg["features"]["local_login_enabled"] = False
         cfg["features"]["sso"] = {
             "enabled": True,
             "providers": [{"name": "Google", "issuer": "https://accounts.google.com/"}],
@@ -115,7 +115,7 @@ class ApplyTests(unittest.TestCase):
 
         derived = apply.derive_values(cfg, server_ip="1.2.3.4")
 
-        self.assertEqual(derived["PASSWORD_LOGIN_ENABLED"], "false")
+        self.assertEqual(derived["LOCAL_LOGIN_ENABLED"], "false")
 
     def test_validate_config_rejects_invalid_modules_shape(self):
         cfg = self.sample_config()
@@ -129,21 +129,21 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
-    def test_validate_config_rejects_invalid_password_login_enabled_type(self):
+    def test_validate_config_rejects_invalid_local_login_enabled_type(self):
         cfg = self.sample_config()
-        cfg["features"]["password_login_enabled"] = "no"
+        cfg["features"]["local_login_enabled"] = "no"
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
     def test_validate_config_rejects_password_login_disabled_without_sso(self):
         cfg = self.sample_config()
-        cfg["features"]["password_login_enabled"] = False
+        cfg["features"]["local_login_enabled"] = False
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
     def test_validate_config_rejects_password_login_disabled_without_sso_providers(self):
         cfg = self.sample_config()
-        cfg["features"]["password_login_enabled"] = False
+        cfg["features"]["local_login_enabled"] = False
         cfg["features"]["sso"] = {"enabled": True, "providers": []}
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
@@ -237,7 +237,7 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("MATRIX_DOMAIN=matrix.example.com", env_text)
         self.assertIn("SERVER_IP=9.8.7.6", env_text)
         self.assertIn("HOOKSHOT_ENABLED=false", env_text)
-        self.assertIn("PASSWORD_LOGIN_ENABLED=true", env_text)
+        self.assertIn("LOCAL_LOGIN_ENABLED=true", env_text)
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
         self.assertIn("matrix.example.com", caddy)
@@ -254,14 +254,14 @@ class ApplyTests(unittest.TestCase):
 
     def test_apply_configuration_renders_sso_only_password_setting(self):
         cfg = self.sample_config()
-        cfg["features"]["password_login_enabled"] = False
+        cfg["features"]["local_login_enabled"] = False
         cfg["features"]["sso"] = {
             "enabled": True,
             "providers": [{"name": "Google", "issuer": "https://accounts.google.com/"}],
         }
         self.write_config(cfg)
         (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
-            "password_config:\n  enabled: {{PASSWORD_LOGIN_ENABLED}}\n"
+            "password_config:\n  enabled: {{LOCAL_LOGIN_ENABLED}}\n"
             "oidc_providers: {{OIDC_PROVIDERS_JSON}}\n"
         )
         ctx = apply.ApplyContext(self.root)
