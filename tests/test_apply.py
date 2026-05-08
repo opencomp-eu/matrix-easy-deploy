@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from io import StringIO
 from unittest.mock import patch
 from pathlib import Path
 
@@ -505,6 +506,44 @@ class ApplyTests(unittest.TestCase):
         second_args = mock_run.call_args_list[1].args[0]
         self.assertTrue(str(first_args[1]).endswith("stop.sh"))
         self.assertTrue(str(second_args[1]).endswith("start.sh"))
+
+    def test_parse_args_reconciles_runtime_by_default(self):
+        args = apply.parse_args([])
+
+        self.assertTrue(args.reconcile_runtime)
+
+    def test_parse_args_supports_runtime_reconcile_opt_out(self):
+        args = apply.parse_args(["--no-reconcile-runtime"])
+
+        self.assertFalse(args.reconcile_runtime)
+
+    def test_main_reconciles_runtime_by_default(self):
+        self.write_config(self.sample_config())
+
+        with patch("scripts.apply.apply_configuration") as mock_apply, patch(
+            "scripts.apply.run_runtime_reconcile"
+        ) as mock_reconcile, patch("sys.stdout", new_callable=StringIO) as stdout:
+            exit_code = apply.main(["--project-root", str(self.root), "--server-ip", "9.8.7.6"])
+
+        self.assertEqual(exit_code, 0)
+        mock_apply.assert_called_once()
+        mock_reconcile.assert_called_once()
+        self.assertIn("Runtime reconciled via stop/start.", stdout.getvalue())
+
+    def test_main_skips_runtime_reconcile_with_opt_out(self):
+        self.write_config(self.sample_config())
+
+        with patch("scripts.apply.apply_configuration") as mock_apply, patch(
+            "scripts.apply.run_runtime_reconcile"
+        ) as mock_reconcile, patch("sys.stdout", new_callable=StringIO) as stdout:
+            exit_code = apply.main(
+                ["--project-root", str(self.root), "--server-ip", "9.8.7.6", "--no-reconcile-runtime"]
+            )
+
+        self.assertEqual(exit_code, 0)
+        mock_apply.assert_called_once()
+        mock_reconcile.assert_not_called()
+        self.assertNotIn("Runtime reconciled via stop/start.", stdout.getvalue())
 
     def test_module_bootstrap_invoked_when_enabled_and_missing_config(self):
         cfg = self.sample_config()
