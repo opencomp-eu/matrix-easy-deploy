@@ -9,6 +9,38 @@ features:
   element:
     enabled: true
     domain: element.example.com
+    brand: Example Chat
+    default_theme: light
+    disable_custom_urls: false
+    disable_guests: true
+    disable_3pid_login: false
+    disable_login_language_selector: false
+    branding:
+      auth_header_logo_url: https://assets.example.com/element/logo.svg
+      welcome_background_url:
+        - https://assets.example.com/element/bg-1.jpg
+        - https://assets.example.com/element/bg-2.jpg
+      auth_footer_links:
+        - text: Support
+          url: https://example.com/support
+    embedded_pages:
+      home_url: https://assets.example.com/element/home.html
+      welcome_url: https://assets.example.com/element/welcome.html
+      login_for_welcome: false
+    integrations:
+      enabled: true
+    room_directory:
+      servers:
+        - example.com
+    labs:
+      show_settings: false
+      features: {}
+    ui_features:
+      registration: true
+      password_reset: true
+      create_public_rooms: true
+      create_public_spaces: true
+    extra_config: {}
   calls:
     enabled: true
     livekit_domain: livekit.example.com

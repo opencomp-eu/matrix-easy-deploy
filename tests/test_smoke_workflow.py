@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -80,12 +81,15 @@ class SmokeWorkflowTests(unittest.TestCase):
         apply.apply_configuration(ctx, server_ip="9.9.9.9")
         first_env = self._env_map()
         first_secrets = yaml.safe_load((self.root / ".matrix-easy-deploy/secrets.yaml").read_text())
+        first_element = json.loads((self.root / "modules/core/element/config.json").read_text())
 
         apply.apply_configuration(ctx, server_ip="9.9.9.9")
         second_env = self._env_map()
         second_secrets = yaml.safe_load((self.root / ".matrix-easy-deploy/secrets.yaml").read_text())
+        second_element = json.loads((self.root / "modules/core/element/config.json").read_text())
 
         self.assertEqual(first_secrets, second_secrets)
+        self.assertEqual(first_element, second_element)
         self.assertEqual(first_env.get("MATRIX_DOMAIN"), "matrix.example.com")
         self.assertEqual(first_env.get("SERVER_IP"), "9.9.9.9")
         self.assertEqual(second_env.get("MATRIX_DOMAIN"), "matrix.example.com")

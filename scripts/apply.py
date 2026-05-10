@@ -37,6 +37,56 @@ DEFAULT_SECRET_KEYS = [
     "SL_DB_PASSWORD",
 ]
 
+SCALAR_INTEGRATIONS_UI_URL = "https://scalar.vector.im/"
+SCALAR_INTEGRATIONS_REST_URL = "https://scalar.vector.im/api"
+SCALAR_INTEGRATIONS_WIDGETS_URLS = [
+    "https://scalar.vector.im/_matrix/integrations/v1",
+    "https://scalar.vector.im/api",
+    "https://scalar-staging.vector.im/_matrix/integrations/v1",
+    "https://scalar-staging.vector.im/api",
+    "https://scalar-staging.riot.im/_matrix/integrations/v1",
+    "https://scalar-staging.riot.im/api",
+]
+
+ELEMENT_STRING_KEYS = {
+    "brand",
+    "default_theme",
+    "permalink_prefix",
+    "default_device_display_name",
+    "default_country_code",
+    "logout_redirect_url",
+    "help_url",
+    "help_encryption_url",
+    "help_key_storage_url",
+}
+
+ELEMENT_BOOL_KEYS = {
+    "mobile_guide_toast",
+    "disable_custom_urls",
+    "disable_guests",
+    "disable_3pid_login",
+    "disable_login_language_selector",
+}
+
+ELEMENT_UI_FEATURES = {
+    "feedback": "UIFeature.feedback",
+    "widgets": "UIFeature.widgets",
+    "voip": "UIFeature.voip",
+    "advanced_settings": "UIFeature.advancedSettings",
+    "share_qr_code": "UIFeature.shareQrCode",
+    "share_social": "UIFeature.shareSocial",
+    "identity_server": "UIFeature.identityServer",
+    "third_party_id": "UIFeature.thirdPartyId",
+    "registration": "UIFeature.registration",
+    "password_reset": "UIFeature.passwordReset",
+    "deactivate": "UIFeature.deactivate",
+    "advanced_encryption": "UIFeature.advancedEncryption",
+    "room_history_settings": "UIFeature.roomHistorySettings",
+    "location_sharing": "UIFeature.locationSharing",
+    "create_public_rooms": "UIFeature.allowCreatingPublicRooms",
+    "create_public_spaces": "UIFeature.allowCreatingPublicSpaces",
+}
+
 MODULE_CONFIG_KEY_TO_DIR = {
     "hookshot": "hookshot",
     "whatsapp_bridge": "whatsapp-bridge",
@@ -106,6 +156,170 @@ def load_config(ctx: ApplyContext) -> dict:
     return config
 
 
+def _require_bool(value, path: str) -> None:
+    if not isinstance(value, bool):
+        raise ValueError(f"{path} must be true/false")
+
+
+def _require_str(value, path: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{path} must be a non-empty string")
+
+
+def _require_str_list(value, path: str) -> None:
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+        raise ValueError(f"{path} must be a list of non-empty strings")
+
+
+def _require_link_list(value, path: str) -> None:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be a list")
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}[{index}] must be an object")
+        _require_str(item.get("text"), f"{path}[{index}].text")
+        _require_str(item.get("url"), f"{path}[{index}].url")
+
+
+def _require_bool_map(value, path: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    for key, item in value.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"{path} keys must be non-empty strings")
+        _require_bool(item, f"{path}.{key}")
+
+
+def validate_element_config(element: dict) -> None:
+    for key in ("enabled",):
+        if key in element:
+            _require_bool(element.get(key), f"features.element.{key}")
+
+    if "domain" in element and element.get("domain") not in (None, ""):
+        _require_str(element.get("domain"), "features.element.domain")
+
+    for key in ELEMENT_STRING_KEYS:
+        if key not in element:
+            continue
+        _require_str(element.get(key), f"features.element.{key}")
+
+    for key in ELEMENT_BOOL_KEYS:
+        if key in element:
+            _require_bool(element.get(key), f"features.element.{key}")
+
+    branding = element.get("branding")
+    if branding is not None:
+        if not isinstance(branding, dict):
+            raise ValueError("features.element.branding must be an object")
+        if "auth_header_logo_url" in branding:
+            _require_str(branding.get("auth_header_logo_url"), "features.element.branding.auth_header_logo_url")
+        if "logo_link_url" in branding:
+            _require_str(branding.get("logo_link_url"), "features.element.branding.logo_link_url")
+        if "welcome_background_url" in branding:
+            welcome_background = branding.get("welcome_background_url")
+            if isinstance(welcome_background, str):
+                _require_str(welcome_background, "features.element.branding.welcome_background_url")
+            else:
+                _require_str_list(welcome_background, "features.element.branding.welcome_background_url")
+        if "auth_footer_links" in branding:
+            _require_link_list(branding.get("auth_footer_links"), "features.element.branding.auth_footer_links")
+
+    embedded_pages = element.get("embedded_pages")
+    if embedded_pages is not None:
+        if not isinstance(embedded_pages, dict):
+            raise ValueError("features.element.embedded_pages must be an object")
+        for key in ("home_url", "welcome_url"):
+            if key in embedded_pages:
+                _require_str(embedded_pages.get(key), f"features.element.embedded_pages.{key}")
+        if "login_for_welcome" in embedded_pages:
+            _require_bool(embedded_pages.get("login_for_welcome"), "features.element.embedded_pages.login_for_welcome")
+
+    sso_redirect_options = element.get("sso_redirect_options")
+    if sso_redirect_options is not None:
+        if not isinstance(sso_redirect_options, dict):
+            raise ValueError("features.element.sso_redirect_options must be an object")
+        for key in ("immediate", "on_welcome_page", "on_login_page"):
+            if key in sso_redirect_options:
+                _require_bool(sso_redirect_options.get(key), f"features.element.sso_redirect_options.{key}")
+
+    integrations = element.get("integrations")
+    if integrations is not None:
+        if not isinstance(integrations, dict):
+            raise ValueError("features.element.integrations must be an object")
+        if "enabled" in integrations:
+            _require_bool(integrations.get("enabled"), "features.element.integrations.enabled")
+        if "ui_url" in integrations:
+            _require_str(integrations.get("ui_url"), "features.element.integrations.ui_url")
+        if "rest_url" in integrations:
+            _require_str(integrations.get("rest_url"), "features.element.integrations.rest_url")
+        if "widgets_urls" in integrations:
+            _require_str_list(integrations.get("widgets_urls"), "features.element.integrations.widgets_urls")
+
+    room_directory = element.get("room_directory")
+    if room_directory is not None:
+        if not isinstance(room_directory, dict):
+            raise ValueError("features.element.room_directory must be an object")
+        if "servers" in room_directory:
+            _require_str_list(room_directory.get("servers"), "features.element.room_directory.servers")
+
+    labs = element.get("labs")
+    if labs is not None:
+        if not isinstance(labs, dict):
+            raise ValueError("features.element.labs must be an object")
+        if "show_settings" in labs:
+            _require_bool(labs.get("show_settings"), "features.element.labs.show_settings")
+        if "features" in labs:
+            _require_bool_map(labs.get("features"), "features.element.labs.features")
+
+    ui_features = element.get("ui_features")
+    if ui_features is not None:
+        _require_bool_map(ui_features, "features.element.ui_features")
+
+    notice = element.get("notice")
+    if notice is not None:
+        if not isinstance(notice, dict):
+            raise ValueError("features.element.notice must be an object")
+        for key in ("title", "description"):
+            if key in notice:
+                _require_str(notice.get(key), f"features.element.notice.{key}")
+        if "show_once" in notice:
+            _require_bool(notice.get("show_once"), "features.element.notice.show_once")
+
+    terms_and_conditions = element.get("terms_and_conditions")
+    if terms_and_conditions is not None:
+        if not isinstance(terms_and_conditions, dict):
+            raise ValueError("features.element.terms_and_conditions must be an object")
+        if "links" in terms_and_conditions:
+            _require_link_list(terms_and_conditions.get("links"), "features.element.terms_and_conditions.links")
+
+    report_event = element.get("report_event")
+    if report_event is not None:
+        if not isinstance(report_event, dict):
+            raise ValueError("features.element.report_event must be an object")
+        if "admin_message_md" in report_event:
+            _require_str(report_event.get("admin_message_md"), "features.element.report_event.admin_message_md")
+
+    bug_report = element.get("bug_report")
+    if bug_report is not None:
+        if not isinstance(bug_report, dict):
+            raise ValueError("features.element.bug_report must be an object")
+        for key in ("endpoint_url", "existing_issues_url", "new_issue_url"):
+            if key in bug_report:
+                _require_str(bug_report.get(key), f"features.element.bug_report.{key}")
+        sentry = bug_report.get("sentry")
+        if sentry is not None:
+            if not isinstance(sentry, dict):
+                raise ValueError("features.element.bug_report.sentry must be an object")
+            if "dsn" in sentry:
+                _require_str(sentry.get("dsn"), "features.element.bug_report.sentry.dsn")
+            if "environment" in sentry:
+                _require_str(sentry.get("environment"), "features.element.bug_report.sentry.environment")
+
+    extra_config = element.get("extra_config")
+    if extra_config is not None and not isinstance(extra_config, dict):
+        raise ValueError("features.element.extra_config must be an object")
+
+
 def validate_config(config: dict) -> None:
     matrix = config.get("matrix")
     if not isinstance(matrix, dict):
@@ -136,6 +350,10 @@ def validate_config(config: dict) -> None:
         for section in ("element", "calls", "sso"):
             if section in features and not isinstance(features.get(section), dict):
                 raise ValueError(f"features.{section} must be an object")
+
+        element = features.get("element", {}) if isinstance(features.get("element", {}), dict) else {}
+        if element:
+            validate_element_config(element)
 
         sso = features.get("sso", {}) if isinstance(features.get("sso", {}), dict) else {}
         if "providers" in sso and not isinstance(sso.get("providers"), list):
@@ -406,6 +624,161 @@ def build_env_vars(config: dict, derived: dict, state_secrets: dict) -> dict:
     return env_vars
 
 
+def deep_merge(dst: dict, src: dict) -> dict:
+    for key, value in src.items():
+        if isinstance(value, dict) and isinstance(dst.get(key), dict):
+            deep_merge(dst[key], value)
+        else:
+            dst[key] = value
+    return dst
+
+
+def apply_element_ui_features(target: dict, ui_features_cfg: dict) -> None:
+    setting_defaults = target.setdefault("setting_defaults", {})
+    for key, value in ui_features_cfg.items():
+        mapped_key = ELEMENT_UI_FEATURES.get(key)
+        if mapped_key:
+            setting_defaults[mapped_key] = value
+
+
+def build_default_element_config(config: dict) -> dict:
+    matrix = config.get("matrix", {}) if isinstance(config.get("matrix", {}), dict) else {}
+    features = config.get("features", {}) if isinstance(config.get("features", {}), dict) else {}
+
+    matrix_domain = matrix.get("domain", "")
+    server_name = matrix.get("server_name") or extract_base_domain(matrix_domain)
+
+    return {
+        "default_server_config": {
+            "m.homeserver": {
+                "base_url": f"https://{matrix_domain}",
+                "server_name": server_name,
+            },
+            "m.identity_server": {
+                "base_url": "https://vector.im",
+            },
+        },
+        "disable_custom_urls": False,
+        "disable_guests": True,
+        "disable_login_language_selector": False,
+        "disable_3pid_login": False,
+        "brand": "Element",
+        "integrations_ui_url": SCALAR_INTEGRATIONS_UI_URL,
+        "integrations_rest_url": SCALAR_INTEGRATIONS_REST_URL,
+        "integrations_widgets_urls": list(SCALAR_INTEGRATIONS_WIDGETS_URLS),
+        "bug_report_endpoint_url": "https://element.io/bugreports/submit",
+        "map_style_url": "https://api.maptiler.com/maps/streets/style.json?key=fU3vlMsMn4Jb6dnEIFsx",
+        "show_labs_settings": False,
+        "room_directory": {
+            "servers": [server_name],
+        },
+        "default_federate": bool(features.get("federation_enabled", True)),
+    }
+
+
+def merge_element_customizations(base: dict, element_cfg: dict) -> dict:
+    merged = deep_merge({}, base)
+
+    for key in ELEMENT_STRING_KEYS | ELEMENT_BOOL_KEYS:
+        if key in element_cfg:
+            merged[key] = element_cfg[key]
+
+    branding = element_cfg.get("branding") if isinstance(element_cfg.get("branding"), dict) else None
+    if branding:
+        branding_target = merged.setdefault("branding", {})
+        for key in ("auth_header_logo_url", "welcome_background_url", "logo_link_url", "auth_footer_links"):
+            if key in branding:
+                branding_target[key] = branding[key]
+
+    embedded_pages = element_cfg.get("embedded_pages") if isinstance(element_cfg.get("embedded_pages"), dict) else None
+    if embedded_pages:
+        embedded_target = merged.setdefault("embedded_pages", {})
+        for key in ("home_url", "welcome_url", "login_for_welcome"):
+            if key in embedded_pages:
+                embedded_target[key] = embedded_pages[key]
+
+    sso_redirect_options = (
+        element_cfg.get("sso_redirect_options") if isinstance(element_cfg.get("sso_redirect_options"), dict) else None
+    )
+    if sso_redirect_options:
+        redirect_target = merged.setdefault("sso_redirect_options", {})
+        for key in ("immediate", "on_welcome_page", "on_login_page"):
+            if key in sso_redirect_options:
+                redirect_target[key] = sso_redirect_options[key]
+
+    integrations = element_cfg.get("integrations") if isinstance(element_cfg.get("integrations"), dict) else None
+    if integrations:
+        if integrations.get("enabled") is False:
+            merged["integrations_ui_url"] = None
+            merged["integrations_rest_url"] = None
+            merged["integrations_widgets_urls"] = None
+        else:
+            if "ui_url" in integrations:
+                merged["integrations_ui_url"] = integrations["ui_url"]
+            if "rest_url" in integrations:
+                merged["integrations_rest_url"] = integrations["rest_url"]
+            if "widgets_urls" in integrations:
+                merged["integrations_widgets_urls"] = integrations["widgets_urls"]
+
+    room_directory = element_cfg.get("room_directory") if isinstance(element_cfg.get("room_directory"), dict) else None
+    if room_directory and "servers" in room_directory:
+        merged["room_directory"] = {"servers": room_directory["servers"]}
+
+    labs = element_cfg.get("labs") if isinstance(element_cfg.get("labs"), dict) else None
+    if labs:
+        if "show_settings" in labs:
+            merged["show_labs_settings"] = labs["show_settings"]
+        if "features" in labs:
+            merged["features"] = dict(labs["features"])
+
+    ui_features = element_cfg.get("ui_features") if isinstance(element_cfg.get("ui_features"), dict) else None
+    if ui_features:
+        apply_element_ui_features(merged, ui_features)
+
+    notice = element_cfg.get("notice") if isinstance(element_cfg.get("notice"), dict) else None
+    if notice:
+        merged["user_notice"] = dict(notice)
+
+    terms_and_conditions = (
+        element_cfg.get("terms_and_conditions")
+        if isinstance(element_cfg.get("terms_and_conditions"), dict)
+        else None
+    )
+    if terms_and_conditions and "links" in terms_and_conditions:
+        merged["terms_and_conditions_links"] = list(terms_and_conditions["links"])
+
+    report_event = element_cfg.get("report_event") if isinstance(element_cfg.get("report_event"), dict) else None
+    if report_event:
+        merged["report_event"] = dict(report_event)
+
+    bug_report = element_cfg.get("bug_report") if isinstance(element_cfg.get("bug_report"), dict) else None
+    if bug_report:
+        if "endpoint_url" in bug_report:
+            merged["bug_report_endpoint_url"] = bug_report["endpoint_url"]
+        if "existing_issues_url" in bug_report:
+            merged["existing_issues_url"] = bug_report["existing_issues_url"]
+        if "new_issue_url" in bug_report:
+            merged["new_issue_url"] = bug_report["new_issue_url"]
+        if "sentry" in bug_report:
+            merged["sentry"] = dict(bug_report["sentry"])
+
+    extra_config = element_cfg.get("extra_config") if isinstance(element_cfg.get("extra_config"), dict) else None
+    if extra_config:
+        deep_merge(merged, extra_config)
+
+    return merged
+
+
+def build_element_config(config: dict) -> dict:
+    features = config.get("features", {}) if isinstance(config.get("features", {}), dict) else {}
+    element_cfg = features.get("element", {}) if isinstance(features.get("element"), dict) else {}
+    return merge_element_customizations(build_default_element_config(config), element_cfg)
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, indent=4) + "\n")
+
+
 def write_env_file(ctx: ApplyContext, env_vars: dict) -> None:
     timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
@@ -463,7 +836,7 @@ def fail_if_unresolved_placeholder(path: Path) -> None:
         raise ValueError(f"{path} still contains unresolved template placeholders")
 
 
-def render_templates(ctx: ApplyContext, env_vars: dict) -> None:
+def render_templates(ctx: ApplyContext, config: dict, env_vars: dict) -> None:
     install_element = env_vars.get("INSTALL_ELEMENT", "true") == "true"
     caddy_template = (
         ctx.project_root / "caddy" / ("Caddyfile.template" if install_element else "Caddyfile-no-element.template")
@@ -479,10 +852,8 @@ def render_templates(ctx: ApplyContext, env_vars: dict) -> None:
     fail_if_unresolved_placeholder(synapse_dest)
 
     if install_element:
-        element_template = ctx.project_root / "modules" / "core" / "element" / "config.json.template"
         element_dest = ctx.project_root / "modules" / "core" / "element" / "config.json"
-        render_template(element_template, element_dest, env_vars)
-        fail_if_unresolved_placeholder(element_dest)
+        write_json(element_dest, build_element_config(config))
 
     coturn_template = ctx.project_root / "modules" / "calls" / "coturn" / "turnserver.conf.template"
     coturn_dest = ctx.project_root / "modules" / "calls" / "coturn" / "turnserver.conf"
@@ -718,7 +1089,7 @@ def apply_configuration(
     saved = create_or_update_secrets(ctx, existing, rotate=rotate_secrets)
     env_vars = build_env_vars(config, derived, saved)
     write_env_file(ctx, env_vars)
-    render_templates(ctx, env_vars)
+    render_templates(ctx, config, env_vars)
     reconcile_module_state(ctx, config)
     if reconcile_modules:
         reconcile_module_bootstrap(ctx, config)

@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from io import StringIO
@@ -136,6 +137,28 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
+    def test_validate_config_rejects_invalid_element_footer_links(self):
+        cfg = self.sample_config()
+        cfg["features"]["element"]["branding"] = {
+            "auth_footer_links": [{"text": "FAQ"}],
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_invalid_element_labs_features(self):
+        cfg = self.sample_config()
+        cfg["features"]["element"]["labs"] = {
+            "features": {"feature_video_rooms": "yes"},
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_invalid_element_extra_config_shape(self):
+        cfg = self.sample_config()
+        cfg["features"]["element"]["extra_config"] = ["bad"]
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
     def test_validate_config_rejects_password_login_disabled_without_sso(self):
         cfg = self.sample_config()
         cfg["features"]["local_login_enabled"] = False
@@ -252,6 +275,119 @@ class ApplyTests(unittest.TestCase):
         modules_state = yaml.safe_load((self.root / ".matrix-easy-deploy/modules.yaml").read_text())
         self.assertIn("hookshot", modules_state)
         self.assertFalse(modules_state["hookshot"]["enabled"])
+
+        element = json.loads((self.root / "modules/core/element/config.json").read_text())
+        self.assertEqual(element["brand"], "Element")
+        self.assertEqual(element["default_server_config"]["m.homeserver"]["base_url"], "https://matrix.example.com")
+        self.assertEqual(element["room_directory"]["servers"], ["example.com"])
+        self.assertEqual(element["integrations_ui_url"], "https://scalar.vector.im/")
+
+    def test_apply_configuration_renders_element_customizations(self):
+        cfg = self.sample_config()
+        cfg["features"]["element"].update(
+            {
+                "brand": "Acme Chat",
+                "default_theme": "dark",
+                "disable_custom_urls": True,
+                "help_url": "https://docs.example.com/chat",
+                "branding": {
+                    "auth_header_logo_url": "https://assets.example.com/logo.svg",
+                    "welcome_background_url": [
+                        "https://assets.example.com/bg-1.jpg",
+                        "https://assets.example.com/bg-2.jpg",
+                    ],
+                    "auth_footer_links": [
+                        {"text": "FAQ", "url": "https://example.com/faq"},
+                    ],
+                },
+                "embedded_pages": {
+                    "home_url": "https://assets.example.com/home.html",
+                    "welcome_url": "https://assets.example.com/welcome.html",
+                    "login_for_welcome": True,
+                },
+                "integrations": {
+                    "enabled": False,
+                },
+                "labs": {
+                    "show_settings": True,
+                    "features": {"feature_video_rooms": True},
+                },
+                "ui_features": {
+                    "registration": False,
+                    "password_reset": False,
+                    "create_public_rooms": False,
+                },
+                "notice": {
+                    "title": "Maintenance",
+                    "description": "Platform will move next month.",
+                    "show_once": True,
+                },
+                "terms_and_conditions": {
+                    "links": [{"text": "Policy", "url": "https://example.com/policy"}],
+                },
+                "report_event": {
+                    "admin_message_md": "Please review policy before reporting.",
+                },
+                "bug_report": {
+                    "endpoint_url": "local",
+                    "existing_issues_url": "https://example.com/issues",
+                    "new_issue_url": "https://example.com/issues/new",
+                    "sentry": {
+                        "dsn": "https://sentry.example.com/1",
+                        "environment": "prod",
+                    },
+                },
+                "extra_config": {
+                    "brand": "Acme Override",
+                    "custom_translations_url": "https://assets.example.com/i18n.json",
+                },
+            }
+        )
+        self.write_config(cfg)
+        ctx = apply.ApplyContext(self.root)
+
+        apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        element = json.loads((self.root / "modules/core/element/config.json").read_text())
+        self.assertEqual(element["brand"], "Acme Override")
+        self.assertEqual(element["default_theme"], "dark")
+        self.assertTrue(element["disable_custom_urls"])
+        self.assertEqual(element["help_url"], "https://docs.example.com/chat")
+        self.assertEqual(element["branding"]["auth_header_logo_url"], "https://assets.example.com/logo.svg")
+        self.assertEqual(len(element["branding"]["welcome_background_url"]), 2)
+        self.assertEqual(element["embedded_pages"]["home_url"], "https://assets.example.com/home.html")
+        self.assertTrue(element["embedded_pages"]["login_for_welcome"])
+        self.assertIsNone(element["integrations_ui_url"])
+        self.assertIsNone(element["integrations_rest_url"])
+        self.assertIsNone(element["integrations_widgets_urls"])
+        self.assertTrue(element["show_labs_settings"])
+        self.assertEqual(element["features"], {"feature_video_rooms": True})
+        self.assertFalse(element["setting_defaults"]["UIFeature.registration"])
+        self.assertFalse(element["setting_defaults"]["UIFeature.passwordReset"])
+        self.assertFalse(element["setting_defaults"]["UIFeature.allowCreatingPublicRooms"])
+        self.assertEqual(element["user_notice"]["title"], "Maintenance")
+        self.assertEqual(element["terms_and_conditions_links"][0]["text"], "Policy")
+        self.assertEqual(element["report_event"]["admin_message_md"], "Please review policy before reporting.")
+        self.assertEqual(element["bug_report_endpoint_url"], "local")
+        self.assertEqual(element["sentry"]["environment"], "prod")
+        self.assertEqual(element["custom_translations_url"], "https://assets.example.com/i18n.json")
+
+    def test_apply_configuration_renders_custom_integrations_override(self):
+        cfg = self.sample_config()
+        cfg["features"]["element"]["integrations"] = {
+            "ui_url": "https://scalar.example.com/",
+            "rest_url": "https://scalar.example.com/api",
+            "widgets_urls": ["https://scalar.example.com/widgets"],
+        }
+        self.write_config(cfg)
+        ctx = apply.ApplyContext(self.root)
+
+        apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        element = json.loads((self.root / "modules/core/element/config.json").read_text())
+        self.assertEqual(element["integrations_ui_url"], "https://scalar.example.com/")
+        self.assertEqual(element["integrations_rest_url"], "https://scalar.example.com/api")
+        self.assertEqual(element["integrations_widgets_urls"], ["https://scalar.example.com/widgets"])
 
     def test_apply_configuration_renders_sso_only_password_setting(self):
         cfg = self.sample_config()
