@@ -400,7 +400,7 @@ The wizard will ask you:
 ### Configuration model
 
 - `deploy.yaml` is the operator-owned source of truth.
-- `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered templates, module state metadata).
+- `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered service configs, module state metadata).
 - Re-running `bash apply.sh` is idempotent by default: existing generated secrets are re-used.
 - `features.local_login_enabled: false` disables Synapse password login for SSO-only deployments. `bash apply.sh` rejects this unless SSO is enabled and at least one OIDC provider is configured.
 - Enabled modules converge deterministically: if required generated files are missing, setup runs non-interactively.
@@ -417,6 +417,88 @@ bash apply.sh --rotate-secrets
 ```
 
 > `--rotate-secrets` is destructive for existing deployments unless you plan migration/restart carefully.
+
+### Element Web customization
+
+`features.element` exposes high-value org-facing Element Web options directly in `deploy.yaml`. `bash apply.sh` now writes `modules/core/element/config.json` from that YAML, so nested branding, support links, integrations, and home-page settings render as real JSON instead of string-substituted fragments.
+
+Use first-class keys for common org needs:
+
+- branding and login assets: `brand`, `default_theme`, `branding.*`
+- login UX and SSO entry flow: `disable_custom_urls`, `disable_guests`, `disable_3pid_login`, `disable_login_language_selector`, `sso_redirect_options`
+- support and compliance links: `help_url`, `help_encryption_url`, `help_key_storage_url`, `notice`, `terms_and_conditions`, `report_event`
+- integrations and room discovery: `integrations`, `room_directory`
+- feature gating: `labs`, `ui_features`
+- advanced escape hatch: `extra_config` deep-merges last and wins on conflicts
+
+Unset keys keep the repo defaults. Home and welcome customization is URL-only in this phase: host the HTML yourself and point Element at it.
+
+Branded deployment example:
+
+```yaml
+features:
+  element:
+    brand: Acme Chat
+    default_theme: dark
+    help_url: https://docs.acme.example/chat
+    branding:
+      auth_header_logo_url: https://assets.acme.example/element/logo.svg
+      welcome_background_url:
+        - https://assets.acme.example/element/bg-1.jpg
+        - https://assets.acme.example/element/bg-2.jpg
+      auth_footer_links:
+        - text: Support
+          url: https://acme.example/support
+        - text: Status
+          url: https://status.acme.example/
+    notice:
+      title: Usage policy
+      description: Company systems only. Activity may be reviewed.
+      show_once: true
+    terms_and_conditions:
+      links:
+        - text: Acceptable use
+          url: https://acme.example/aup
+```
+
+SSO-first UX example:
+
+```yaml
+features:
+  local_login_enabled: false
+  sso:
+    enabled: true
+    providers:
+      - name: Google
+        issuer: https://accounts.google.com/
+        client_id: your-client-id
+        client_secret: your-client-secret
+  element:
+    disable_custom_urls: true
+    ui_features:
+      registration: false
+      password_reset: false
+    sso_redirect_options:
+      on_welcome_page: true
+      on_login_page: true
+```
+
+Custom home and welcome pages example:
+
+```yaml
+features:
+  element:
+    embedded_pages:
+      home_url: https://assets.example.com/element/home.html
+      welcome_url: https://assets.example.com/element/welcome.html
+      login_for_welcome: false
+```
+
+Notes:
+
+- For Element Desktop, your hosted `home.html` or `welcome.html` may need permissive CORS headers.
+- To disable Scalar integrations entirely, set `features.element.integrations.enabled: false`.
+- For less common Element settings, use `features.element.extra_config` to merge raw config into the generated JSON.
 
 ### Important: `MATRIX_DOMAIN` vs `SERVER_NAME`
 
