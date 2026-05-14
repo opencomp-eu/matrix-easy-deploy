@@ -42,7 +42,30 @@ collect_missing_dependencies() {
         fi
     done < <(required_dependency_keys)
 
-    printf -v "$output_var" '%s' "${missing[*]:-}"
+    local joined_missing=""
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        local old_ifs="$IFS"
+        IFS=' '
+        joined_missing="${missing[*]}"
+        IFS="$old_ifs"
+    fi
+
+    printf -v "$output_var" '%s' "$joined_missing"
+}
+
+join_words() {
+    local output_var="$1"
+    shift
+
+    local joined=""
+    if [[ $# -gt 0 ]]; then
+        local old_ifs="$IFS"
+        IFS=' '
+        joined="$*"
+        IFS="$old_ifs"
+    fi
+
+    printf -v "$output_var" '%s' "$joined"
 }
 
 detect_supported_package_manager() {
@@ -304,9 +327,16 @@ check_dependencies() {
 
         echo
         if [[ ${#apt_packages[@]} -gt 0 ]]; then
-            echo "  On Ubuntu/Debian:  sudo apt-get install -y ${apt_packages[*]}"
-            echo "  On Fedora/RHEL:    sudo dnf install -y ${dnf_packages[*]}"
-            echo "  On Arch Linux:     sudo pacman -Sy --noconfirm --needed ${pacman_packages[*]}"
+            local apt_install_packages
+            local dnf_install_packages
+            local pacman_install_packages
+            join_words apt_install_packages "${apt_packages[@]}"
+            join_words dnf_install_packages "${dnf_packages[@]}"
+            join_words pacman_install_packages "${pacman_packages[@]}"
+
+            echo "  On Ubuntu/Debian:  sudo apt-get install -y ${apt_install_packages}"
+            echo "  On Fedora/RHEL:    sudo dnf install -y ${dnf_install_packages}"
+            echo "  On Arch Linux:     sudo pacman -Sy --noconfirm --needed ${pacman_install_packages}"
         fi
         if docker_install_required; then
             echo "  For Docker/Compose: curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh ./get-docker.sh"
