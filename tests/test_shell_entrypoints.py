@@ -111,6 +111,26 @@ class ShellEntrypointTests(unittest.TestCase):
                 fake_bin / "apt-get",
                 "#!/bin/bash\n"
                 "echo apt-get:$* >> \"$EVENTS\"\n"
+                "if [[ \"${1:-}\" == \"install\" ]]; then\n"
+                "  for package in \"$@\"; do\n"
+                "    case \"$package\" in\n"
+                "      borgbackup)\n"
+                "        /bin/cat > \"$FAKE_BIN/borg\" <<'EOF'\n"
+                "#!/bin/bash\n"
+                "exit 0\n"
+                "EOF\n"
+                "        chmod +x \"$FAKE_BIN/borg\"\n"
+                "        ;;\n"
+                "      borgmatic)\n"
+                "        /bin/cat > \"$FAKE_BIN/borgmatic\" <<'EOF'\n"
+                "#!/bin/bash\n"
+                "exit 0\n"
+                "EOF\n"
+                "        chmod +x \"$FAKE_BIN/borgmatic\"\n"
+                "        ;;\n"
+                "    esac\n"
+                "  done\n"
+                "fi\n"
                 "exit 0\n",
             )
             self._write_executable(
@@ -157,6 +177,7 @@ class ShellEntrypointTests(unittest.TestCase):
             env["PATH"] = str(fake_bin)
             env["EVENTS"] = str(events)
             env["STATE"] = str(state_dir)
+            env["FAKE_BIN"] = str(fake_bin)
 
             result = subprocess.run(
                 ["/bin/bash", "ensure_dependencies.sh"],
@@ -169,7 +190,8 @@ class ShellEntrypointTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             lines = events.read_text().splitlines()
-            self.assertFalse(any(line.startswith("apt-get:install") for line in lines))
+            self.assertTrue(any(line == "apt-get:update" for line in lines))
+            self.assertTrue(any(line == "apt-get:install -y borgbackup borgmatic" for line in lines))
             self.assertTrue(any(line.startswith("curl:-fsSL https://get.docker.com -o ") for line in lines))
             self.assertTrue(any(line.startswith("docker-script:") for line in lines))
             self.assertIn("systemctl:enable --now docker", lines)
