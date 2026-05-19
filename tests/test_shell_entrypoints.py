@@ -11,6 +11,7 @@ class ShellEntrypointTests(unittest.TestCase):
         self.repo_root = Path(__file__).resolve().parents[1]
         self.apply_script = self.repo_root / "apply.sh"
         self.ensure_dependencies_script = self.repo_root / "ensure_dependencies.sh"
+        self.create_user_script = self.repo_root / "scripts/create-user.sh"
         self.lib_script = self.repo_root / "scripts/lib.sh"
         self.dependencies_script = self.repo_root / "scripts/setup/dependencies.sh"
 
@@ -196,6 +197,68 @@ class ShellEntrypointTests(unittest.TestCase):
             self.assertTrue(any(line.startswith("docker-script:") for line in lines))
             self.assertIn("systemctl:enable --now docker", lines)
             self.assertIn("All dependencies satisfied.", result.stdout)
+
+    def test_create_user_supports_noninteractive_flags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "events.log"
+
+            self._copy_executable(self.create_user_script, root / "scripts/create-user.sh")
+            self._copy_executable(self.lib_script, root / "scripts/lib.sh")
+            (root / ".env").write_text("SERVER_NAME=example.com\n")
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            self._write_executable(
+                fake_bin / "docker",
+                "#!/usr/bin/env bash\n"
+                "echo docker:$* >> \"$EVENTS\"\n"
+                "if [[ \"${1:-}\" == \"inspect\" ]]; then\n"
+                "  if [[ \"${2:-}\" == \"--format={{.State.Running}}\" ]]; then\n"
+                "    echo true\n"
+                "    exit 0\n"
+                "  fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"${1:-}\" == \"exec\" ]]; then\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+            )
+            self._write_executable(fake_bin / "openssl", "#!/usr/bin/env bash\nexit 0\n")
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["EVENTS"] = str(events)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/create-user.sh",
+                    "--username",
+                    "alice",
+                    "--password",
+                    "averylongsecret",
+                    "--admin",
+                    "--yes",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            lines = events.read_text().splitlines()
+            self.assertIn("docker:inspect matrix_synapse", lines)
+            self.assertIn("docker:inspect --format={{.State.Running}} matrix_synapse", lines)
+            self.assertIn(
+                "docker:exec -i matrix_synapse register_new_matrix_user -c /data/homeserver.yaml -u alice -p averylongsecret -a http://localhost:8008",
+                lines,
+            )
+            self.assertIn("@alice:example.com", result.stdout)
+            self.assertIn("User created successfully.", result.stdout)
 
 
 if __name__ == "__main__":

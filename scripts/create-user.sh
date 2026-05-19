@@ -9,6 +9,76 @@ source "${SCRIPT_DIR}/lib.sh"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DEPLOY_ENV="${REPO_DIR}/.env"
 SYNAPSE_CONTAINER="matrix_synapse"
+NONINTERACTIVE="false"
+ASSUME_YES="false"
+USERNAME=""
+PASSWORD=""
+PASSWORD_SOURCE=""
+IS_ADMIN="false"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  bash scripts/create-user.sh
+  bash scripts/create-user.sh --username alice [--password 'long-secret'] [--admin] [--yes]
+
+Options:
+  --username VALUE       Localpart for the new Matrix user.
+  --password VALUE       Password to assign. Must be at least 12 characters.
+  --generate-password    Force generated password output in non-interactive mode.
+  --admin                Grant Synapse admin privileges.
+  --no-admin             Explicitly create a non-admin user.
+  --yes                  Skip confirmation prompts in interactive mode.
+  -h, --help             Show this help text.
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --username)
+                [[ $# -ge 2 ]] || die "Missing value for --username"
+                USERNAME="$2"
+                NONINTERACTIVE="true"
+                shift 2
+                ;;
+            --password)
+                [[ $# -ge 2 ]] || die "Missing value for --password"
+                PASSWORD="$2"
+                PASSWORD_SOURCE="custom"
+                NONINTERACTIVE="true"
+                shift 2
+                ;;
+            --generate-password)
+                [[ -z "$PASSWORD" ]] || die "Cannot combine --generate-password with --password"
+                PASSWORD_SOURCE="generated"
+                NONINTERACTIVE="true"
+                shift
+                ;;
+            --admin)
+                IS_ADMIN="true"
+                NONINTERACTIVE="true"
+                shift
+                ;;
+            --no-admin)
+                IS_ADMIN="false"
+                NONINTERACTIVE="true"
+                shift
+                ;;
+            --yes)
+                ASSUME_YES="true"
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                die "Unknown argument: $1"
+                ;;
+        esac
+    done
+}
 
 print_banner() {
     echo
@@ -88,7 +158,22 @@ prompt_admin_flag() {
     fi
 }
 
-confirm_summary() {
+validate_noninteractive_inputs() {
+    [[ -n "$USERNAME" ]] || die "--username is required in non-interactive mode"
+
+    if [[ -n "$PASSWORD" ]]; then
+        if [[ ${#PASSWORD} -lt 12 ]]; then
+            die "Password must be at least 12 characters."
+        fi
+        PASSWORD_SOURCE="custom"
+        return
+    fi
+
+    PASSWORD="$(generate_temp_password)"
+    PASSWORD_SOURCE="generated"
+}
+
+show_summary() {
     echo
     echo -e "${BOLD}Summary${RESET}"
     echo -e "─────────────────────────────────────────────────────"
@@ -96,7 +181,16 @@ confirm_summary() {
     echo -e "Matrix ID      : ${CYAN}@${USERNAME}:${SERVER_NAME}${RESET}"
     echo -e "Password mode  : ${CYAN}${PASSWORD_SOURCE}${RESET}"
     echo -e "Admin          : ${CYAN}${IS_ADMIN}${RESET}"
+}
+
+confirm_summary() {
+    show_summary
     echo
+
+    if [[ "$ASSUME_YES" == "true" ]]; then
+        return
+    fi
+
     ask_yn CONFIRM "Create this user now?" "y"
     [[ "$CONFIRM" == "y" ]] || die "Aborted."
 }
@@ -139,13 +233,24 @@ create_user() {
 }
 
 main() {
-    print_banner
+    parse_args "$@"
+
+    if [[ "$NONINTERACTIVE" != "true" ]]; then
+        print_banner
+    fi
+
     read_server_name
     check_dependencies
     check_synapse_container
-    prompt_username
-    prompt_password
-    prompt_admin_flag
+
+    if [[ "$NONINTERACTIVE" == "true" ]]; then
+        validate_noninteractive_inputs
+    else
+        prompt_username
+        prompt_password
+        prompt_admin_flag
+    fi
+
     confirm_summary
     create_user
 }

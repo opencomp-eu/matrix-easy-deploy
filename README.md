@@ -614,6 +614,12 @@ Use the helper to create approved accounts:
 bash scripts/create-user.sh
 ```
 
+For unattended automation, you can also create a user non-interactively:
+
+```bash
+bash scripts/create-user.sh --username alice --password 'replace-with-a-long-random-password' --yes
+```
+
 You can disable SSO in the wizard if you only want local Matrix passwords.
 If password login is disabled, pre-created local accounts still exist in Synapse, but sign-in must still happen through configured SSO providers.
 
@@ -727,6 +733,12 @@ bash scripts/create-user.sh
 ```
 
 The helper asks for a username, generates a secure temporary password by default (or lets you set a custom one), and can optionally grant admin privileges.
+
+For non-interactive use, pass flags instead:
+
+```bash
+bash scripts/create-user.sh --username alice --password 'replace-with-a-long-random-password' --admin --yes
+```
 
 **Stop all services** (data stays intact in Docker volumes)
 ```bash
