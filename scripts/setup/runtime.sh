@@ -95,11 +95,10 @@ setup_admin() {
             warn "Synapse hasn't responded after $((max * 5))s."
             warn "It may still be starting. You can create the admin user later:"
             echo
-            echo -e "  ${CYAN}bash scripts/create-admin.sh \\\"
-            echo -e "      https://${MATRIX_DOMAIN} \\\"
-            echo -e "      <registration_shared_secret> \\\"
-            echo -e "      ${ADMIN_USERNAME} \\\"
-            echo -e "      <your_password>${RESET}"
+            echo -e "  ${CYAN}bash scripts/create-account.sh \\\" 
+            echo -e "      --username ${ADMIN_USERNAME} \\\" 
+            echo -e "      --password <your_password> \\\" 
+            echo -e "      --admin --yes${RESET}"
             echo
             return 0
         fi
@@ -135,11 +134,13 @@ setup_admin() {
     fi
 
     info "Creating admin user '@${ADMIN_USERNAME}:${SERVER_NAME}'…"
-    bash "${SCRIPT_DIR}/scripts/create-admin.sh" \
-        "https://${MATRIX_DOMAIN}" \
-        "${REGISTRATION_SHARED_SECRET}" \
-        "${ADMIN_USERNAME}" \
-        "${_admin_password}"
+    bash "${SCRIPT_DIR}/scripts/create-account.sh" \
+        --base-url "https://${MATRIX_DOMAIN}" \
+        --shared-secret "${REGISTRATION_SHARED_SECRET}" \
+        --username "${ADMIN_USERNAME}" \
+        --password "${_admin_password}" \
+        --admin \
+        --yes
 
     unset _admin_password
 }

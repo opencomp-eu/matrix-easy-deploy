@@ -8,19 +8,22 @@ source "${SCRIPT_DIR}/lib.sh"
 
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DEPLOY_ENV="${REPO_DIR}/.env"
-SYNAPSE_CONTAINER="matrix_synapse"
+
 NONINTERACTIVE="false"
 ASSUME_YES="false"
 USERNAME=""
 PASSWORD=""
 PASSWORD_SOURCE=""
 IS_ADMIN="false"
+BASE_URL=""
+SHARED_SECRET=""
+SERVER_NAME=""
 
 usage() {
     cat <<'EOF'
 Usage:
-  bash scripts/create-user.sh
-  bash scripts/create-user.sh --username alice [--password 'long-secret'] [--admin] [--yes]
+  bash scripts/create-account.sh
+  bash scripts/create-account.sh --username alice [--password 'long-secret'] [--admin] [--yes]
 
 Options:
   --username VALUE       Localpart for the new Matrix user.
@@ -28,7 +31,9 @@ Options:
   --generate-password    Force generated password output in non-interactive mode.
   --admin                Grant Synapse admin privileges.
   --no-admin             Explicitly create a non-admin user.
-  --yes                  Skip confirmation prompts in interactive mode.
+  --yes                  Skip confirmation prompts.
+  --base-url VALUE       Override Synapse base URL instead of reading MATRIX_DOMAIN from .env.
+  --shared-secret VALUE  Override REGISTRATION_SHARED_SECRET instead of reading .env.
   -h, --help             Show this help text.
 EOF
 }
@@ -69,6 +74,16 @@ parse_args() {
                 ASSUME_YES="true"
                 shift
                 ;;
+            --base-url)
+                [[ $# -ge 2 ]] || die "Missing value for --base-url"
+                BASE_URL="$2"
+                shift 2
+                ;;
+            --shared-secret)
+                [[ $# -ge 2 ]] || die "Missing value for --shared-secret"
+                SHARED_SECRET="$2"
+                shift 2
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -82,33 +97,40 @@ parse_args() {
 
 print_banner() {
     echo
-    echo -e "${BOLD}Create Matrix user${RESET}"
+    echo -e "${BOLD}Create Matrix account${RESET}"
     echo -e "─────────────────────────────────────────────────────"
     echo -e "Press Enter to accept defaults.\n"
 }
 
-read_server_name() {
+read_deploy_env() {
     if [[ -f "$DEPLOY_ENV" ]]; then
-        SERVER_NAME="$(sed -n 's/^SERVER_NAME=//p' "$DEPLOY_ENV" | head -n1)"
+        if [[ -z "$SERVER_NAME" ]]; then
+            SERVER_NAME="$(sed -n 's/^SERVER_NAME=//p' "$DEPLOY_ENV" | head -n1)"
+        fi
+        if [[ -z "$BASE_URL" ]]; then
+            local matrix_domain
+            matrix_domain="$(sed -n 's/^MATRIX_DOMAIN=//p' "$DEPLOY_ENV" | head -n1)"
+            if [[ -n "$matrix_domain" ]]; then
+                BASE_URL="https://${matrix_domain}"
+            fi
+        fi
+        if [[ -z "$SHARED_SECRET" ]]; then
+            SHARED_SECRET="$(sed -n 's/^REGISTRATION_SHARED_SECRET=//p' "$DEPLOY_ENV" | head -n1)"
+        fi
     fi
+
     SERVER_NAME="${SERVER_NAME:-unknown-server-name}"
 }
 
 check_dependencies() {
-    command -v docker &>/dev/null || die "Docker is required."
+    command -v curl &>/dev/null || die "curl is required."
+    command -v python3 &>/dev/null || die "python3 is required."
     command -v openssl &>/dev/null || die "openssl is required."
 }
 
-check_synapse_container() {
-    if ! docker inspect "$SYNAPSE_CONTAINER" &>/dev/null; then
-        die "Container '$SYNAPSE_CONTAINER' not found. Start services first with: bash start.sh"
-    fi
-
-    local running
-    running="$(docker inspect --format='{{.State.Running}}' "$SYNAPSE_CONTAINER" 2>/dev/null || echo "false")"
-    if [[ "$running" != "true" ]]; then
-        die "Container '$SYNAPSE_CONTAINER' is not running. Start services first with: bash start.sh"
-    fi
+ensure_registration_config() {
+    [[ -n "$BASE_URL" ]] || die "Could not determine Synapse base URL. Pass --base-url or ensure MATRIX_DOMAIN exists in .env."
+    [[ -n "$SHARED_SECRET" ]] || die "Could not determine REGISTRATION_SHARED_SECRET. Pass --shared-secret or ensure it exists in .env."
 }
 
 generate_temp_password() {
@@ -181,6 +203,7 @@ show_summary() {
     echo -e "Matrix ID      : ${CYAN}@${USERNAME}:${SERVER_NAME}${RESET}"
     echo -e "Password mode  : ${CYAN}${PASSWORD_SOURCE}${RESET}"
     echo -e "Admin          : ${CYAN}${IS_ADMIN}${RESET}"
+    echo -e "Homeserver     : ${CYAN}${BASE_URL}${RESET}"
 }
 
 confirm_summary() {
@@ -191,38 +214,130 @@ confirm_summary() {
         return
     fi
 
-    ask_yn CONFIRM "Create this user now?" "y"
+    ask_yn CONFIRM "Create this account now?" "y"
     [[ "$CONFIRM" == "y" ]] || die "Aborted."
 }
 
-create_user() {
-    local cmd=(
-        docker exec -i "$SYNAPSE_CONTAINER"
-        register_new_matrix_user
-        -c /data/homeserver.yaml
-        -u "$USERNAME"
-        -p "$PASSWORD"
-    )
+fetch_nonce() {
+    local nonce_response nonce
+
+    info "Fetching registration nonce from Synapse…"
+    nonce_response="$(curl -fsSL "${BASE_URL}/_synapse/admin/v1/register")"
+    nonce="$(echo "$nonce_response" | python3 -c "import sys,json; print(json.load(sys.stdin)['nonce'])")"
+
+    [[ -n "$nonce" ]] || die "Could not retrieve nonce from Synapse. Is the server running and reachable?"
+    printf '%s' "$nonce"
+}
+
+compute_mac() {
+    local nonce="$1"
+    local admin_mode="notadmin"
 
     if [[ "$IS_ADMIN" == "true" ]]; then
-        cmd+=( -a )
+        admin_mode="admin"
     fi
 
-    cmd+=( http://localhost:8008 )
+    python3 - <<PYEOF
+import hmac, hashlib
 
-    set +e
-    local output
-    output="$("${cmd[@]}" 2>&1)"
-    local rc=$?
-    set -e
+nonce = ${nonce@Q}
+username = ${USERNAME@Q}
+password = ${PASSWORD@Q}
+secret = ${SHARED_SECRET@Q}
+admin_mode = ${admin_mode@Q}
 
-    if [[ $rc -ne 0 ]]; then
-        error "Failed to create user."
-        echo "$output"
-        exit $rc
+mac = hmac.new(
+    secret.encode("utf-8"),
+    b"\x00".join([
+        nonce.encode("utf-8"),
+        username.encode("utf-8"),
+        password.encode("utf-8"),
+        admin_mode.encode("utf-8"),
+    ]),
+    hashlib.sha1,
+).hexdigest()
+
+print(mac)
+PYEOF
+}
+
+create_account() {
+    local nonce mac response_file http_status response_body err_info err_code err_msg
+    local admin_json="False"
+    local account_label="user"
+
+    if [[ "$IS_ADMIN" == "true" ]]; then
+        admin_json="True"
+        account_label="admin user"
     fi
 
-    success "User created successfully."
+    nonce="$(fetch_nonce)"
+
+    info "Computing registration MAC…"
+    mac="$(compute_mac "$nonce")"
+
+    info "Registering ${account_label} '${USERNAME}'…"
+
+    local json_payload
+    json_payload="$(python3 - <<PYEOF
+import json
+
+payload = {
+    "nonce": ${nonce@Q},
+    "username": ${USERNAME@Q},
+    "password": ${PASSWORD@Q},
+    "admin": ${admin_json},
+    "mac": ${mac@Q},
+}
+
+print(json.dumps(payload))
+PYEOF
+)"
+
+    response_file="$(mktemp)"
+    trap 'rm -f "$response_file"' EXIT
+
+    http_status="$(curl -sS -o "$response_file" -w "%{http_code}" \
+        -X POST "${BASE_URL}/_synapse/admin/v1/register" \
+        -H "Content-Type: application/json" \
+        --data-binary @- <<< "$json_payload")"
+
+    unset json_payload
+
+    if [[ "$http_status" == "200" ]] || [[ "$http_status" == "201" ]]; then
+        success "Account '@${USERNAME}:${SERVER_NAME}' created successfully."
+    else
+        response_body="$(cat "$response_file")"
+        err_info="$(python3 - <<'PYEOF' "$response_body"
+import json
+import sys
+
+raw = sys.argv[1]
+try:
+    data = json.loads(raw) if raw else {}
+except Exception:
+    data = {}
+
+errcode = data.get("errcode", "") if isinstance(data, dict) else ""
+error = data.get("error", "") if isinstance(data, dict) else ""
+print(f"{errcode}\t{error}")
+PYEOF
+)"
+
+        err_code="${err_info%%$'\t'*}"
+        err_msg="${err_info#*$'\t'}"
+
+        if [[ "$http_status" == "400" && "$err_code" == "M_USER_IN_USE" ]]; then
+            warn "User '${USERNAME}' already exists. Skipping."
+            return
+        fi
+
+        if [[ -n "$err_code" || -n "$err_msg" ]]; then
+            die "Failed to create account (HTTP ${http_status}, ${err_code}: ${err_msg})."
+        fi
+        die "Failed to create account (HTTP ${http_status}). Response: ${response_body}"
+    fi
+
     echo
     echo -e "  ${BOLD}Login details${RESET}"
     echo -e "    Matrix ID:  ${CYAN}@${USERNAME}:${SERVER_NAME}${RESET}"
@@ -239,9 +354,9 @@ main() {
         print_banner
     fi
 
-    read_server_name
+    read_deploy_env
     check_dependencies
-    check_synapse_container
+    ensure_registration_config
 
     if [[ "$NONINTERACTIVE" == "true" ]]; then
         validate_noninteractive_inputs
@@ -252,7 +367,7 @@ main() {
     fi
 
     confirm_summary
-    create_user
+    create_account
 }
 
 main "$@"
