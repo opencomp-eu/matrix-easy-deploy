@@ -106,6 +106,10 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(derived["OIDC_PROVIDER_COUNT"], "1")
         self.assertEqual(derived["OIDC_PROVIDER_NAMES"], "Google")
         self.assertIn('"idp_name":"Google"', derived["OIDC_PROVIDERS_JSON"])
+        self.assertIn('"allow_existing_users":true', derived["OIDC_PROVIDERS_JSON"])
+        self.assertIn('"localpart_template":"{{ user.preferred_username if user.preferred_username else user.email|localpart_from_email }}"', derived["OIDC_PROVIDERS_JSON"])
+        self.assertIn('"display_name_template":"{{ user.name }}"', derived["OIDC_PROVIDERS_JSON"])
+        self.assertIn('"email_template":"{{ user.email }}"', derived["OIDC_PROVIDERS_JSON"])
 
     def test_derive_values_password_login_disabled(self):
         cfg = self.sample_config()

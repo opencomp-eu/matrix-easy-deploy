@@ -458,6 +458,15 @@ def build_oidc_providers_json(providers: list) -> str:
     for provider in providers:
         if not isinstance(provider, dict):
             continue
+        mapping_config = {
+            "subject_claim": provider.get("subject_claim", "sub"),
+            "localpart_template": provider.get(
+                "localpart_template",
+                "{{ user.preferred_username if user.preferred_username else user.email|localpart_from_email }}",
+            ),
+            "display_name_template": provider.get("display_name_template", "{{ user.name }}"),
+            "email_template": provider.get("email_template", "{{ user.email }}"),
+        }
         normalized.append(
             {
                 "idp_id": provider.get("id", provider.get("name", "oidc")).lower().replace(" ", "-"),
@@ -469,6 +478,7 @@ def build_oidc_providers_json(providers: list) -> str:
                 "allow_existing_users": True,
                 "enable_registration": bool(provider.get("allow_registration", True)),
                 "attribute_requirements": provider.get("attribute_requirements", []),
+                "user_mapping_provider": {"config": mapping_config},
             }
         )
     return json.dumps(normalized, separators=(",", ":"))

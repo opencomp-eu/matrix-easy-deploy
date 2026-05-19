@@ -531,6 +531,8 @@ features:
 
 This renders Synapse `password_config.enabled: false`. Local Matrix password login is disabled, so users must authenticate through one of the configured SSO providers.
 
+This repo also enables `allow_existing_users: true` for OIDC providers and uses a deterministic default MXID mapping: Synapse will try `preferred_username` first, then fall back to the localpart of `email`. That makes pre-created accounts and SSO-first logins line up more predictably.
+
 During setup (default: enabled), provide:
 - Provider display name (for login UI)
 - OIDC issuer URL (Google: `https://accounts.google.com/`)
@@ -607,6 +609,8 @@ Advantages:
 - Prevents surprise account creation from any user who can pass IdP login.
 - Gives tighter onboarding control (who gets access and when).
 - Lets you combine IdP checks + explicit local account approval for defense in depth.
+
+For predictable account linking, the SSO identity should resolve to the same Matrix localpart. With the repo defaults, that means your IdP should expose `preferred_username`, or at least `email`, in a way that maps to the intended Matrix ID.
 
 Use the helper to create approved accounts:
 

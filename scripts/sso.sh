@@ -34,9 +34,13 @@ provider = {
     "client_secret": os.environ["OIDC_CLIENT_SECRET_CURRENT"],
     "enable_registration": os.environ.get("OIDC_ENABLE_AUTO_REGISTRATION_CURRENT", "false") == "true",
     "scopes": ["openid", "profile", "email"],
+    "allow_existing_users": True,
     "user_mapping_provider": {
         "config": {
-            "subject_claim": "sub"
+            "subject_claim": "sub",
+            "localpart_template": "{{ user.preferred_username if user.preferred_username else user.email|localpart_from_email }}",
+            "display_name_template": "{{ user.name }}",
+            "email_template": "{{ user.email }}",
         }
     }
 }
