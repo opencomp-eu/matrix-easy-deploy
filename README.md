@@ -752,27 +752,75 @@ To create an admin account non-interactively:
 bash scripts/create-account.sh --username alice --password 'replace-with-a-long-random-password' --admin --yes
 ```
 
-**Bootstrap and manage the MED admin account**
+**Admin account operations with `med-admin`**
+
+`med-admin.sh` is a command-line tool for bootstrapping and managing a dedicated operator admin account. After initial bootstrap, all admin commands work seamlessly without requiring credentials to be passed.
+
+**Bootstrap a `med-admin` account** (one-time setup, automatic)
+
+Create and store the dedicated admin account. The tool generates its own secure password:
+
 ```bash
-# Create a dedicated admin account for operator tasks
-bash scripts/med-admin.sh bootstrap --username med-admin --password 'replace-with-a-long-random-password' --yes
-
-# List local accounts
-bash scripts/med-admin.sh list-accounts --admin-username med-admin --admin-password 'replace-with-a-long-random-password'
-
-# List admins only
-bash scripts/med-admin.sh list-admins --admin-username med-admin --admin-password 'replace-with-a-long-random-password'
-
-# Inspect one account
-bash scripts/med-admin.sh get-account alice --admin-username med-admin --admin-password 'replace-with-a-long-random-password'
-
-# Reset a local account password
-bash scripts/med-admin.sh reset-password alice --password 'replace-with-a-long-random-password' --admin-username med-admin --admin-password 'replace-with-a-long-random-password' --yes
+bash scripts/med-admin.sh bootstrap
 ```
 
-`bootstrap` uses the shared-secret registration flow, so it can create the `med-admin` account without an existing access token. The other commands use the Synapse admin API and therefore need admin authentication.
+Optionally, you can specify a custom password:
 
-In v1, if you do not pass `--access-token`, `scripts/med-admin.sh` obtains a token via password login. That means the operator account must be able to use local Matrix password login for those commands.
+```bash
+bash scripts/med-admin.sh bootstrap --password 'replace-with-a-long-random-password'
+```
+
+This command:
+1. Generates a secure password (or uses your custom one)
+2. Creates the `med-admin` admin account via shared-secret registration
+3. Stores both username and password in `.env` automatically
+4. All subsequent admin commands use these stored credentials
+
+**List all local accounts**
+
+After bootstrap, commands work without additional credentials:
+
+```bash
+bash scripts/med-admin.sh list-accounts
+```
+
+With optional filtering and pagination:
+
+```bash
+bash scripts/med-admin.sh list-accounts --filter alice --limit 50
+```
+
+**List admins only**
+
+```bash
+bash scripts/med-admin.sh list-admins
+```
+
+**Query a specific account**
+
+```bash
+bash scripts/med-admin.sh get-account alice
+```
+
+**Reset a local account password**
+
+```bash
+bash scripts/med-admin.sh reset-password alice --password 'new-long-random-password' --yes
+```
+
+**How it works**
+
+- `bootstrap` generates a secure password automatically and stores both username and password in `.env`
+- All subsequent admin commands automatically use the stored `med-admin` credentials
+- No need to pass credentials with each command
+- If you need to use a different admin account, override with `--access-token` or `--admin-username`/`--admin-password`
+
+**Important: SSO-only deployments**
+
+If you have `features.local_login_enabled: false` in `deploy.yaml`:
+- Bootstrap must happen **before** disabling password login
+- Once password login is disabled, the stored credentials cannot be used to obtain new tokens
+- If you hit this situation, obtain a token from elsewhere (e.g. temporarily re-enable password login, use Element's token export, or query Synapse directly) and pass it with `--access-token`
 
 **Stop all services** (data stays intact in Docker volumes)
 ```bash

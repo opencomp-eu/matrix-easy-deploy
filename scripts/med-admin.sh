@@ -17,6 +17,8 @@ SHARED_SECRET=""
 AUTH_USERNAME=""
 AUTH_PASSWORD=""
 ACCESS_TOKEN=""
+MED_ADMIN_USERNAME=""
+MED_ADMIN_PASSWORD=""
 BOOTSTRAP_USERNAME="med-admin"
 BOOTSTRAP_PASSWORD=""
 BOOTSTRAP_GENERATE_PASSWORD="false"
@@ -35,10 +37,15 @@ Usage:
   bash scripts/med-admin.sh get-account USERNAME_OR_MXID
   bash scripts/med-admin.sh reset-password USERNAME_OR_MXID [--password 'new-long-secret'] [--yes]
 
-Auth options for admin API commands:
-  --access-token VALUE   Use an existing Synapse admin access token.
-  --admin-username VALUE Use this admin username to obtain a token.
-  --admin-password VALUE Use this admin password to obtain a token.
+Notes:
+  'bootstrap' generates its own password (or accepts --password to use your own), creates the
+  admin account, and stores credentials in .env automatically. Subsequent admin commands then
+  work seamlessly without requiring credentials to be passed.
+  
+  To override and use a different admin account for admin commands, pass:
+    --access-token VALUE   Use an existing Synapse admin access token.
+    --admin-username VALUE Use this admin username to obtain a token.
+    --admin-password VALUE Use this admin password to obtain a token.
 
 Shared options:
   --base-url VALUE       Override Synapse base URL instead of reading MATRIX_DOMAIN from .env.
@@ -62,8 +69,24 @@ read_deploy_env() {
         if [[ -z "$SHARED_SECRET" ]]; then
             SHARED_SECRET="$(sed -n 's/^REGISTRATION_SHARED_SECRET=//p' "$DEPLOY_ENV" | head -n1)"
         fi
+        # Read stored med-admin credentials first, then fall back to ADMIN_USERNAME
+        if [[ -z "$MED_ADMIN_USERNAME" ]]; then
+            MED_ADMIN_USERNAME="$(sed -n 's/^MED_ADMIN_USERNAME=//p' "$DEPLOY_ENV" | head -n1)"
+        fi
+        if [[ -z "$MED_ADMIN_PASSWORD" ]]; then
+            MED_ADMIN_PASSWORD="$(sed -n 's/^MED_ADMIN_PASSWORD=//p' "$DEPLOY_ENV" | head -n1)"
+        fi
         if [[ -z "$AUTH_USERNAME" ]]; then
-            AUTH_USERNAME="$(sed -n 's/^ADMIN_USERNAME=//p' "$DEPLOY_ENV" | head -n1)"
+            if [[ -n "$MED_ADMIN_USERNAME" ]]; then
+                AUTH_USERNAME="$MED_ADMIN_USERNAME"
+            else
+                AUTH_USERNAME="$(sed -n 's/^ADMIN_USERNAME=//p' "$DEPLOY_ENV" | head -n1)"
+            fi
+        fi
+        if [[ -z "$AUTH_PASSWORD" ]]; then
+            if [[ -n "$MED_ADMIN_PASSWORD" ]]; then
+                AUTH_PASSWORD="$MED_ADMIN_PASSWORD"
+            fi
         fi
     fi
 }
@@ -392,10 +415,14 @@ PYEOF
 }
 
 run_bootstrap() {
-    local create_args=(--username "$BOOTSTRAP_USERNAME" --admin)
+    local create_args=(--username "$BOOTSTRAP_USERNAME" --admin --yes)
+    local generated_password
 
     read_deploy_env
     ensure_bootstrap_config
+
+    # Generate a strong password using the same method as create-account.sh
+    generated_password="$(openssl rand -base64 24 | tr -d '\n=+/' | cut -c1-20)"
 
     if [[ -n "$BASE_URL" ]]; then
         create_args+=(--base-url "$BASE_URL")
@@ -405,15 +432,30 @@ run_bootstrap() {
     fi
     if [[ -n "$BOOTSTRAP_PASSWORD" ]]; then
         create_args+=(--password "$BOOTSTRAP_PASSWORD")
-    elif [[ "$BOOTSTRAP_GENERATE_PASSWORD" == "true" ]]; then
-        create_args+=(--generate-password)
-    fi
-    if [[ "$ASSUME_YES" == "true" ]]; then
-        create_args+=(--yes)
+        generated_password="$BOOTSTRAP_PASSWORD"
+    else
+        create_args+=(--password "$generated_password")
     fi
 
     info "Bootstrapping admin account '${BOOTSTRAP_USERNAME}' via shared-secret registration…"
-    bash "${SCRIPT_DIR}/create-account.sh" "${create_args[@]}"
+    bash "${SCRIPT_DIR}/create-account.sh" "${create_args[@]}" >/dev/null
+    
+    # Store the credentials in .env for future use by admin API commands
+    if grep -q "^MED_ADMIN_USERNAME=" "$DEPLOY_ENV" 2>/dev/null; then
+        sed -i.bak "s/^MED_ADMIN_USERNAME=.*/MED_ADMIN_USERNAME=$BOOTSTRAP_USERNAME/" "$DEPLOY_ENV"
+    else
+        echo "MED_ADMIN_USERNAME=$BOOTSTRAP_USERNAME" >> "$DEPLOY_ENV"
+    fi
+    
+    if grep -q "^MED_ADMIN_PASSWORD=" "$DEPLOY_ENV" 2>/dev/null; then
+        sed -i.bak "s/^MED_ADMIN_PASSWORD=.*/MED_ADMIN_PASSWORD=$generated_password/" "$DEPLOY_ENV"
+    else
+        echo "MED_ADMIN_PASSWORD=$generated_password" >> "$DEPLOY_ENV"
+    fi
+    
+    rm -f "${DEPLOY_ENV}.bak"
+    success "Admin account '${BOOTSTRAP_USERNAME}' ready for admin operations."
+    success "Credentials stored in .env for automatic use by admin commands."
 }
 
 render_account_table() {
