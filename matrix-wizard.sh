@@ -373,11 +373,13 @@ run_create_admin_wizard() {
 
     echo
     info "Creating admin user '@${admin_username}:${SERVER_NAME:-${MATRIX_DOMAIN}}'..."
-    bash "${SCRIPT_DIR}/scripts/create-admin.sh" \
-        "https://${MATRIX_DOMAIN}" \
-        "${REGISTRATION_SHARED_SECRET}" \
-        "${admin_username}" \
-        "${pw_a}"
+    bash "${SCRIPT_DIR}/scripts/create-account.sh" \
+        --base-url "https://${MATRIX_DOMAIN}" \
+        --shared-secret "${REGISTRATION_SHARED_SECRET}" \
+        --username "${admin_username}" \
+        --password "${pw_a}" \
+        --admin \
+        --yes
     pause_screen
 }
 
@@ -567,7 +569,7 @@ run_wizard_hub() {
                 run_module_wizard
                 ;;
             3)
-                bash "${SCRIPT_DIR}/scripts/create-user.sh"
+                bash "${SCRIPT_DIR}/scripts/create-account.sh"
                 pause_screen
                 ;;
             4)
