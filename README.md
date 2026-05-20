@@ -696,6 +696,7 @@ matrix-easy-deploy/
     │   ├── runtime.sh            # Docker setup/start + admin bootstrap
     │   ├── summary.sh            # Final post-setup summary
     │   └── modules.sh            # --module dispatcher helper
+    ├── med-admin.sh              # Operator admin CLI (bootstrap/list/query/reset)
     └── create-account.sh         # Account registration helper (user or admin)
 ├── ensure_dependencies.sh       # Non-interactive host dependency installer
 ```
@@ -750,6 +751,28 @@ To create an admin account non-interactively:
 ```bash
 bash scripts/create-account.sh --username alice --password 'replace-with-a-long-random-password' --admin --yes
 ```
+
+**Bootstrap and manage the MED admin account**
+```bash
+# Create a dedicated admin account for operator tasks
+bash scripts/med-admin.sh bootstrap --username med-admin --password 'replace-with-a-long-random-password' --yes
+
+# List local accounts
+bash scripts/med-admin.sh list-accounts --admin-username med-admin --admin-password 'replace-with-a-long-random-password'
+
+# List admins only
+bash scripts/med-admin.sh list-admins --admin-username med-admin --admin-password 'replace-with-a-long-random-password'
+
+# Inspect one account
+bash scripts/med-admin.sh get-account alice --admin-username med-admin --admin-password 'replace-with-a-long-random-password'
+
+# Reset a local account password
+bash scripts/med-admin.sh reset-password alice --password 'replace-with-a-long-random-password' --admin-username med-admin --admin-password 'replace-with-a-long-random-password' --yes
+```
+
+`bootstrap` uses the shared-secret registration flow, so it can create the `med-admin` account without an existing access token. The other commands use the Synapse admin API and therefore need admin authentication.
+
+In v1, if you do not pass `--access-token`, `scripts/med-admin.sh` obtains a token via password login. That means the operator account must be able to use local Matrix password login for those commands.
 
 **Stop all services** (data stays intact in Docker volumes)
 ```bash

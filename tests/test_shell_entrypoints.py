@@ -12,6 +12,7 @@ class ShellEntrypointTests(unittest.TestCase):
         self.apply_script = self.repo_root / "apply.sh"
         self.ensure_dependencies_script = self.repo_root / "ensure_dependencies.sh"
         self.create_user_script = self.repo_root / "scripts/create-user.sh"
+        self.med_admin_script = self.repo_root / "scripts/med-admin.sh"
         self.lib_script = self.repo_root / "scripts/lib.sh"
         self.dependencies_script = self.repo_root / "scripts/setup/dependencies.sh"
 
@@ -259,6 +260,265 @@ class ShellEntrypointTests(unittest.TestCase):
             )
             self.assertIn("@alice:example.com", result.stdout)
             self.assertIn("User created successfully.", result.stdout)
+
+    def test_med_admin_bootstrap_delegates_to_create_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "events.log"
+
+            self._copy_executable(self.med_admin_script, root / "scripts/med-admin.sh")
+            self._copy_executable(self.lib_script, root / "scripts/lib.sh")
+            self._write_executable(
+                root / "scripts/create-account.sh",
+                "#!/usr/bin/env bash\n"
+                "echo create-account:$* >> \"$EVENTS\"\n",
+            )
+            (root / ".env").write_text(
+                "SERVER_NAME=example.com\n"
+                "MATRIX_DOMAIN=matrix.example.com\n"
+                "REGISTRATION_SHARED_SECRET=sharedsecret\n"
+                "ADMIN_USERNAME=admin\n"
+            )
+
+            env = os.environ.copy()
+            env["EVENTS"] = str(events)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/med-admin.sh",
+                    "bootstrap",
+                    "--username",
+                    "med-admin",
+                    "--password",
+                    "averylongsecret",
+                    "--yes",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            line = events.read_text().strip()
+            self.assertIn("create-account:", line)
+            self.assertIn("--username med-admin", line)
+            self.assertIn("--admin", line)
+            self.assertIn("--base-url https://matrix.example.com", line)
+            self.assertIn("--shared-secret sharedsecret", line)
+            self.assertIn("--password averylongsecret", line)
+            self.assertIn("--yes", line)
+
+    def test_med_admin_list_accounts_logs_in_and_queries_admin_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "events.log"
+
+            self._copy_executable(self.med_admin_script, root / "scripts/med-admin.sh")
+            self._copy_executable(self.lib_script, root / "scripts/lib.sh")
+            (root / ".env").write_text(
+                "SERVER_NAME=example.com\n"
+                "MATRIX_DOMAIN=matrix.example.com\n"
+                "ADMIN_USERNAME=bootstrapadmin\n"
+            )
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            self._write_executable(
+                fake_bin / "curl",
+                "#!/usr/bin/env bash\n"
+                "echo curl:$* >> \"$EVENTS\"\n"
+                "outfile=''\n"
+                "url=''\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  case \"$1\" in\n"
+                "    -o) outfile=\"$2\"; shift 2 ;;\n"
+                "    http*://*|https*://*) url=\"$1\"; shift ;;\n"
+                "    *) shift ;;\n"
+                "  esac\n"
+                "done\n"
+                "if [[ \"$url\" == *\"/_matrix/client/v3/login\" ]]; then\n"
+                "  cat >/dev/null\n"
+                "  printf '{\"access_token\":\"tok123\"}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$url\" == *\"/_synapse/admin/v2/users?\"* ]]; then\n"
+                "  printf '{\"users\":[{\"name\":\"@alice:example.com\",\"admin\":false,\"deactivated\":false,\"locked\":false,\"displayname\":\"Alice\"}],\"total\":1}' > \"$outfile\"\n"
+                "  printf '200'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["EVENTS"] = str(events)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/med-admin.sh",
+                    "list-accounts",
+                    "--filter",
+                    "alice",
+                    "--limit",
+                    "25",
+                    "--admin-password",
+                    "averylongsecret",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            lines = events.read_text().splitlines()
+            self.assertTrue(any("/_matrix/client/v3/login" in line for line in lines))
+            self.assertTrue(any("/_synapse/admin/v2/users?limit=25&guests=false&name=alice" in line for line in lines))
+            self.assertIn("USER_ID\tADMIN\tDEACTIVATED\tLOCKED\tDISPLAYNAME", result.stdout)
+            self.assertIn("@alice:example.com\tFalse\tFalse\tFalse\tAlice", result.stdout)
+            self.assertIn("TOTAL\t1", result.stdout)
+
+    def test_med_admin_get_account_uses_encoded_mxid_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "events.log"
+
+            self._copy_executable(self.med_admin_script, root / "scripts/med-admin.sh")
+            self._copy_executable(self.lib_script, root / "scripts/lib.sh")
+            (root / ".env").write_text(
+                "SERVER_NAME=example.com\n"
+                "MATRIX_DOMAIN=matrix.example.com\n"
+                "ADMIN_USERNAME=bootstrapadmin\n"
+            )
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            self._write_executable(
+                fake_bin / "curl",
+                "#!/usr/bin/env bash\n"
+                "echo curl:$* >> \"$EVENTS\"\n"
+                "outfile=''\n"
+                "url=''\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  case \"$1\" in\n"
+                "    -o) outfile=\"$2\"; shift 2 ;;\n"
+                "    http*://*|https*://*) url=\"$1\"; shift ;;\n"
+                "    *) shift ;;\n"
+                "  esac\n"
+                "done\n"
+                "if [[ \"$url\" == *\"/_matrix/client/v3/login\" ]]; then\n"
+                "  cat >/dev/null\n"
+                "  printf '{\"access_token\":\"tok123\"}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$url\" == *\"/%40alice%3Aexample.com\" ]]; then\n"
+                "  printf '{\"name\":\"@alice:example.com\",\"admin\":false,\"deactivated\":false,\"locked\":false,\"is_guest\":false,\"displayname\":\"Alice\",\"avatar_url\":null,\"creation_ts\":1,\"last_seen_ts\":2}' > \"$outfile\"\n"
+                "  printf '200'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["EVENTS"] = str(events)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/med-admin.sh",
+                    "get-account",
+                    "alice",
+                    "--admin-password",
+                    "averylongsecret",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            lines = events.read_text().splitlines()
+            self.assertTrue(any("/%40alice%3Aexample.com" in line for line in lines))
+            self.assertIn("User ID:      @alice:example.com", result.stdout)
+            self.assertIn("Display name: Alice", result.stdout)
+
+    def test_med_admin_reset_password_posts_admin_api_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "events.log"
+
+            self._copy_executable(self.med_admin_script, root / "scripts/med-admin.sh")
+            self._copy_executable(self.lib_script, root / "scripts/lib.sh")
+            (root / ".env").write_text(
+                "SERVER_NAME=example.com\n"
+                "MATRIX_DOMAIN=matrix.example.com\n"
+                "ADMIN_USERNAME=bootstrapadmin\n"
+            )
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            self._write_executable(
+                fake_bin / "curl",
+                "#!/usr/bin/env bash\n"
+                "payload=$(cat)\n"
+                "echo curl:$* payload:$payload >> \"$EVENTS\"\n"
+                "outfile=''\n"
+                "url=''\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  case \"$1\" in\n"
+                "    -o) outfile=\"$2\"; shift 2 ;;\n"
+                "    http*://*|https*://*) url=\"$1\"; shift ;;\n"
+                "    *) shift ;;\n"
+                "  esac\n"
+                "done\n"
+                "if [[ \"$url\" == *\"/_matrix/client/v3/login\" ]]; then\n"
+                "  printf '{\"access_token\":\"tok123\"}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$url\" == *\"/_synapse/admin/v1/reset_password/%40alice%3Aexample.com\" ]]; then\n"
+                "  printf '{}' > \"$outfile\"\n"
+                "  printf '200'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["EVENTS"] = str(events)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/med-admin.sh",
+                    "reset-password",
+                    "alice",
+                    "--password",
+                    "averylongsecret",
+                    "--admin-password",
+                    "adminpass12345",
+                    "--yes",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            lines = events.read_text().splitlines()
+            self.assertTrue(any("/_synapse/admin/v1/reset_password/%40alice%3Aexample.com" in line for line in lines))
+            self.assertTrue(any('payload:{"new_password": "averylongsecret", "logout_devices": true}' in line for line in lines))
+            self.assertIn("Password reset for '@alice:example.com'.", result.stdout)
 
 
 if __name__ == "__main__":
