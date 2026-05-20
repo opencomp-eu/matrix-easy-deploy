@@ -32,6 +32,10 @@ class ApplyTests(unittest.TestCase):
             "server_name: {{SERVER_NAME}}\n"
             "public_baseurl: https://{{MATRIX_DOMAIN}}\n"
             "password_config:\n  enabled: {{LOCAL_LOGIN_ENABLED}}\n"
+            "matrix_rtc:\n"
+            "  transports:\n"
+            "    - type: livekit\n"
+            "      livekit_service_url: \"https://{{LIVEKIT_DOMAIN}}/livekit/jwt\"\n"
         )
         (self.root / "modules/core/element/config.json.template").write_text('{"base_url":"https://{{MATRIX_DOMAIN}}"}')
         (self.root / "modules/calls/coturn/turnserver.conf.template").write_text("realm={{MATRIX_DOMAIN}}")
@@ -270,6 +274,9 @@ class ApplyTests(unittest.TestCase):
         synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
         self.assertIn("server_name: example.com", synapse)
         self.assertIn("enabled: true", synapse)
+        self.assertIn("matrix_rtc:", synapse)
+        self.assertIn('livekit_service_url: "https://livekit.example.com/livekit/jwt"', synapse)
+        self.assertNotIn("\nlivekit:\n", synapse)
         self.assertNotIn("{{", synapse)
 
         modules_state = yaml.safe_load((self.root / ".matrix-easy-deploy/modules.yaml").read_text())

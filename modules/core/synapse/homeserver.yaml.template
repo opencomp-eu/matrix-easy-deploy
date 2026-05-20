@@ -138,16 +138,18 @@ turn_user_lifetime: 86400000
 turn_allow_guests: false
 
 # LiveKit SFU — used by Element Call for group calls (MatrixRTC).
-# Synapse uses the secret to sign JWT tokens for clients.
+# Synapse advertises MatrixRTC transports from this block in
+# /.well-known/matrix/client.
 experimental_features:
   msc3266_enabled: true  # room summary API, required by Element Call
   msc3202_device_masquerading: true
   msc3202_transaction_extensions: true
   msc2409_to_device_messages_enabled: true
 
-livekit:
-  service_url: "https://{{LIVEKIT_DOMAIN}}"
-  secret: "{{LIVEKIT_SECRET}}"
+matrix_rtc:
+  transports:
+    - type: livekit
+      livekit_service_url: "https://{{LIVEKIT_DOMAIN}}/livekit/jwt"
 
 # ----------------------------------------------------------------------------
 # Modules (bridges, bots, spam checkers…)
