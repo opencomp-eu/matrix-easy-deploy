@@ -223,18 +223,17 @@ set -o allexport
 source ./.env
 set +o allexport
 
-bash scripts/create-admin.sh \
-  "https://${MATRIX_DOMAIN}" \
-  "${REGISTRATION_SHARED_SECRET}" \
-  "${ADMIN_USERNAME}" \
-  'replace-with-a-long-random-password'
+bash scripts/create-account.sh \
+  --username "${ADMIN_USERNAME}" \
+  --password 'replace-with-a-long-random-password' \
+  --admin --yes
 ```
 
 Notes:
 
 - `bash apply.sh` now runs stop/start by default so generated config and running containers stay aligned.
 - Use `bash apply.sh --no-reconcile-runtime` when you want render-only behavior.
-- `scripts/create-admin.sh` is safe to re-run; if the user already exists it will warn and skip.
+- `scripts/create-account.sh` is safe to re-run; if the user already exists it will warn and skip.
 - Keep the admin password out of `deploy.yaml` and `.env`. Pass it at execution time or inject it through your automation/secret manager.
 - Enabled modules are bootstrapped non-interactively during `bash apply.sh` when their required generated config is missing.
 - Bridge/module enable-disable transitions are reconciled by `bash apply.sh` by default; use `--no-reconcile-runtime` to skip the stop/start step.
@@ -611,13 +610,19 @@ Advantages:
 Use the helper to create approved accounts:
 
 ```bash
-bash scripts/create-user.sh
+bash scripts/create-account.sh
 ```
 
 For unattended automation, you can also create a user non-interactively:
 
 ```bash
-bash scripts/create-user.sh --username alice --password 'replace-with-a-long-random-password' --yes
+bash scripts/create-account.sh --username alice --password 'replace-with-a-long-random-password' --yes
+```
+
+To create an admin account, add the admin flag:
+
+```bash
+bash scripts/create-account.sh --username med-admin --password 'replace-with-a-long-random-password' --admin --yes
 ```
 
 You can disable SSO in the wizard if you only want local Matrix passwords.
@@ -691,7 +696,7 @@ matrix-easy-deploy/
     │   ├── runtime.sh            # Docker setup/start + admin bootstrap
     │   ├── summary.sh            # Final post-setup summary
     │   └── modules.sh            # --module dispatcher helper
-    └── create-admin.sh           # Admin user registration helper
+    └── create-account.sh         # Account registration helper (user or admin)
 ├── ensure_dependencies.sh       # Non-interactive host dependency installer
 ```
 
@@ -727,9 +732,9 @@ docker logs -f mautrix-whatsapp    # if whatsapp-bridge module is installed
 docker logs -f mautrix-slack       # if slack-bridge module is installed
 ```
 
-**Create a user account (interactive)**
+**Create an account (interactive)**
 ```bash
-bash scripts/create-user.sh
+bash scripts/create-account.sh
 ```
 
 The helper asks for a username, generates a secure temporary password by default (or lets you set a custom one), and can optionally grant admin privileges.
@@ -737,7 +742,13 @@ The helper asks for a username, generates a secure temporary password by default
 For non-interactive use, pass flags instead:
 
 ```bash
-bash scripts/create-user.sh --username alice --password 'replace-with-a-long-random-password' --admin --yes
+bash scripts/create-account.sh --username alice --password 'replace-with-a-long-random-password' --yes
+```
+
+To create an admin account non-interactively:
+
+```bash
+bash scripts/create-account.sh --username alice --password 'replace-with-a-long-random-password' --admin --yes
 ```
 
 **Stop all services** (data stays intact in Docker volumes)
@@ -957,11 +968,10 @@ On first boot, Synapse runs database migrations. If your VPS is modest, give it 
 
 If Synapse wasn't responding in time, the wizard prints the manual command:
 ```bash
-bash scripts/create-admin.sh \
-    https://matrix.example.com \
-    <your_registration_shared_secret> \
-    admin \
-    <your_password>
+bash scripts/create-account.sh \
+  --username admin \
+  --password <your_password> \
+  --admin --yes
 ```
 The `REGISTRATION_SHARED_SECRET` is in your `.env` file.
 
