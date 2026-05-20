@@ -32,6 +32,10 @@ class ApplyTests(unittest.TestCase):
             "server_name: {{SERVER_NAME}}\n"
             "public_baseurl: https://{{MATRIX_DOMAIN}}\n"
             "password_config:\n  enabled: {{LOCAL_LOGIN_ENABLED}}\n"
+            "extra_well_known_client_content:\n"
+            "  org.matrix.msc4143.rtc_foci:\n"
+            "    - type: livekit\n"
+            "      livekit_service_url: \"https://{{LIVEKIT_DOMAIN}}/livekit/jwt\"\n"
             "matrix_rtc:\n"
             "  transports:\n"
             "    - type: livekit\n"
@@ -274,6 +278,8 @@ class ApplyTests(unittest.TestCase):
         synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
         self.assertIn("server_name: example.com", synapse)
         self.assertIn("enabled: true", synapse)
+        self.assertIn("extra_well_known_client_content:", synapse)
+        self.assertIn("org.matrix.msc4143.rtc_foci:", synapse)
         self.assertIn("matrix_rtc:", synapse)
         self.assertIn('livekit_service_url: "https://livekit.example.com/livekit/jwt"', synapse)
         self.assertNotIn("\nlivekit:\n", synapse)

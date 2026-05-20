@@ -140,6 +140,11 @@ turn_allow_guests: false
 # LiveKit SFU — used by Element Call for group calls (MatrixRTC).
 # Synapse advertises MatrixRTC transports from this block in
 # /.well-known/matrix/client.
+extra_well_known_client_content:
+  org.matrix.msc4143.rtc_foci:
+    - type: livekit
+      livekit_service_url: "https://{{LIVEKIT_DOMAIN}}/livekit/jwt"
+
 experimental_features:
   msc3266_enabled: true  # room summary API, required by Element Call
   msc3202_device_masquerading: true
