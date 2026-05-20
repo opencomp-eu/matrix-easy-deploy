@@ -152,8 +152,8 @@ prompt_password() {
         local pw_a pw_b
         while true; do
             ask_secret pw_a "Password"
-            if [[ ${#pw_a} -lt 12 ]]; then
-                warn "Password must be at least 12 characters."
+            if [[ ${#pw_a} -lt 10 ]]; then
+                warn "Password must be at least 10 characters."
                 continue
             fi
             ask_secret pw_b "Confirm password"
@@ -184,8 +184,8 @@ validate_noninteractive_inputs() {
     [[ -n "$USERNAME" ]] || die "--username is required in non-interactive mode"
 
     if [[ -n "$PASSWORD" ]]; then
-        if [[ ${#PASSWORD} -lt 12 ]]; then
-            die "Password must be at least 12 characters."
+        if [[ ${#PASSWORD} -lt 10 ]]; then
+            die "Password must be at least 10 characters."
         fi
         PASSWORD_SOURCE="custom"
         return
