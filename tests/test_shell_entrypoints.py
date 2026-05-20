@@ -11,6 +11,7 @@ class ShellEntrypointTests(unittest.TestCase):
         self.repo_root = Path(__file__).resolve().parents[1]
         self.apply_script = self.repo_root / "apply.sh"
         self.ensure_dependencies_script = self.repo_root / "ensure_dependencies.sh"
+        self.create_account_script = self.repo_root / "scripts/create-account.sh"
         self.create_user_script = self.repo_root / "scripts/create-user.sh"
         self.lib_script = self.repo_root / "scripts/lib.sh"
         self.dependencies_script = self.repo_root / "scripts/setup/dependencies.sh"
@@ -259,6 +260,79 @@ class ShellEntrypointTests(unittest.TestCase):
             )
             self.assertIn("@alice:example.com", result.stdout)
             self.assertIn("User created successfully.", result.stdout)
+
+    def test_create_account_noninteractive_keeps_nonce_output_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "events.log"
+            payload_file = root / "payload.json"
+
+            self._copy_executable(self.create_account_script, root / "scripts/create-account.sh")
+            self._copy_executable(self.lib_script, root / "scripts/lib.sh")
+            (root / ".env").write_text(
+                "SERVER_NAME=example.com\n"
+                "MATRIX_DOMAIN=matrix.example.com\n"
+                "REGISTRATION_SHARED_SECRET=sharedsecret\n"
+            )
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            self._write_executable(
+                fake_bin / "curl",
+                "#!/usr/bin/env bash\n"
+                "echo curl:$* >> \"$EVENTS\"\n"
+                "outfile=''\n"
+                "write_status='false'\n"
+                "url=''\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  case \"$1\" in\n"
+                "    -o) outfile=\"$2\"; shift 2 ;;\n"
+                "    -w) write_status='true'; shift 2 ;;\n"
+                "    http*://*|https*://*) url=\"$1\"; shift ;;\n"
+                "    *) shift ;;\n"
+                "  esac\n"
+                "done\n"
+                "if [[ \"$url\" == *\"/_synapse/admin/v1/register\" && \"$write_status\" == 'false' ]]; then\n"
+                "  printf '{\"nonce\":\"abc123\"}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$url\" == *\"/_synapse/admin/v1/register\" && \"$write_status\" == 'true' ]]; then\n"
+                "  cat > \"$PAYLOAD_FILE\"\n"
+                "  printf '{}' > \"$outfile\"\n"
+                "  printf '200'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["EVENTS"] = str(events)
+            env["PAYLOAD_FILE"] = str(payload_file)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/create-account.sh",
+                    "--username",
+                    "test",
+                    "--password",
+                    "averylongsecret",
+                    "--yes",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertIn("Account '@test:example.com' created successfully.", result.stdout)
+            self.assertIn("Fetching registration nonce from Synapse", result.stderr)
+            payload = payload_file.read_text()
+            self.assertIn('"nonce": "abc123"', payload)
+            self.assertNotIn("Fetching registration nonce", payload)
 
 
 if __name__ == "__main__":

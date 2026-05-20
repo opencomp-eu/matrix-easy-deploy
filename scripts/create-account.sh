@@ -221,7 +221,7 @@ confirm_summary() {
 fetch_nonce() {
     local nonce_response nonce
 
-    info "Fetching registration nonce from Synapse…"
+    info "Fetching registration nonce from Synapse…" >&2
     nonce_response="$(curl -fsSL "${BASE_URL}/_synapse/admin/v1/register")"
     nonce="$(echo "$nonce_response" | python3 -c "import sys,json; print(json.load(sys.stdin)['nonce'])")"
 
@@ -295,7 +295,7 @@ PYEOF
 )"
 
     response_file="$(mktemp)"
-    trap 'rm -f "$response_file"' EXIT
+    trap 'rm -f "${response_file:-}"' EXIT
 
     http_status="$(curl -sS -o "$response_file" -w "%{http_code}" \
         -X POST "${BASE_URL}/_synapse/admin/v1/register" \
