@@ -26,7 +26,19 @@ class ApplyTests(unittest.TestCase):
         (self.root / "modules/whatsapp-bridge/whatsapp").mkdir(parents=True)
         (self.root / "modules/slack-bridge/slack").mkdir(parents=True)
 
-        (self.root / "caddy/Caddyfile.template").write_text("{{MATRIX_DOMAIN}} {{CADDY_MATRIX_HOSTS}}")
+        (self.root / "caddy/Caddyfile.template").write_text(
+            "{{CADDY_MATRIX_HOSTS}} {\n"
+            "    reverse_proxy matrix_synapse:8008\n"
+            "}\n\n"
+            "{{LIVEKIT_DOMAIN}} {\n"
+            "    handle_path /livekit/jwt* {\n"
+            "        reverse_proxy matrix_lk_jwt_service:8080\n"
+            "    }\n"
+            "    handle_path /livekit/sfu* {\n"
+            "        reverse_proxy matrix_livekit:7880\n"
+            "    }\n"
+            "}\n"
+        )
         (self.root / "caddy/Caddyfile-no-element.template").write_text("no-element {{MATRIX_DOMAIN}}")
         (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
             "server_name: {{SERVER_NAME}}\n"
@@ -43,7 +55,10 @@ class ApplyTests(unittest.TestCase):
         )
         (self.root / "modules/core/element/config.json.template").write_text('{"base_url":"https://{{MATRIX_DOMAIN}}"}')
         (self.root / "modules/calls/coturn/turnserver.conf.template").write_text("realm={{MATRIX_DOMAIN}}")
-        (self.root / "modules/calls/livekit/livekit.yaml.template").write_text("keys:\n  {{LIVEKIT_KEY}}: {{LIVEKIT_SECRET}}")
+        (self.root / "modules/calls/livekit/livekit.yaml.template").write_text(
+            "room:\n  auto_create: false\n"
+            "keys:\n  {{LIVEKIT_KEY}}: {{LIVEKIT_SECRET}}"
+        )
         (self.root / "modules/hookshot/module.yaml").write_text(
             "name: hookshot\n"
             "config_key: hookshot\n"
@@ -273,6 +288,9 @@ class ApplyTests(unittest.TestCase):
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
         self.assertIn("matrix.example.com", caddy)
+        self.assertIn("handle_path /livekit/jwt*", caddy)
+        self.assertIn("reverse_proxy matrix_lk_jwt_service:8080", caddy)
+        self.assertIn("handle_path /livekit/sfu*", caddy)
         self.assertNotIn("{{", caddy)
 
         synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
@@ -284,6 +302,9 @@ class ApplyTests(unittest.TestCase):
         self.assertIn('livekit_service_url: "https://livekit.example.com/livekit/jwt"', synapse)
         self.assertNotIn("\nlivekit:\n", synapse)
         self.assertNotIn("{{", synapse)
+
+        livekit = (self.root / "modules/calls/livekit/livekit.yaml").read_text()
+        self.assertIn("room:\n  auto_create: false", livekit)
 
         modules_state = yaml.safe_load((self.root / ".matrix-easy-deploy/modules.yaml").read_text())
         self.assertIn("hookshot", modules_state)

@@ -21,6 +21,20 @@ services:
     networks:
       - caddy_net
 
+  lk-jwt-service:
+    image: ghcr.io/element-hq/lk-jwt-service:latest
+    container_name: matrix_lk_jwt_service
+    restart: unless-stopped
+    environment:
+      LIVEKIT_URL: wss://${LIVEKIT_DOMAIN}/livekit/sfu
+      LIVEKIT_KEY: ${LIVEKIT_KEY}
+      LIVEKIT_SECRET: ${LIVEKIT_SECRET}
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: ${SERVER_NAME}
+    depends_on:
+      - livekit
+    networks:
+      - caddy_net
+
 networks:
   caddy_net:
     external: true
