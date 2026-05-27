@@ -470,6 +470,18 @@ class ApplyTests(unittest.TestCase):
         self.assertNotIn('"" {', caddy)
         self.assertNotIn("# LiveKit SFU", caddy)
 
+    def test_merge_duplicate_caddy_site_blocks_ignores_comment_with_brace(self):
+        original = (
+            "# Comment {\n"
+            "example.com {\n"
+            "    reverse_proxy matrix_synapse:8008\n"
+            "}\n"
+        )
+        merged = apply.merge_duplicate_caddy_site_blocks(original)
+        self.assertIn("# Comment {", merged)
+        self.assertEqual(merged.count("example.com {"), 1)
+        self.assertIn("reverse_proxy matrix_synapse:8008", merged)
+
     def test_merge_duplicate_caddy_site_blocks_combines_identical_hosts(self):
         original = (
             "# Matrix\n"

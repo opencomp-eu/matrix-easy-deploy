@@ -850,6 +850,8 @@ def caddy_hosts_group_key(hosts_ordered: list[str]) -> tuple[str, ...]:
 
 def is_caddy_site_header(line: str) -> bool:
     stripped = line.strip()
+    if stripped.startswith("#"):
+        return False
     if not stripped.endswith("{"):
         return False
     if line != line.lstrip():
