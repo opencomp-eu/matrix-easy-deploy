@@ -37,6 +37,13 @@ def load_or_init(path: Path) -> dict:
                 "element": {"enabled": True, "domain": "element.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
                 "sso": {"enabled": False, "providers": []},
+                "auto_join": {
+                    "rooms": [],
+                    "autocreate": True,
+                    "autocreate_federated": True,
+                    "room_preset": "public_chat",
+                    "rooms_for_guests": True,
+                },
             },
             "modules": {
                 "hookshot": {"enabled": False, "domain": "hookshot.example.com"},

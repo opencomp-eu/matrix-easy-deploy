@@ -260,6 +260,86 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
+    def test_validate_config_rejects_invalid_auto_join_rooms(self):
+        cfg = self.sample_config()
+        cfg["features"]["auto_join"] = {"rooms": "not-a-list"}
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_invalid_auto_join_room_preset(self):
+        cfg = self.sample_config()
+        cfg["features"]["auto_join"] = {
+            "rooms": ["#welcome:example.com"],
+            "room_preset": "secret_lair",
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_private_preset_without_mxid_localpart(self):
+        cfg = self.sample_config()
+        cfg["features"]["auto_join"] = {
+            "rooms": ["#welcome:example.com"],
+            "room_preset": "private_chat",
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_build_synapse_auto_join_section_empty(self):
+        self.assertEqual(apply.build_synapse_auto_join_section({}), "")
+        self.assertEqual(apply.build_synapse_auto_join_section({"rooms": []}), "")
+
+    def test_build_synapse_auto_join_section_with_rooms(self):
+        section = apply.build_synapse_auto_join_section(
+            {
+                "rooms": ["#welcome:example.com", "#announce:example.com"],
+                "autocreate": False,
+                "autocreate_federated": False,
+                "room_preset": "private_chat",
+                "mxid_localpart": "system",
+                "rooms_for_guests": False,
+            }
+        )
+        self.assertIn("auto_join_rooms:", section)
+        self.assertIn("'#welcome:example.com'", section)
+        self.assertIn("'#announce:example.com'", section)
+        self.assertIn("autocreate_auto_join_rooms: false", section)
+        self.assertIn("autocreate_auto_join_rooms_federated: false", section)
+        self.assertIn('autocreate_auto_join_room_preset: "private_chat"', section)
+        self.assertIn("auto_join_mxid_localpart: system", section)
+        self.assertIn("auto_join_rooms_for_guests: false", section)
+
+    def test_derive_values_synapse_auto_join_section(self):
+        cfg = self.sample_config()
+        cfg["features"]["auto_join"] = {
+            "rooms": ["#welcome:example.com"],
+            "autocreate": True,
+        }
+        derived = apply.derive_values(cfg, server_ip="1.2.3.4")
+        self.assertIn("auto_join_rooms:", derived["SYNAPSE_AUTO_JOIN_SECTION"])
+        self.assertIn("autocreate_auto_join_rooms: true", derived["SYNAPSE_AUTO_JOIN_SECTION"])
+
+    def test_apply_configuration_renders_auto_join(self):
+        cfg = self.sample_config()
+        cfg["features"]["auto_join"] = {
+            "rooms": ["#welcome:example.com"],
+            "autocreate": True,
+            "autocreate_federated": False,
+        }
+        self.write_config(cfg)
+        template = (self.root / "modules/core/synapse/homeserver.yaml.template").read_text()
+        (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
+            template + "\n{{SYNAPSE_AUTO_JOIN_SECTION}}\n"
+        )
+        ctx = apply.ApplyContext(self.root)
+        apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
+        self.assertIn("auto_join_rooms:", synapse)
+        self.assertIn("'#welcome:example.com'", synapse)
+        self.assertIn("autocreate_auto_join_rooms: true", synapse)
+        self.assertIn("autocreate_auto_join_rooms_federated: false", synapse)
+        self.assertNotIn("{{SYNAPSE_AUTO_JOIN_SECTION}}", synapse)
+
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
         first = apply.create_or_update_secrets(ctx, {})

@@ -6,6 +6,16 @@ features:
   registration_enabled: false
   federation_enabled: true
   local_login_enabled: true
+  auto_join:
+    rooms: []
+    # Example when enabling:
+    # rooms:
+    #   - '#welcome:example.com'
+    autocreate: true
+    autocreate_federated: true
+    room_preset: public_chat
+    # mxid_localpart: system   # required for private_chat / trusted_private_chat
+    rooms_for_guests: true
   element:
     enabled: true
     domain: element.example.com

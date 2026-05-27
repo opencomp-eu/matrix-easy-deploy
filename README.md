@@ -417,6 +417,17 @@ bash apply.sh --rotate-secrets
 
 > `--rotate-secrets` is destructive for existing deployments unless you plan migration/restart carefully.
 
+### Synapse auto-join rooms
+
+`features.auto_join` controls which rooms new users are joined to on registration, and whether those rooms are auto-created on first signup. Settings map to [Synapse auto-join configuration](https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html#auto_join_rooms) in the generated `homeserver.yaml`.
+
+- `rooms`: list of room or space aliases (for example `#welcome:example.com`). When empty, no auto-join block is written.
+- `autocreate`: create listed rooms when the first user registers (default `true`).
+- `autocreate_federated`: whether auto-created rooms are federated (default `true`).
+- `room_preset`: `public_chat`, `private_chat`, or `trusted_private_chat` (default `public_chat`).
+- `mxid_localpart`: localpart of the user that creates or invites to auto-join rooms; **required** for `private_chat` and `trusted_private_chat`.
+- `rooms_for_guests`: auto-join guest accounts too (default `true`).
+
 ### Element Web customization
 
 `features.element` exposes high-value org-facing Element Web options directly in `deploy.yaml`. `bash apply.sh` now writes `modules/core/element/config.json` from that YAML, so nested branding, support links, integrations, and home-page settings render as real JSON instead of string-substituted fragments.
