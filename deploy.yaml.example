@@ -12,10 +12,10 @@ features:
     # rooms:
     #   - '#welcome:example.com'
     autocreate: true
-    autocreate_federated: true
+    autocreate_federated: false
     room_preset: public_chat
     # mxid_localpart: system   # required for private_chat / trusted_private_chat
-    rooms_for_guests: true
+    rooms_for_guests: false
   element:
     enabled: true
     domain: element.example.com
