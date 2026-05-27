@@ -38,7 +38,7 @@ generate_config() {
     if [[ "$SERVER_NAME" == "$MATRIX_DOMAIN" ]]; then
         CADDY_MATRIX_HOSTS="$MATRIX_DOMAIN"
     else
-        CADDY_MATRIX_HOSTS="$MATRIX_DOMAIN,$SERVER_NAME"
+        CADDY_MATRIX_HOSTS="$MATRIX_DOMAIN, $SERVER_NAME"
     fi
 
     info "Writing ${DEPLOY_ENV}…"

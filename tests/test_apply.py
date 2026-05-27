@@ -108,6 +108,10 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(derived["HOOKSHOT_ENABLED"], "true")
         self.assertEqual(derived["WHATSAPP_BRIDGE_ENABLED"], "false")
 
+    def test_derive_values_caddy_matrix_hosts_space_after_comma(self):
+        derived = apply.derive_values(self.sample_config(), server_ip="1.2.3.4")
+        self.assertEqual(derived["CADDY_MATRIX_HOSTS"], "matrix.example.com, example.com")
+
     def test_derive_values_with_oidc_providers(self):
         cfg = self.sample_config()
         cfg["features"]["sso"] = {
@@ -287,7 +291,7 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("LOCAL_LOGIN_ENABLED=true", env_text)
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
-        self.assertIn("matrix.example.com", caddy)
+        self.assertIn("matrix.example.com, example.com {", caddy)
         self.assertIn("handle_path /livekit/jwt*", caddy)
         self.assertIn("reverse_proxy matrix_lk_jwt_service:8080", caddy)
         self.assertIn("handle_path /livekit/sfu*", caddy)

@@ -59,7 +59,7 @@ Installed commands:
 ## Notes
 
 - Recommended pre-release checks (local):
-	- `./test`
+	- `pip install -r requirements-dev.txt && ./test`
 	- `bash apply.sh --server-ip 127.0.0.1`
 	- Re-run `bash apply.sh --server-ip 127.0.0.1` to sanity-check idempotency
 - The pipeline does **not** perform telemetry or active deployment checks.

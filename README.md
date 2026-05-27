@@ -1005,11 +1005,22 @@ Issues, fixes, and module contributions are welcome. If you're adding a new modu
 
 ## Verification (local-dev friendly)
 
-You can validate logic and idempotency on a local laptop without a full server deployment:
+You can validate logic and idempotency on a local laptop without a full server deployment.
+
+Install test dependencies once (pytest gives a quiet summary by default; unittest is used as a fallback):
 
 ```bash
-# Unit and logic tests
+pip install -r requirements-dev.txt
+```
+
+```bash
+# All unit tests (quiet)
 ./test
+
+# Verbose / single file / filter by name
+./test -v
+./test tests/test_apply.py
+./test -k caddy
 
 # Deterministic apply run with fixed IP for local smoke checks
 bash apply.sh --server-ip 127.0.0.1

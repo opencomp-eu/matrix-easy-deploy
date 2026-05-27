@@ -27,13 +27,22 @@ class SetupRuntimeTests(unittest.TestCase):
 
             scripts_dir = tmp_path / "scripts"
             scripts_dir.mkdir(parents=True)
-            create_admin = scripts_dir / "create-admin.sh"
-            create_admin.write_text(
+            create_account = scripts_dir / "create-account.sh"
+            create_account.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
-                "printf '%s' \"$4\" > \"$CAPTURE_FILE\"\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  case \"$1\" in\n"
+                "    --password)\n"
+                "      printf '%s' \"$2\" > \"$CAPTURE_FILE\"\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    *) shift ;;\n"
+                "  esac\n"
+                "done\n"
+                "exit 1\n"
             )
-            create_admin.chmod(0o755)
+            create_account.chmod(0o755)
 
             script = textwrap.dedent(
                 """
@@ -92,13 +101,22 @@ class SetupRuntimeTests(unittest.TestCase):
 
             scripts_dir = tmp_path / "scripts"
             scripts_dir.mkdir(parents=True)
-            create_admin = scripts_dir / "create-admin.sh"
-            create_admin.write_text(
+            create_account = scripts_dir / "create-account.sh"
+            create_account.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
-                "printf '%s' \"$4\" > \"$CAPTURE_FILE\"\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  case \"$1\" in\n"
+                "    --password)\n"
+                "      printf '%s' \"$2\" > \"$CAPTURE_FILE\"\n"
+                "      exit 0\n"
+                "      ;;\n"
+                "    *) shift ;;\n"
+                "  esac\n"
+                "done\n"
+                "exit 1\n"
             )
-            create_admin.chmod(0o755)
+            create_account.chmod(0o755)
 
             script = textwrap.dedent(
                 """
