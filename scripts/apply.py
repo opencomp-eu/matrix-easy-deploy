@@ -830,6 +830,135 @@ def strip_empty_caddy_site_blocks(content: str) -> str:
     return "\n".join(kept) + ("\n" if content.endswith("\n") else "")
 
 
+def parse_caddy_hosts_ordered(header_line: str) -> list[str]:
+    hosts_part = header_line.rsplit("{", 1)[0].strip()
+    if not hosts_part:
+        return []
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for host in hosts_part.split(","):
+        host = host.strip()
+        if host and host not in seen:
+            seen.add(host)
+            ordered.append(host)
+    return ordered
+
+
+def caddy_hosts_group_key(hosts_ordered: list[str]) -> tuple[str, ...]:
+    return tuple(sorted(hosts_ordered))
+
+
+def is_caddy_site_header(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped.endswith("{"):
+        return False
+    if line != line.lstrip():
+        return False
+    return bool(stripped[:-1].strip())
+
+
+def merge_duplicate_caddy_site_blocks(content: str) -> str:
+    lines = content.splitlines()
+    leading_file: list[str] = []
+    blocks: list[dict] = []
+    pending_leading: list[str] = []
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+
+        if is_caddy_site_header(line):
+            body: list[str] = []
+            depth = line.count("{") - line.count("}")
+            index += 1
+            while index < len(lines) and depth > 0:
+                if depth == 1 and lines[index].strip() == "}":
+                    index += 1
+                    depth -= 1
+                    break
+                body.append(lines[index])
+                depth += lines[index].count("{") - lines[index].count("}")
+                index += 1
+
+            hosts_ordered = parse_caddy_hosts_ordered(line)
+            blocks.append(
+                {
+                    "leading": pending_leading,
+                    "header": line,
+                    "body": body,
+                    "hosts_ordered": hosts_ordered,
+                    "hosts": caddy_hosts_group_key(hosts_ordered),
+                }
+            )
+            pending_leading = []
+            continue
+
+        if not blocks:
+            leading_file.append(line)
+        else:
+            pending_leading.append(line)
+        index += 1
+
+    trailing = pending_leading
+    if not blocks:
+        return content
+
+    order: list[tuple[str, ...]] = []
+    groups: dict[tuple[str, ...], list[dict]] = {}
+    for block in blocks:
+        hosts = block["hosts"]
+        if hosts not in groups:
+            order.append(hosts)
+        groups.setdefault(hosts, []).append(block)
+
+    output: list[str] = []
+    output.extend(leading_file)
+
+    for hosts in order:
+        group = groups[hosts]
+        if not hosts:
+            for block in group:
+                output.extend(block["leading"])
+                output.append(block["header"])
+                output.extend(block["body"])
+                output.append("}")
+            continue
+
+        leading: list[str] = []
+        for block in group:
+            for candidate in block["leading"]:
+                if candidate not in leading:
+                    leading.append(candidate)
+        output.extend(leading)
+        if leading and leading[-1].strip():
+            output.append("")
+
+        output.append(f"{', '.join(group[0]['hosts_ordered'])} {{")
+
+        merged_body: list[str] = []
+        for block in group:
+            if merged_body and merged_body[-1].strip() and block["body"] and block["body"][0].strip():
+                merged_body.append("")
+            merged_body.extend(block["body"])
+        output.extend(merged_body)
+        output.append("}")
+
+    if trailing:
+        if output and output[-1].strip():
+            output.append("")
+        output.extend(trailing)
+
+    return "\n".join(output) + ("\n" if content.endswith("\n") else "")
+
+
+def finalize_caddyfile_content(content: str) -> str:
+    return merge_duplicate_caddy_site_blocks(strip_empty_caddy_site_blocks(content))
+
+
+def finalize_caddyfile(path: Path) -> None:
+    path.write_text(finalize_caddyfile_content(path.read_text()))
+
+
 def fail_if_unresolved_placeholder(path: Path) -> None:
     content = path.read_text()
     if "{{" in content:
@@ -843,7 +972,7 @@ def render_templates(ctx: ApplyContext, config: dict, env_vars: dict) -> None:
     )
     caddy_dest = ctx.project_root / "caddy" / "Caddyfile"
     render_template(caddy_template, caddy_dest, env_vars)
-    caddy_dest.write_text(strip_empty_caddy_site_blocks(caddy_dest.read_text()))
+    caddy_dest.write_text(finalize_caddyfile_content(caddy_dest.read_text()))
     fail_if_unresolved_placeholder(caddy_dest)
 
     synapse_template = ctx.project_root / "modules" / "core" / "synapse" / "homeserver.yaml.template"
