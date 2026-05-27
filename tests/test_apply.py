@@ -470,6 +470,79 @@ class ApplyTests(unittest.TestCase):
         self.assertNotIn('"" {', caddy)
         self.assertNotIn("# LiveKit SFU", caddy)
 
+    def test_merge_duplicate_caddy_site_blocks_ignores_comment_with_brace(self):
+        original = (
+            "# Comment {\n"
+            "example.com {\n"
+            "    reverse_proxy matrix_synapse:8008\n"
+            "}\n"
+        )
+        merged = apply.merge_duplicate_caddy_site_blocks(original)
+        self.assertIn("# Comment {", merged)
+        self.assertEqual(merged.count("example.com {"), 1)
+        self.assertIn("reverse_proxy matrix_synapse:8008", merged)
+
+    def test_merge_duplicate_caddy_site_blocks_combines_identical_hosts(self):
+        original = (
+            "# Matrix\n"
+            "example.com {\n"
+            "    handle /_matrix/* {\n"
+            "        reverse_proxy matrix_synapse:8008\n"
+            "    }\n"
+            "}\n\n"
+            "# LiveKit\n"
+            "example.com {\n"
+            "    handle /livekit/jwt* {\n"
+            "        reverse_proxy matrix_lk_jwt_service:8080\n"
+            "    }\n"
+            "}\n\n"
+            "# Element\n"
+            "example.com {\n"
+            "    reverse_proxy matrix_element:80\n"
+            "}\n"
+        )
+        merged = apply.merge_duplicate_caddy_site_blocks(original)
+        self.assertEqual(merged.count("example.com {"), 1)
+        self.assertIn("handle /_matrix/*", merged)
+        self.assertIn("handle /livekit/jwt*", merged)
+        self.assertIn("reverse_proxy matrix_element:80", merged)
+
+    def test_merge_duplicate_caddy_site_blocks_leaves_distinct_hosts(self):
+        original = (
+            "matrix.example.com {\n"
+            "    reverse_proxy matrix_synapse:8008\n"
+            "}\n\n"
+            "element.example.com {\n"
+            "    reverse_proxy matrix_element:80\n"
+            "}\n"
+        )
+        merged = apply.merge_duplicate_caddy_site_blocks(original)
+        self.assertEqual(merged.count("matrix.example.com {"), 1)
+        self.assertEqual(merged.count("element.example.com {"), 1)
+
+    def test_apply_configuration_merges_unified_domain_caddy_blocks(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        (self.root / "caddy/Caddyfile.template").write_text(
+            (repo_root / "caddy/Caddyfile.template").read_text()
+        )
+        cfg = self.sample_config()
+        unified = "example.com"
+        cfg["matrix"]["domain"] = unified
+        cfg["matrix"]["server_name"] = unified
+        cfg["features"]["element"]["domain"] = unified
+        cfg["features"]["calls"]["livekit_domain"] = unified
+        self.write_config(cfg)
+        ctx = apply.ApplyContext(self.root)
+
+        apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        caddy = (self.root / "caddy/Caddyfile").read_text()
+        self.assertEqual(caddy.count("example.com {"), 1)
+        self.assertIn("handle /_matrix/*", caddy)
+        self.assertIn("handle /livekit/jwt*", caddy)
+        self.assertIn("reverse_proxy matrix_element:80", caddy)
+        self.assertNotIn("{{", caddy)
+
     def test_apply_configuration_writes_bridge_env_values(self):
         cfg = self.sample_config()
         cfg["modules"]["whatsapp_bridge"] = {
