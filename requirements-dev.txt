@@ -1,0 +1,6 @@
+# Dev/test dependencies. Install with:
+#   pip install -r requirements-dev.txt
+# or:
+#   pip install -e ".[dev]"
+PyYAML>=6.0
+pytest>=8.0

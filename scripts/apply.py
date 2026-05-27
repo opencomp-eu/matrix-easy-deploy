@@ -513,7 +513,7 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     hosts = [matrix_domain]
     if server_name != matrix_domain:
         hosts.append(server_name)
-    derived["CADDY_MATRIX_HOSTS"] = ",".join(hosts)
+    derived["CADDY_MATRIX_HOSTS"] = ", ".join(hosts)
 
     sso = features.get("sso", {}) if isinstance(features.get("sso", {}), dict) else {}
     if bool(sso.get("enabled", False)):
