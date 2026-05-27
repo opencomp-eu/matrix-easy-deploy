@@ -419,7 +419,7 @@ bash apply.sh --rotate-secrets
 
 ### Synapse auto-join rooms
 
-`features.auto_join` controls which rooms new users are joined to on registration, and whether those rooms are auto-created on first signup. Settings map to [Synapse auto-join configuration](https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html#auto_join_rooms) in the generated `homeserver.yaml`.
+`features.synapse.auto_join` controls which rooms new users are joined to on registration, and whether those rooms are auto-created on first signup. Settings map to [Synapse auto-join configuration](https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html#auto_join_rooms) in the generated `homeserver.yaml`.
 
 - `rooms`: list of room or space aliases (for example `#welcome:example.com`). When empty, no auto-join block is written.
 - `autocreate`: create listed rooms when the first user registers (default `true`).

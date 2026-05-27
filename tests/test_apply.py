@@ -262,24 +262,28 @@ class ApplyTests(unittest.TestCase):
 
     def test_validate_config_rejects_invalid_auto_join_rooms(self):
         cfg = self.sample_config()
-        cfg["features"]["auto_join"] = {"rooms": "not-a-list"}
+        cfg["features"]["synapse"] = {"auto_join": {"rooms": "not-a-list"}}
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
     def test_validate_config_rejects_invalid_auto_join_room_preset(self):
         cfg = self.sample_config()
-        cfg["features"]["auto_join"] = {
-            "rooms": ["#welcome:example.com"],
-            "room_preset": "secret_lair",
+        cfg["features"]["synapse"] = {
+            "auto_join": {
+                "rooms": ["#welcome:example.com"],
+                "room_preset": "secret_lair",
+            },
         }
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
     def test_validate_config_rejects_private_preset_without_mxid_localpart(self):
         cfg = self.sample_config()
-        cfg["features"]["auto_join"] = {
-            "rooms": ["#welcome:example.com"],
-            "room_preset": "private_chat",
+        cfg["features"]["synapse"] = {
+            "auto_join": {
+                "rooms": ["#welcome:example.com"],
+                "room_preset": "private_chat",
+            },
         }
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
@@ -310,9 +314,11 @@ class ApplyTests(unittest.TestCase):
 
     def test_derive_values_synapse_auto_join_section(self):
         cfg = self.sample_config()
-        cfg["features"]["auto_join"] = {
-            "rooms": ["#welcome:example.com"],
-            "autocreate": True,
+        cfg["features"]["synapse"] = {
+            "auto_join": {
+                "rooms": ["#welcome:example.com"],
+                "autocreate": True,
+            },
         }
         derived = apply.derive_values(cfg, server_ip="1.2.3.4")
         self.assertIn("auto_join_rooms:", derived["SYNAPSE_AUTO_JOIN_SECTION"])
@@ -320,10 +326,12 @@ class ApplyTests(unittest.TestCase):
 
     def test_apply_configuration_renders_auto_join(self):
         cfg = self.sample_config()
-        cfg["features"]["auto_join"] = {
-            "rooms": ["#welcome:example.com"],
-            "autocreate": True,
-            "autocreate_federated": False,
+        cfg["features"]["synapse"] = {
+            "auto_join": {
+                "rooms": ["#welcome:example.com"],
+                "autocreate": True,
+                "autocreate_federated": False,
+            },
         }
         self.write_config(cfg)
         template = (self.root / "modules/core/synapse/homeserver.yaml.template").read_text()
