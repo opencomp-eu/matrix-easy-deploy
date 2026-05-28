@@ -707,7 +707,7 @@ matrix-easy-deploy/
     │   ├── runtime.sh            # Docker setup/start + admin bootstrap
     │   ├── summary.sh            # Final post-setup summary
     │   └── modules.sh            # --module dispatcher helper
-    ├── med-admin.sh              # Operator admin CLI (bootstrap/list/query/reset)
+    ├── med-admin.sh              # Operator admin CLI (bootstrap/list/query/reset/rooms)
     └── create-account.sh         # Account registration helper (user or admin)
 ├── ensure_dependencies.sh       # Non-interactive host dependency installer
 ```
@@ -818,6 +818,32 @@ bash scripts/med-admin.sh get-account alice
 ```bash
 bash scripts/med-admin.sh reset-password alice --password 'new-long-random-password' --yes
 ```
+
+**Create a room (interactive)**
+
+```bash
+bash scripts/med-admin.sh create-room
+```
+
+This prompts for optional details and creates a private room by default if you do not choose public visibility.
+
+**Create a room (non-interactive)**
+
+```bash
+bash scripts/med-admin.sh create-room \
+  --name "Care Team" \
+  --alias care-team \
+  --topic "Clinical coordination" \
+  --private \
+  --invite alice \
+  --invite @bob:example.com \
+  --yes
+```
+
+Notes:
+- `--name`, `--alias`, `--topic`, `--invite`, and `--direct` are optional.
+- Visibility defaults to private when omitted (`--public` or `--private` can be passed explicitly).
+- `--invite` accepts either usernames or full MXIDs and can be provided multiple times.
 
 **How it works**
 

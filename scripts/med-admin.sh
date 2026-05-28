@@ -27,6 +27,12 @@ LIST_LIMIT="100"
 LIST_FROM=""
 TARGET_ACCOUNT=""
 RESET_PASSWORD_VALUE=""
+CREATE_ROOM_NAME=""
+CREATE_ROOM_ALIAS=""
+CREATE_ROOM_TOPIC=""
+CREATE_ROOM_VISIBILITY=""
+CREATE_ROOM_INVITES=""
+CREATE_ROOM_DIRECT="false"
 
 usage() {
     cat <<'EOF'
@@ -36,6 +42,7 @@ Usage:
   bash scripts/med-admin.sh list-admins [--filter alice] [--limit 100] [--from 0]
   bash scripts/med-admin.sh get-account USERNAME_OR_MXID
   bash scripts/med-admin.sh reset-password USERNAME_OR_MXID [--password 'new-long-secret'] [--yes]
+  bash scripts/med-admin.sh create-room [--name 'Care Team'] [--alias care-team] [--topic 'Clinical coordination'] [--public|--private] [--invite USER_OR_MXID]... [--direct] [--yes]
 
 Notes:
   'bootstrap' generates its own password (or accepts --password to use your own), creates the
@@ -110,6 +117,42 @@ ensure_auth_username() {
 
 ensure_bootstrap_config() {
     [[ -n "$SHARED_SECRET" ]] || die "Could not determine REGISTRATION_SHARED_SECRET. Pass --shared-secret through create-account or ensure it exists in .env."
+}
+
+upsert_env_value() {
+    local key="$1"
+    local value="$2"
+
+    [[ "$key" =~ ^[A-Z0-9_]+$ ]] || die "Invalid .env key: ${key}"
+    [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "Value for ${key} cannot contain newlines."
+
+    python3 - "$DEPLOY_ENV" "$key" "$value" <<'PYEOF'
+import pathlib
+import sys
+
+env_path = pathlib.Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+new_line = f"{key}={value}\n"
+
+lines = []
+if env_path.exists():
+    lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+updated = False
+for idx, line in enumerate(lines):
+    if line.startswith(f"{key}="):
+        lines[idx] = new_line
+        updated = True
+        break
+
+if not updated:
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] = lines[-1] + "\n"
+    lines.append(new_line)
+
+env_path.write_text("".join(lines), encoding="utf-8")
+PYEOF
 }
 
 json_get() {
@@ -304,6 +347,54 @@ parse_reset_password_args() {
     done
 }
 
+parse_create_room_args() {
+    local args=("${REMAINING_ARGS[@]}")
+    local idx=0
+
+    while [[ $idx -lt ${#args[@]} ]]; do
+        case "${args[$idx]}" in
+            --name)
+                ((idx + 1 < ${#args[@]})) || die "Missing value for --name"
+                CREATE_ROOM_NAME="${args[$((idx + 1))]}"
+                idx=$((idx + 2))
+                ;;
+            --alias)
+                ((idx + 1 < ${#args[@]})) || die "Missing value for --alias"
+                CREATE_ROOM_ALIAS="${args[$((idx + 1))]}"
+                idx=$((idx + 2))
+                ;;
+            --topic)
+                ((idx + 1 < ${#args[@]})) || die "Missing value for --topic"
+                CREATE_ROOM_TOPIC="${args[$((idx + 1))]}"
+                idx=$((idx + 2))
+                ;;
+            --public)
+                CREATE_ROOM_VISIBILITY="public"
+                idx=$((idx + 1))
+                ;;
+            --private)
+                CREATE_ROOM_VISIBILITY="private"
+                idx=$((idx + 1))
+                ;;
+            --invite)
+                ((idx + 1 < ${#args[@]})) || die "Missing value for --invite"
+                if [[ -n "$CREATE_ROOM_INVITES" ]]; then
+                    CREATE_ROOM_INVITES+=","
+                fi
+                CREATE_ROOM_INVITES+="${args[$((idx + 1))]}"
+                idx=$((idx + 2))
+                ;;
+            --direct)
+                CREATE_ROOM_DIRECT="true"
+                idx=$((idx + 1))
+                ;;
+            *)
+                die "Unknown create-room argument: ${args[$idx]}"
+                ;;
+        esac
+    done
+}
+
 get_admin_token() {
     if [[ -n "$ACCESS_TOKEN" ]]; then
         printf '%s' "$ACCESS_TOKEN"
@@ -355,6 +446,63 @@ PYEOF
     err_code="${error_info%%$'\t'*}"
     err_msg="${error_info#*$'\t'}"
     die "Could not obtain an admin access token via password login${err_code:+ (${err_code}: ${err_msg})}. If local password login is disabled, this v1 tool requires an explicit --access-token."
+}
+
+client_api_request() {
+    local method="$1"
+    local endpoint="$2"
+    local payload="${3:-}"
+    local response_file http_status response_body err_info err_code err_msg curl_args
+
+    ensure_base_url
+
+    response_file="$(mktemp)"
+    curl_args=(
+        -sS
+        -o "$response_file"
+        -w "%{http_code}"
+        -X "$method"
+        "${BASE_URL}/_matrix/client/v3/${endpoint}"
+        -H "Authorization: Bearer $(get_admin_token)"
+    )
+
+    if [[ -n "$payload" ]]; then
+        curl_args+=(
+            -H "Content-Type: application/json"
+            --data-binary @-
+        )
+        http_status="$(curl "${curl_args[@]}" <<< "$payload")"
+    else
+        http_status="$(curl "${curl_args[@]}")"
+    fi
+
+    response_body="$(cat "$response_file")"
+    rm -f "$response_file"
+
+    if [[ "$http_status" =~ ^2 ]]; then
+        printf '%s' "$response_body"
+        return
+    fi
+
+    err_info="$(python3 - <<'PYEOF' "$response_body"
+import json
+import sys
+
+raw = sys.argv[1]
+try:
+    data = json.loads(raw) if raw else {}
+except Exception:
+    data = {}
+
+print(f"{data.get('errcode','')}\t{data.get('error','')}")
+PYEOF
+)"
+    err_code="${err_info%%$'\t'*}"
+    err_msg="${err_info#*$'\t'}"
+    if [[ -n "$err_code" || -n "$err_msg" ]]; then
+        die "Synapse client API request failed (HTTP ${http_status}, ${err_code}: ${err_msg})."
+    fi
+    die "Synapse client API request failed (HTTP ${http_status}). Response: ${response_body}"
 }
 
 api_request() {
@@ -430,10 +578,15 @@ run_bootstrap() {
     if [[ -n "$SHARED_SECRET" ]]; then
         create_args+=(--shared-secret "$SHARED_SECRET")
     fi
+    if [[ "$BOOTSTRAP_GENERATE_PASSWORD" == "true" && -n "$BOOTSTRAP_PASSWORD" ]]; then
+        die "Use either --password or --generate-password, not both."
+    fi
+
     if [[ -n "$BOOTSTRAP_PASSWORD" ]]; then
         create_args+=(--password "$BOOTSTRAP_PASSWORD")
         generated_password="$BOOTSTRAP_PASSWORD"
     else
+        # If --generate-password is set, this explicit branch is used as well.
         create_args+=(--password "$generated_password")
     fi
 
@@ -441,19 +594,8 @@ run_bootstrap() {
     bash "${SCRIPT_DIR}/create-account.sh" "${create_args[@]}" >/dev/null
     
     # Store the credentials in .env for future use by admin API commands
-    if grep -q "^MED_ADMIN_USERNAME=" "$DEPLOY_ENV" 2>/dev/null; then
-        sed -i.bak "s/^MED_ADMIN_USERNAME=.*/MED_ADMIN_USERNAME=$BOOTSTRAP_USERNAME/" "$DEPLOY_ENV"
-    else
-        echo "MED_ADMIN_USERNAME=$BOOTSTRAP_USERNAME" >> "$DEPLOY_ENV"
-    fi
-    
-    if grep -q "^MED_ADMIN_PASSWORD=" "$DEPLOY_ENV" 2>/dev/null; then
-        sed -i.bak "s/^MED_ADMIN_PASSWORD=.*/MED_ADMIN_PASSWORD=$generated_password/" "$DEPLOY_ENV"
-    else
-        echo "MED_ADMIN_PASSWORD=$generated_password" >> "$DEPLOY_ENV"
-    fi
-    
-    rm -f "${DEPLOY_ENV}.bak"
+    upsert_env_value "MED_ADMIN_USERNAME" "$BOOTSTRAP_USERNAME"
+    upsert_env_value "MED_ADMIN_PASSWORD" "$generated_password"
     success "Admin account '${BOOTSTRAP_USERNAME}' ready for admin operations."
     success "Credentials stored in .env for automatic use by admin commands."
 }
@@ -536,6 +678,121 @@ PYEOF
     success "Password reset for '${user_id}'."
 }
 
+prompt_for_create_room_details() {
+    if [[ -z "$CREATE_ROOM_NAME" && -t 0 ]]; then
+        ask CREATE_ROOM_NAME "Room name (optional)"
+    fi
+
+    if [[ -z "$CREATE_ROOM_VISIBILITY" && -t 0 ]]; then
+        local is_public="n"
+        ask_yn is_public "Public room?" "n"
+        if [[ "$is_public" == "y" ]]; then
+            CREATE_ROOM_VISIBILITY="public"
+        else
+            CREATE_ROOM_VISIBILITY="private"
+        fi
+    fi
+
+    if [[ -z "$CREATE_ROOM_VISIBILITY" ]]; then
+        CREATE_ROOM_VISIBILITY="private"
+    fi
+}
+
+confirm_create_room() {
+    local visibility_label="$1"
+    local alias_label="$2"
+    local invites_label="$3"
+
+    if [[ "$ASSUME_YES" == "true" ]]; then
+        return
+    fi
+
+    echo
+    echo -e "${BOLD}Create room${RESET}"
+    echo -e "  Name:        ${CYAN}${CREATE_ROOM_NAME:-<none>}${RESET}"
+    echo -e "  Visibility:  ${CYAN}${visibility_label}${RESET}"
+    echo -e "  Alias:       ${CYAN}${alias_label}${RESET}"
+    echo -e "  Invites:     ${CYAN}${invites_label}${RESET}"
+    echo -e "  Direct chat: ${CYAN}${CREATE_ROOM_DIRECT}${RESET}"
+    ask_yn CONFIRM_CREATE_ROOM "Create this room now?" "y"
+    [[ "$CONFIRM_CREATE_ROOM" == "y" ]] || die "Aborted."
+}
+
+run_create_room() {
+    local payload response room_id room_alias canonical_alias alias_localpart invites_json
+    local -a invite_inputs=()
+    local -a invite_ids=()
+
+    read_deploy_env
+    check_common_dependencies
+    ensure_base_url
+    prompt_for_create_room_details
+
+    if [[ -n "$CREATE_ROOM_INVITES" ]]; then
+        IFS=',' read -r -a invite_inputs <<< "$CREATE_ROOM_INVITES"
+        local entry
+        for entry in "${invite_inputs[@]}"; do
+            entry="${entry#"${entry%%[![:space:]]*}"}"
+            entry="${entry%"${entry##*[![:space:]]}"}"
+            [[ -n "$entry" ]] || continue
+            invite_ids+=("$(to_user_id "$entry")")
+        done
+    fi
+    invites_json="$(printf '%s\n' "${invite_ids[@]}" | python3 -c "import json,sys; print(json.dumps([x.strip() for x in sys.stdin if x.strip()]))")"
+
+    alias_localpart="${CREATE_ROOM_ALIAS#\#}"
+    alias_localpart="${alias_localpart%%:*}"
+    if [[ -n "$alias_localpart" ]]; then
+        ensure_server_name
+        canonical_alias="#${alias_localpart}:${SERVER_NAME}"
+    else
+        canonical_alias=""
+    fi
+
+    confirm_create_room "$CREATE_ROOM_VISIBILITY" "${canonical_alias:-<none>}" "${CREATE_ROOM_INVITES:-<none>}"
+
+    payload="$(python3 - <<PYEOF
+import json
+
+payload = {
+    "is_direct": ${CREATE_ROOM_DIRECT},
+    "visibility": ${CREATE_ROOM_VISIBILITY@Q},
+    "preset": "public_chat" if ${CREATE_ROOM_VISIBILITY@Q} == "public" else "private_chat",
+}
+
+name = ${CREATE_ROOM_NAME@Q}
+if name:
+    payload["name"] = name
+
+topic = ${CREATE_ROOM_TOPIC@Q}
+if topic:
+    payload["topic"] = topic
+
+alias = ${alias_localpart@Q}
+if alias:
+    payload["room_alias_name"] = alias
+
+invites = json.loads(${invites_json@Q})
+if invites:
+    payload["invite"] = invites
+
+print(json.dumps(payload))
+PYEOF
+)"
+
+    response="$(client_api_request POST "createRoom" "$payload")"
+    room_id="$(echo "$response" | python3 -c "import json,sys; print(json.load(sys.stdin).get('room_id',''))" 2>/dev/null || true)"
+    room_alias="$(echo "$response" | python3 -c "import json,sys; print(json.load(sys.stdin).get('room_alias',''))" 2>/dev/null || true)"
+
+    success "Room created."
+    [[ -n "$room_id" ]] && echo "  room_id: ${room_id}"
+    if [[ -n "$room_alias" ]]; then
+        echo "  alias:   ${room_alias}"
+    elif [[ -n "$canonical_alias" ]]; then
+        echo "  alias:   ${canonical_alias}"
+    fi
+}
+
 main() {
     [[ $# -ge 1 ]] || {
         usage
@@ -563,6 +820,10 @@ main() {
         reset-password)
             parse_reset_password_args
             run_reset_password
+            ;;
+        create-room)
+            parse_create_room_args
+            run_create_room
             ;;
         -h|--help|help)
             usage
