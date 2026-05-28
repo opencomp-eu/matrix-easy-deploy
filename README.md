@@ -707,7 +707,8 @@ matrix-easy-deploy/
     │   ├── runtime.sh            # Docker setup/start + admin bootstrap
     │   ├── summary.sh            # Final post-setup summary
     │   └── modules.sh            # --module dispatcher helper
-    ├── med-admin.sh              # Operator admin CLI (bootstrap/list/query/reset/rooms)
+    ├── med-admin.sh              # Thin wrapper for the med-admin Python CLI
+    ├── med_admin.py              # Operator admin CLI (bootstrap/list/query/reset/rooms)
     └── create-account.sh         # Account registration helper (user or admin)
 ├── ensure_dependencies.sh       # Non-interactive host dependency installer
 ```
