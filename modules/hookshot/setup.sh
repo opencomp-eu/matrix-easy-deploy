@@ -44,7 +44,7 @@ STATE_SECRETS="${PROJECT_ROOT}/.matrix-easy-deploy/secrets.yaml"
 MODULE_DIR="${SCRIPT_DIR}"
 HOOKSHOT_DATA_DIR="${MODULE_DIR}/hookshot"
 CORE_SYNAPSE_DATA_DIR="${PROJECT_ROOT}/modules/core/synapse_data"
-HOMESERVER_YAML="${PROJECT_ROOT}/modules/core/synapse/homeserver.yaml"
+HOMESERVER_CONFIG=""
 CADDYFILE="${PROJECT_ROOT}/caddy/Caddyfile"
 APP_SERVICE_CHANGED="0"
 
@@ -79,7 +79,8 @@ load_module_defaults() {
 # Step 1b — Verify SERVER_NAME matches Synapse's actual server_name
 # =============================================================================
 verify_server_name() {
-    module_verify_server_name "$HOMESERVER_YAML" "hookshot config"
+    HOMESERVER_CONFIG="$(module_homeserver_config_file "$PROJECT_ROOT")"
+    module_verify_server_name "$HOMESERVER_CONFIG" "hookshot config"
 }
 # =============================================================================
 gather_config() {
@@ -219,14 +220,18 @@ EOF
 # Step 4b — Ensure Synapse encryption compatibility flags are enabled
 # =============================================================================
 ensure_synapse_e2ee_flags() {
-    if [[ ! -f "$HOMESERVER_YAML" ]]; then
-        warn "homeserver.yaml not found — skipping Synapse encryption flags update."
+    if [[ "${SERVER_IMPLEMENTATION:-synapse}" == "tuwunel" ]]; then
+        info "Skipping Synapse-specific Hookshot encryption flags (Tuwunel deployment)."
+        return
+    fi
+    if [[ ! -f "$HOMESERVER_CONFIG" ]]; then
+        warn "homeserver config not found — skipping Synapse encryption flags update."
         return
     fi
 
     info "Ensuring Synapse MSC3202/MSC2409 compatibility flags are enabled…"
     python3 "${PROJECT_ROOT}/scripts/hookshot_synapse_features.py" \
-        --homeserver-yaml "$HOMESERVER_YAML"
+        --homeserver-yaml "$HOMESERVER_CONFIG"
     success "Synapse encryption compatibility flags ensured."
 }
 
@@ -235,9 +240,15 @@ ensure_synapse_e2ee_flags() {
 # =============================================================================
 register_appservice() {
     local reg_src="${HOOKSHOT_DATA_DIR}/registration.yml"
-    local reg_dest="${CORE_SYNAPSE_DATA_DIR}/hookshot-registration.yml"
-    local reg_container_path="/data/hookshot-registration.yml"
-    if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_YAML" "$reg_container_path" "Hookshot")" == "1" ]]; then
+    local reg_dest reg_container_path
+    if [[ "${SERVER_IMPLEMENTATION:-synapse}" == "tuwunel" ]]; then
+        reg_dest="$(module_homeserver_appservice_data_dir "$PROJECT_ROOT")/hookshot-registration.yml"
+        reg_container_path="/data/appservices/hookshot-registration.yml"
+    else
+        reg_dest="${CORE_SYNAPSE_DATA_DIR}/hookshot-registration.yml"
+        reg_container_path="/data/hookshot-registration.yml"
+    fi
+    if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_CONFIG" "$reg_container_path" "Hookshot")" == "1" ]]; then
         APP_SERVICE_CHANGED="1"
     fi
 }

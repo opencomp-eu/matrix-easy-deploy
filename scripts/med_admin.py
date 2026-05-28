@@ -17,6 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+def _load_tuwunel_admin_module():
+    script_dir = Path(__file__).resolve().parent
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
+    import tuwunel_admin
+
+    return tuwunel_admin
+
 
 RED = "\033[0;31m"
 YELLOW = "\033[1;33m"
@@ -130,9 +138,11 @@ class Context:
     access_token: str = ""
     med_admin_username: str = ""
     med_admin_password: str = ""
+    server_implementation: str = "synapse"
 
     def read_deploy_env(self) -> None:
         env = load_env_file(self.env_path)
+        self.server_implementation = env.get("SERVER_IMPLEMENTATION", "synapse").strip().lower() or "synapse"
         if not self.server_name:
             self.server_name = env.get("SERVER_NAME", "")
         if not self.base_url and env.get("MATRIX_DOMAIN"):
@@ -165,9 +175,21 @@ class Context:
             )
 
     def ensure_bootstrap_config(self) -> None:
+        if self.server_implementation == "tuwunel":
+            return
         if not self.shared_secret:
             die(
                 "Could not determine REGISTRATION_SHARED_SECRET. Pass --shared-secret or ensure it exists in .env."
+            )
+
+    def is_tuwunel(self) -> bool:
+        return self.server_implementation == "tuwunel"
+
+    def require_synapse_admin_api(self, command: str) -> None:
+        if self.is_tuwunel():
+            die(
+                f"Command '{command}' is not available for Tuwunel via Synapse HTTP admin API. "
+                "Tuwunel administration uses docker exec admin commands."
             )
 
     def prompt_for_auth_password(self) -> None:
@@ -276,6 +298,20 @@ def cmd_bootstrap(ctx: Context, args: argparse.Namespace) -> None:
         die("Use either --password or --generate-password, not both.")
 
     password = args.password or generate_password()
+
+    if ctx.is_tuwunel():
+        tuwunel_admin = _load_tuwunel_admin_module()
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path)
+        info(f"Bootstrapping admin account '{args.username}' via Tuwunel…")
+        try:
+            admin.create_user(args.username, password, grant_admin=True)
+        except tuwunel_admin.TuwunelAdminError as exc:
+            die(str(exc))
+        upsert_env_value(ctx.env_path, "MED_ADMIN_USERNAME", args.username)
+        upsert_env_value(ctx.env_path, "MED_ADMIN_PASSWORD", password)
+        success(f"Admin account '{args.username}' ready for admin operations.")
+        success("Credentials stored in .env for automatic use by admin commands.")
+        return
     create_cmd = [
         "bash",
         str(ctx.script_dir / "create-account.sh"),
@@ -318,6 +354,25 @@ def _print_table_rows(headers: list[str], rows: list[list[Any]]) -> None:
 
 def cmd_list_accounts(ctx: Context, args: argparse.Namespace, admins_only: bool) -> None:
     ctx.read_deploy_env()
+
+    if ctx.is_tuwunel():
+        if admins_only:
+            warn("Tuwunel does not expose Synapse-style admin flags; listing all local users.")
+        tuwunel_admin = _load_tuwunel_admin_module()
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path)
+        users = []
+        try:
+            users = admin.list_users()
+        except tuwunel_admin.TuwunelAdminError as exc:
+            die(str(exc))
+        if args.filter:
+            needle = args.filter.lower()
+            users = [u for u in users if needle in u.lower()]
+        rows = [[u, "unknown", False, False, ""] for u in users]
+        _print_table_rows(["USER_ID", "ADMIN", "DEACTIVATED", "LOCKED", "DISPLAYNAME"], rows)
+        return
+
+    ctx.require_synapse_admin_api("list-accounts")
     ctx.ensure_base_url()
 
     limit = _parse_int("--limit", args.limit)
@@ -351,9 +406,27 @@ def cmd_list_accounts(ctx: Context, args: argparse.Namespace, admins_only: bool)
 
 def cmd_get_account(ctx: Context, args: argparse.Namespace) -> None:
     ctx.read_deploy_env()
-    ctx.ensure_base_url()
     ctx.ensure_server_name()
     user_id = to_user_id(args.target, ctx.server_name)
+
+    if ctx.is_tuwunel():
+        tuwunel_admin = _load_tuwunel_admin_module()
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path)
+        users = []
+        try:
+            users = admin.list_users()
+        except tuwunel_admin.TuwunelAdminError as exc:
+            die(str(exc))
+        if user_id not in users:
+            die(f"User not found: {user_id}")
+        print(f"User ID:      {user_id}")
+        print("Admin:        unknown")
+        print("Deactivated:  False")
+        print("Locked:       False")
+        return
+
+    ctx.require_synapse_admin_api("get-account")
+    ctx.ensure_base_url()
     encoded = urllib.parse.quote(user_id, safe="")
     data = ctx.admin_api("GET", f"v2/users/{encoded}")
     print(f"User ID:      {data.get('name', '')}")
@@ -385,12 +458,29 @@ def _resolve_reset_password(args: argparse.Namespace) -> str:
 
 def cmd_reset_password(ctx: Context, args: argparse.Namespace) -> None:
     ctx.read_deploy_env()
-    ctx.ensure_base_url()
     ctx.ensure_server_name()
     user_id = to_user_id(args.target, ctx.server_name)
-    encoded = urllib.parse.quote(user_id, safe="")
     new_pw = _resolve_reset_password(args)
 
+    if ctx.is_tuwunel():
+        if not args.yes:
+            print()
+            print(f"{BOLD}Reset password{RESET}")
+            print(f"  User ID:  {CYAN}{user_id}{RESET}")
+            if not ask_yn("Reset this password now?", "n"):
+                die("Aborted.")
+        tuwunel_admin = _load_tuwunel_admin_module()
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path)
+        try:
+            admin.reset_password(user_id, new_pw)
+        except tuwunel_admin.TuwunelAdminError as exc:
+            die(str(exc))
+        success(f"Password reset for '{user_id}'.")
+        return
+
+    ctx.require_synapse_admin_api("reset-password")
+    ctx.ensure_base_url()
+    encoded = urllib.parse.quote(user_id, safe="")
     if not args.yes:
         print()
         print(f"{BOLD}Reset password{RESET}")

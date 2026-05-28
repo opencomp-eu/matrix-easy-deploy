@@ -18,6 +18,8 @@ class ApplyTests(unittest.TestCase):
         # Minimal project structure expected by apply.py
         (self.root / "caddy").mkdir(parents=True)
         (self.root / "modules/core/synapse").mkdir(parents=True)
+        (self.root / "modules/core/tuwunel").mkdir(parents=True)
+        (self.root / "modules/core/tuwunel_data").mkdir(parents=True)
         (self.root / "modules/core/element").mkdir(parents=True)
         (self.root / "modules/calls/coturn").mkdir(parents=True)
         (self.root / "modules/calls/livekit").mkdir(parents=True)
@@ -28,7 +30,8 @@ class ApplyTests(unittest.TestCase):
 
         (self.root / "caddy/Caddyfile.template").write_text(
             "{{CADDY_MATRIX_HOSTS}} {\n"
-            "    reverse_proxy matrix_synapse:8008\n"
+            "    reverse_proxy {{HOMESERVER_UPSTREAM}}\n"
+            "{{CADDY_SYNAPSE_ADMIN_BLOCK}}"
             "}\n\n"
             "{{LIVEKIT_DOMAIN}} {\n"
             "    handle_path /livekit/jwt* {\n"
@@ -40,6 +43,10 @@ class ApplyTests(unittest.TestCase):
             "}\n"
         )
         (self.root / "caddy/Caddyfile-no-element.template").write_text("no-element {{MATRIX_DOMAIN}}")
+        (self.root / "modules/core/tuwunel/tuwunel.toml.template").write_text(
+            "server_name = \"{{SERVER_NAME}}\"\n"
+            "allow_registration = {{TUWUNEL_ALLOW_REGISTRATION}}\n"
+        )
         (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
             "server_name: {{SERVER_NAME}}\n"
             "public_baseurl: https://{{MATRIX_DOMAIN}}\n"
@@ -409,6 +416,28 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(element["default_server_config"]["m.homeserver"]["base_url"], "https://matrix.example.com")
         self.assertEqual(element["room_directory"]["servers"], ["example.com"])
         self.assertEqual(element["integrations_ui_url"], "https://scalar.vector.im/")
+        self.assertIn("SERVER_IMPLEMENTATION=synapse", env_text)
+        self.assertIn("HOMESERVER_UPSTREAM=matrix_synapse:8008", env_text)
+
+    def test_apply_configuration_renders_tuwunel(self):
+        cfg = self.sample_config()
+        cfg["matrix"]["server_implementation"] = "tuwunel"
+        self.write_config(cfg)
+        ctx = apply.ApplyContext(self.root)
+
+        apply.apply_configuration(ctx, server_ip="9.8.7.6", reconcile_modules=False)
+
+        env_text = (self.root / ".env").read_text()
+        self.assertIn("SERVER_IMPLEMENTATION=tuwunel", env_text)
+        self.assertIn("HOMESERVER_UPSTREAM=matrix_tuwunel:8008", env_text)
+
+        caddy = (self.root / "caddy/Caddyfile").read_text()
+        self.assertIn("reverse_proxy matrix_tuwunel:8008", caddy)
+        self.assertNotIn("/_synapse/", caddy)
+
+        tuwunel = (self.root / "modules/core/tuwunel/tuwunel.toml").read_text()
+        self.assertIn('server_name = "example.com"', tuwunel)
+        self.assertNotIn("{{", tuwunel)
 
     def test_apply_configuration_renders_element_customizations(self):
         cfg = self.sample_config()

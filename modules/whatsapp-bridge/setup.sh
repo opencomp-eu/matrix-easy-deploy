@@ -34,7 +34,7 @@ STATE_SECRETS="${PROJECT_ROOT}/.matrix-easy-deploy/secrets.yaml"
 MODULE_DIR="${SCRIPT_DIR}"
 BRIDGE_DATA_DIR="${MODULE_DIR}/whatsapp"
 CORE_SYNAPSE_DATA_DIR="${PROJECT_ROOT}/modules/core/synapse_data"
-HOMESERVER_YAML="${PROJECT_ROOT}/modules/core/synapse/homeserver.yaml"
+HOMESERVER_CONFIG=""
 CADDYFILE="${PROJECT_ROOT}/caddy/Caddyfile"
 
 BRIDGE_IMAGE="dock.mau.dev/mautrix/whatsapp:latest"
@@ -69,7 +69,8 @@ load_module_defaults() {
 # Step 2 — Verify SERVER_NAME matches Synapse's actual server_name
 # =============================================================================
 verify_server_name() {
-    module_verify_server_name "$HOMESERVER_YAML" "bridge config"
+    HOMESERVER_CONFIG="$(module_homeserver_config_file "$PROJECT_ROOT")"
+    module_verify_server_name "$HOMESERVER_CONFIG" "bridge config"
 }
 
 # =============================================================================
@@ -209,7 +210,7 @@ generate_config() {
     python3 "${PROJECT_ROOT}/scripts/bridge_config_patch.py" \
         --config-path "$config_file" \
         --server-name "$SERVER_NAME" \
-        --hs-address "http://matrix_synapse:8008" \
+        --hs-address "$(module_homeserver_internal_url)" \
         --as-address "http://${BRIDGE_CONTAINER}:${BRIDGE_PORT}" \
         --db-type "postgres" \
         --db-uri "$WA_DB_URI" \
@@ -236,9 +237,15 @@ generate_registration() {
 # =============================================================================
 register_appservice() {
     local reg_src="${BRIDGE_DATA_DIR}/registration.yaml"
-    local reg_dest="${CORE_SYNAPSE_DATA_DIR}/whatsapp-registration.yaml"
-    local reg_container_path="/data/whatsapp-registration.yaml"
-    if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_YAML" "$reg_container_path" "WhatsApp bridge")" == "1" ]]; then
+    local reg_dest reg_container_path
+    if [[ "${SERVER_IMPLEMENTATION:-synapse}" == "tuwunel" ]]; then
+        reg_dest="$(module_homeserver_appservice_data_dir "$PROJECT_ROOT")/whatsapp-registration.yaml"
+        reg_container_path="/data/appservices/whatsapp-registration.yaml"
+    else
+        reg_dest="${CORE_SYNAPSE_DATA_DIR}/whatsapp-registration.yaml"
+        reg_container_path="/data/whatsapp-registration.yaml"
+    fi
+    if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_CONFIG" "$reg_container_path" "WhatsApp bridge")" == "1" ]]; then
         APP_SERVICE_CHANGED="1"
     fi
 }

@@ -66,13 +66,18 @@ start_services() {
     success "Caddy is up."
 
     echo
-    info "Starting core Matrix services (Redis + PostgreSQL + Synapse${_element_label})…"
+    local _hs_label="Synapse"
+    if [[ "${SERVER_IMPLEMENTATION:-synapse}" == "tuwunel" ]]; then
+        _hs_label="Tuwunel"
+    fi
+    info "Starting core Matrix services (${_hs_label}${_element_label})…"
     info "  Pulling images — this may take a few minutes on first run."
 
     (
         cd "${SCRIPT_DIR}/modules/core"
+        _homeserver_profile=(--profile "${HOMESERVER_COMPOSE_PROFILE:-synapse}")
         POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-            "${DOCKER_COMPOSE[@]}" "${_element_profile[@]}" up -d --pull always
+            "${DOCKER_COMPOSE[@]}" "${_homeserver_profile[@]}" "${_element_profile[@]}" up -d --pull always
     )
     success "Core services started."
 
@@ -84,15 +89,21 @@ start_services() {
 
 setup_admin() {
     echo
-    info "Waiting for Synapse to finish starting…"
+    local _hs_container="${HOMESERVER_CONTAINER:-matrix_synapse}"
+    local _hs_name="Synapse"
+    if [[ "${SERVER_IMPLEMENTATION:-synapse}" == "tuwunel" ]]; then
+        _hs_name="Tuwunel"
+    fi
+
+    info "Waiting for ${_hs_name} to finish starting…"
     echo -e "  ${CYAN}(This usually takes 20–60 s on first boot while the database is initialised.)${RESET}"
 
     local attempt=0
     local max=30
-    until [[ "$(docker inspect --format='{{.State.Health.Status}}' matrix_synapse 2>/dev/null)" == "healthy" ]]; do
+    until [[ "$(docker inspect --format='{{.State.Health.Status}}' "${_hs_container}" 2>/dev/null)" == "healthy" ]]; do
         attempt=$((attempt + 1))
         if [[ $attempt -ge $max ]]; then
-            warn "Synapse hasn't responded after $((max * 5))s."
+            warn "${_hs_name} hasn't responded after $((max * 5))s."
             warn "It may still be starting. You can create the admin user later:"
             echo
             echo -e "  ${CYAN}bash scripts/create-account.sh \\"
@@ -106,7 +117,7 @@ setup_admin() {
         sleep 5
     done
     echo
-    success "Synapse is responding."
+    success "${_hs_name} is responding."
 
     echo
     local _admin_password=""

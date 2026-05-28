@@ -197,9 +197,37 @@ load_runtime_desired_state() {
 }
 
 # ---------------------------------------------------------------------------
-# Synapse data directory permissions
-# Ensures modules/core/synapse_data is writable by Synapse (UID 991).
+# Homeserver data directory permissions
 # ---------------------------------------------------------------------------
+ensure_homeserver_data_permissions() {
+    local project_root="$1"
+    local implementation="synapse"
+
+    if [[ -f "${project_root}/.env" ]]; then
+        implementation="$(sed -n 's/^SERVER_IMPLEMENTATION=//p' "${project_root}/.env" | head -n1)"
+        implementation="${implementation:-synapse}"
+    fi
+
+    case "${implementation,,}" in
+        tuwunel)
+            ensure_tuwunel_data_permissions "$project_root"
+            ;;
+        *)
+            ensure_synapse_data_permissions "$project_root"
+            ;;
+    esac
+}
+
+ensure_tuwunel_data_permissions() {
+    local project_root="$1"
+    local tuwunel_data_dir="${project_root}/modules/core/tuwunel_data"
+    local appservices_dir="${tuwunel_data_dir}/appservices"
+
+    mkdir -p "$appservices_dir"
+    chmod -R a+rwX "$tuwunel_data_dir" 2>/dev/null || true
+}
+
+# Ensures modules/core/synapse_data is writable by Synapse (UID 991).
 ensure_synapse_data_permissions() {
     local project_root="$1"
     local synapse_data_dir="${project_root}/modules/core/synapse_data"

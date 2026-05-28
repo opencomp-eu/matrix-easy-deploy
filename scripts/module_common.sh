@@ -27,17 +27,45 @@ module_load_env() {
     success "Loaded: MATRIX_DOMAIN=${MATRIX_DOMAIN}, SERVER_NAME=${SERVER_NAME}"
 }
 
+module_homeserver_internal_url() {
+    printf '%s' "${HOMESERVER_INTERNAL_URL:-http://matrix_synapse:8008}"
+}
+
+module_homeserver_config_file() {
+    local project_root="$1"
+    local impl="${SERVER_IMPLEMENTATION:-synapse}"
+    if [[ "${impl,,}" == "tuwunel" ]]; then
+        printf '%s' "${project_root}/modules/core/tuwunel/tuwunel.toml"
+    else
+        printf '%s' "${project_root}/modules/core/synapse/homeserver.yaml"
+    fi
+}
+
+module_homeserver_appservice_data_dir() {
+    local project_root="$1"
+    local impl="${SERVER_IMPLEMENTATION:-synapse}"
+    if [[ "${impl,,}" == "tuwunel" ]]; then
+        printf '%s' "${project_root}/modules/core/tuwunel_data/appservices"
+    else
+        printf '%s' "${project_root}/modules/core/synapse_data"
+    fi
+}
+
 module_verify_server_name() {
-    local homeserver_yaml="$1"
+    local homeserver_config="$1"
     local usage_context="$2"
 
-    if [[ ! -f "$homeserver_yaml" ]]; then
-        warn "homeserver.yaml not found - skipping server_name cross-check."
+    if [[ ! -f "$homeserver_config" ]]; then
+        warn "homeserver config not found - skipping server_name cross-check."
         return
     fi
 
     local actual_server_name
-    actual_server_name="$(grep -E '^server_name:' "$homeserver_yaml" | head -1 | awk '{print $2}' | tr -d '"')"
+    if [[ "$homeserver_config" == *.toml ]]; then
+        actual_server_name="$(grep -E '^server_name\s*=' "$homeserver_config" | head -1 | sed -E 's/^[^=]*=\s*"?([^"]+)"?.*/\1/')"
+    else
+        actual_server_name="$(grep -E '^server_name:' "$homeserver_config" | head -1 | awk '{print $2}' | tr -d '"')"
+    fi
 
     if [[ -z "$actual_server_name" ]]; then
         warn "Could not read server_name from homeserver.yaml - skipping check."
@@ -140,55 +168,77 @@ module_sync_appservice_registration() {
     local project_root="$1"
     local registration_src="$2"
     local registration_dest="$3"
-    local homeserver_yaml="$4"
+    local homeserver_config="$4"
     local registration_path="$5"
     local module_label="$6"
 
     local changed=0
+    local impl="${SERVER_IMPLEMENTATION:-synapse}"
+    local registration_filename
+    registration_filename="$(basename "$registration_dest")"
 
     if [[ ! -f "$registration_dest" ]] || ! cmp -s "$registration_src" "$registration_dest"; then
-        info "Syncing registration to Synapse data directory..."
+        info "Syncing registration to homeserver data directory..."
+        mkdir -p "$(dirname "$registration_dest")"
         cp "$registration_src" "$registration_dest"
         chmod 644 "$registration_dest"
         success "Copied to ${registration_dest}."
         changed=1
     else
-        info "registration is unchanged in Synapse data directory - skipping copy."
+        info "registration is unchanged in homeserver data directory - skipping copy."
     fi
 
-    if [[ ! -f "$homeserver_yaml" ]]; then
-        die "homeserver.yaml not found at ${homeserver_yaml}."
+    if [[ ! -f "$homeserver_config" ]]; then
+        die "homeserver config not found at ${homeserver_config}."
     fi
 
-    if grep -qF "$registration_path" "$homeserver_yaml"; then
-        info "${module_label} already registered in homeserver.yaml - skipping."
+    if [[ "${impl,,}" == "tuwunel" ]]; then
+        local appservice_dir
+        appservice_dir="$(module_homeserver_appservice_data_dir "$project_root")"
+        mkdir -p "$appservice_dir"
+        if python3 "${project_root}/scripts/tuwunel_appservice.py" \
+            --appservice-dir "$appservice_dir" \
+            --registration-src "$registration_src" \
+            --registration-filename "$registration_filename" | grep -q "Synced"; then
+            changed=1
+        fi
+    elif grep -qF "$registration_path" "$homeserver_config"; then
+        info "${module_label} already registered in homeserver config - skipping."
     else
-        info "Registering ${module_label} appservice in homeserver.yaml..."
+        info "Registering ${module_label} appservice in homeserver config..."
         python3 "${project_root}/scripts/synapse_appservice.py" \
-            --homeserver-yaml "$homeserver_yaml" \
+            --homeserver-yaml "$homeserver_config" \
             --registration-path "$registration_path"
-        success "homeserver.yaml updated."
+        success "homeserver config updated."
         changed=1
     fi
 
     echo "$changed"
 }
 
-module_restart_synapse_if_changed() {
+module_restart_homeserver_if_changed() {
     local changed="$1"
     local project_root="$2"
 
+    local container="${HOMESERVER_CONTAINER:-matrix_synapse}"
+    local label="${SERVER_IMPLEMENTATION:-synapse}"
+
     if [[ "$changed" != "1" ]]; then
-        info "Synapse appservice wiring unchanged - skipping Synapse restart."
+        info "${label} appservice wiring unchanged - skipping homeserver restart."
         return
     fi
 
-    info "Restarting Synapse to load the updated appservice registration..."
-    if docker ps --format '{{.Names}}' | grep -q '^matrix_synapse$'; then
-        docker restart matrix_synapse
-        success "Synapse restarted."
+    info "Restarting ${label} to load the updated appservice registration..."
+    if docker ps --format '{{.Names}}' | grep -qx "${container}"; then
+        docker restart "${container}"
+        success "${label} restarted."
     else
-        warn "Synapse (matrix_synapse) is not running."
+        warn "${label} (${container}) is not running."
         warn "Start the core stack first: cd ${project_root}/modules/core && docker compose up -d"
     fi
+}
+
+# Backwards-compatible alias
+module_restart_synapse_if_changed() {
+    module_restart_homeserver_if_changed "$@"
 }

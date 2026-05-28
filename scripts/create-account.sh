@@ -18,6 +18,7 @@ IS_ADMIN="false"
 BASE_URL=""
 SHARED_SECRET=""
 SERVER_NAME=""
+SERVER_IMPLEMENTATION="synapse"
 
 usage() {
     cat <<'EOF'
@@ -29,11 +30,11 @@ Options:
   --username VALUE       Localpart for the new Matrix user.
   --password VALUE       Password to assign. Must be at least 12 characters.
   --generate-password    Force generated password output in non-interactive mode.
-  --admin                Grant Synapse admin privileges.
+  --admin                Grant homeserver admin privileges.
   --no-admin             Explicitly create a non-admin user.
   --yes                  Skip confirmation prompts.
-  --base-url VALUE       Override Synapse base URL instead of reading MATRIX_DOMAIN from .env.
-  --shared-secret VALUE  Override REGISTRATION_SHARED_SECRET instead of reading .env.
+  --base-url VALUE       Override homeserver base URL instead of reading MATRIX_DOMAIN from .env.
+  --shared-secret VALUE  Override REGISTRATION_SHARED_SECRET (Synapse only) instead of reading .env.
   -h, --help             Show this help text.
 EOF
 }
@@ -117,9 +118,13 @@ read_deploy_env() {
         if [[ -z "$SHARED_SECRET" ]]; then
             SHARED_SECRET="$(sed -n 's/^REGISTRATION_SHARED_SECRET=//p' "$DEPLOY_ENV" | head -n1)"
         fi
+        if [[ -z "$SERVER_IMPLEMENTATION" ]]; then
+            SERVER_IMPLEMENTATION="$(sed -n 's/^SERVER_IMPLEMENTATION=//p' "$DEPLOY_ENV" | head -n1)"
+        fi
     fi
 
     SERVER_NAME="${SERVER_NAME:-unknown-server-name}"
+    SERVER_IMPLEMENTATION="${SERVER_IMPLEMENTATION:-synapse}"
 }
 
 check_dependencies() {
@@ -129,7 +134,10 @@ check_dependencies() {
 }
 
 ensure_registration_config() {
-    [[ -n "$BASE_URL" ]] || die "Could not determine Synapse base URL. Pass --base-url or ensure MATRIX_DOMAIN exists in .env."
+    if [[ "${SERVER_IMPLEMENTATION,,}" == "tuwunel" ]]; then
+        return
+    fi
+    [[ -n "$BASE_URL" ]] || die "Could not determine homeserver base URL. Pass --base-url or ensure MATRIX_DOMAIN exists in .env."
     [[ -n "$SHARED_SECRET" ]] || die "Could not determine REGISTRATION_SHARED_SECRET. Pass --shared-secret or ensure it exists in .env."
 }
 
@@ -261,7 +269,24 @@ print(mac)
 PYEOF
 }
 
-create_account() {
+create_account_tuwunel() {
+    # shellcheck source=scripts/tuwunel_admin.sh
+    source "${SCRIPT_DIR}/tuwunel_admin.sh"
+
+    info "Creating user '${USERNAME}' via Tuwunel admin API…"
+    tuwunel_create_user "$USERNAME" "$PASSWORD" "$IS_ADMIN" >/dev/null
+    success "Account '@${USERNAME}:${SERVER_NAME}' created successfully."
+
+    echo
+    echo -e "  ${BOLD}Login details${RESET}"
+    echo -e "    Matrix ID:  ${CYAN}@${USERNAME}:${SERVER_NAME}${RESET}"
+    echo -e "    Password:   ${CYAN}${PASSWORD}${RESET}"
+    if [[ "$PASSWORD_SOURCE" == "generated" ]]; then
+        echo -e "    ${YELLOW}This is a temporary password — ask the user to change it after first login.${RESET}"
+    fi
+}
+
+create_account_synapse() {
     local nonce mac response_file http_status response_body err_info err_code err_msg
     local admin_json="False"
     local account_label="user"
@@ -344,6 +369,14 @@ PYEOF
     echo -e "    Password:   ${CYAN}${PASSWORD}${RESET}"
     if [[ "$PASSWORD_SOURCE" == "generated" ]]; then
         echo -e "    ${YELLOW}This is a temporary password — ask the user to change it after first login.${RESET}"
+    fi
+}
+
+create_account() {
+    if [[ "${SERVER_IMPLEMENTATION,,}" == "tuwunel" ]]; then
+        create_account_tuwunel
+    else
+        create_account_synapse
     fi
 }
 

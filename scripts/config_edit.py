@@ -13,6 +13,9 @@ MODULE_NAME_TO_KEY = {
     "slack-bridge": "slack_bridge",
 }
 
+SUPPORTED_SERVER_IMPLEMENTATIONS = frozenset({"synapse", "tuwunel"})
+DEFAULT_SERVER_IMPLEMENTATION = "synapse"
+
 
 def to_bool(value) -> bool:
     if isinstance(value, bool):
@@ -29,6 +32,7 @@ def load_or_init(path: Path) -> dict:
                 "domain": "matrix.example.com",
                 "server_name": "example.com",
                 "admin_username": "admin",
+                "server_implementation": DEFAULT_SERVER_IMPLEMENTATION,
             },
             "features": {
                 "registration_enabled": False,
@@ -134,11 +138,22 @@ def update_module_config(
         module_cfg["domain"] = domain
 
 
+def normalize_server_implementation(value: str | None) -> str:
+    if value is None or not str(value).strip():
+        return DEFAULT_SERVER_IMPLEMENTATION
+    normalized = str(value).strip().lower()
+    if normalized not in SUPPORTED_SERVER_IMPLEMENTATIONS:
+        supported = ", ".join(sorted(SUPPORTED_SERVER_IMPLEMENTATIONS))
+        raise ValueError(f"server_implementation must be one of: {supported}")
+    return normalized
+
+
 def update_core_config(
     config: dict,
     matrix_domain: str,
     server_name: str,
     admin_username: str,
+    server_implementation: str,
     registration_enabled: bool,
     federation_enabled: bool,
     install_element: bool,
@@ -153,6 +168,7 @@ def update_core_config(
     matrix["domain"] = matrix_domain
     matrix["server_name"] = server_name
     matrix["admin_username"] = admin_username
+    matrix["server_implementation"] = normalize_server_implementation(server_implementation)
 
     features = config.setdefault("features", {})
     if not isinstance(features, dict):
@@ -248,10 +264,15 @@ def emit_wizard_defaults(config: dict) -> str:
     server_name = matrix.get("server_name", "example.com")
     admin_username = matrix.get("admin_username", "admin")
 
+    server_implementation = normalize_server_implementation(
+        matrix.get("server_implementation", DEFAULT_SERVER_IMPLEMENTATION)
+    )
+
     defaults = {
         "config_matrix_domain": matrix_domain,
         "config_server_name": server_name,
         "config_admin_username": admin_username,
+        "config_server_implementation": server_implementation,
         "config_registration_default": shell_bool_default(
             to_bool(features.get("registration_enabled", False)), yes_default="y", no_default="n"
         ),
@@ -348,6 +369,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--element-domain")
     parser.add_argument("--calls-enabled")
     parser.add_argument("--livekit-domain")
+    parser.add_argument("--server-implementation")
 
     parser.add_argument("--module-enabled")
     parser.add_argument("--module-admin-username")
@@ -407,6 +429,7 @@ def main(argv: list[str] | None = None) -> int:
             "matrix_domain": args.matrix_domain,
             "server_name": args.server_name,
             "admin_username": args.admin_username,
+            "server_implementation": args.server_implementation,
             "registration_enabled": args.registration_enabled,
             "federation_enabled": args.federation_enabled,
             "install_element": args.install_element,
@@ -423,6 +446,7 @@ def main(argv: list[str] | None = None) -> int:
             matrix_domain=args.matrix_domain,
             server_name=args.server_name,
             admin_username=args.admin_username,
+            server_implementation=args.server_implementation,
             registration_enabled=to_bool(args.registration_enabled),
             federation_enabled=to_bool(args.federation_enabled),
             install_element=to_bool(args.install_element),

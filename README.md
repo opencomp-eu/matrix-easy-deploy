@@ -398,14 +398,15 @@ The wizard will ask you:
 
 ### Configuration model
 
+- `matrix.server_implementation` selects the homeserver software: `synapse` (default) or [`tuwunel`](https://github.com/matrix-construct/tuwunel) (Rust, lower resource use). Set this in `deploy.yaml` before the first `bash apply.sh`, or choose it in the setup wizard. **Switching implementation on an existing deployment is not supported** (no Synapse→Tuwunel migration yet).
 - `deploy.yaml` is the operator-owned source of truth.
 - `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered service configs, module state metadata).
 - Re-running `bash apply.sh` is idempotent by default: existing generated secrets are re-used.
 - `features.local_login_enabled: false` disables Synapse password login for SSO-only deployments. `bash apply.sh` rejects this unless SSO is enabled and at least one OIDC provider is configured.
 - Enabled modules converge deterministically: if required generated files are missing, setup runs non-interactively.
-- Bridge appservice registrations converge deterministically in Synapse:
-  - enabled modules are synced into `modules/core/synapse_data` and added to `app_service_config_files`,
-  - disabled modules are removed from `modules/core/synapse_data` and removed from `app_service_config_files`.
+- Bridge appservice registrations converge deterministically:
+  - **Synapse**: enabled modules are synced into `modules/core/synapse_data` and added to `app_service_config_files`; disabled modules are removed from both.
+  - **Tuwunel**: enabled modules are synced into `modules/core/tuwunel_data/appservices/` (Tuwunel `appservice_dir`); disabled modules are removed from that directory.
 - Hookshot Caddy ingress converges deterministically:
   - enabled Hookshot ensures a managed Caddy block,
   - disabled Hookshot removes the managed Hookshot block.

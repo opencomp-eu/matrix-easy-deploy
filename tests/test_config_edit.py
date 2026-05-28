@@ -96,11 +96,14 @@ class ConfigEditTests(unittest.TestCase):
             "false",
             "--livekit-domain",
             "",
+            "--server-implementation",
+            "tuwunel",
         ])
 
         self.assertEqual(rc, 0)
         updated = yaml.safe_load(self.deploy_yaml.read_text())
         self.assertEqual(updated["matrix"]["domain"], "matrix.new.example.com")
+        self.assertEqual(updated["matrix"]["server_implementation"], "tuwunel")
         self.assertEqual(updated["matrix"]["server_name"], "new.example.com")
         self.assertEqual(updated["matrix"]["admin_username"], "root")
         self.assertTrue(updated["features"]["registration_enabled"])

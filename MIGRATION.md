@@ -10,7 +10,8 @@ This project now uses `deploy.yaml` as the operator-owned source of truth.
 Generated artifacts include:
 - `.env`
 - `caddy/Caddyfile`
-- `modules/core/synapse/homeserver.yaml`
+- `modules/core/synapse/homeserver.yaml` (when `matrix.server_implementation: synapse`)
+- `modules/core/tuwunel/tuwunel.toml` (when `matrix.server_implementation: tuwunel`)
 - `modules/core/element/config.json` (if enabled)
 - `modules/calls/coturn/turnserver.conf`
 - `modules/calls/livekit/livekit.yaml`
@@ -49,3 +50,14 @@ bash apply.sh --rotate-secrets
 ```
 
 This can invalidate existing integrations and credentials. Plan downtime/migration before using it.
+
+## Choosing Tuwunel instead of Synapse
+
+Add to `deploy.yaml` under `matrix`:
+
+```yaml
+matrix:
+  server_implementation: tuwunel
+```
+
+Then run `bash apply.sh` and `bash start.sh` as usual. Admin tooling (`scripts/create-account.sh`, `scripts/med-admin.sh`) uses Tuwunel's `docker exec … --execute` admin commands instead of Synapse's HTTP admin API. Do not change `server_implementation` on a deployment that already has user data unless you are starting fresh.
