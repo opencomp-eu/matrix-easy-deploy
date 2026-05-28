@@ -864,7 +864,13 @@ def write_env_file(ctx: ApplyContext, env_vars: dict) -> None:
         "",
     ]
     for key in sorted(env_vars.keys()):
-        lines.append(f"{key}={env_vars[key]}")
+        value = str(env_vars[key])
+        # .env is shell-sourced by helper scripts; multiline values break parsing.
+        # Keep multiline placeholders available for template rendering, but do not
+        # persist them in the environment file.
+        if "\n" in value:
+            continue
+        lines.append(f"{key}={value}")
     lines.append("")
 
     ctx.env_file.write_text("\n".join(lines))

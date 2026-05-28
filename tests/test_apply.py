@@ -347,6 +347,8 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("autocreate_auto_join_rooms: true", synapse)
         self.assertIn("autocreate_auto_join_rooms_federated: false", synapse)
         self.assertNotIn("{{SYNAPSE_AUTO_JOIN_SECTION}}", synapse)
+        env_text = (self.root / ".env").read_text()
+        self.assertNotIn("SYNAPSE_AUTO_JOIN_SECTION=", env_text)
 
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
