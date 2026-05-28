@@ -12,6 +12,7 @@ Generated artifacts include:
 - `caddy/Caddyfile`
 - `modules/core/synapse/homeserver.yaml`
 - `modules/core/element/config.json` (if enabled)
+- `modules/core/cinny/config.json` (if enabled)
 - `modules/calls/coturn/turnserver.conf`
 - `modules/calls/livekit/livekit.yaml`
 - `.matrix-easy-deploy/secrets.yaml`

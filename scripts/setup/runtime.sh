@@ -30,12 +30,12 @@ stop_existing_services_for_first_setup_reset() {
         fi
     fi
 
-    local _element_profile=()
-    if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
-        _element_profile=(--profile element)
-    fi
+    local _core_profiles=()
+    while IFS= read -r -d '' _profile; do
+        _core_profiles+=("$_profile")
+    done < <(core_compose_profile_args)
 
-    (cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${_element_profile[@]}" down --remove-orphans) || true
+    (cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${_core_profiles[@]}" down --remove-orphans) || true
     (cd "${SCRIPT_DIR}/modules/calls" && "${DOCKER_COMPOSE[@]}" down) || true
     (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" down) || true
 }
@@ -51,12 +51,19 @@ reset_core_postgres_volume_if_present() {
 }
 
 start_services() {
-    local _element_label=""
-    local _element_profile=()
-    if [[ "$INSTALL_ELEMENT" == "true" ]]; then
-        _element_label=" + Element"
-        _element_profile=(--profile element)
+    local _client_label=""
+    if [[ "${INSTALL_ELEMENT:-false}" == "true" && "${INSTALL_CINNY:-false}" == "true" ]]; then
+        _client_label=" + Element + Cinny"
+    elif [[ "${INSTALL_ELEMENT:-false}" == "true" ]]; then
+        _client_label=" + Element"
+    elif [[ "${INSTALL_CINNY:-false}" == "true" ]]; then
+        _client_label=" + Cinny"
     fi
+
+    local _core_profiles=()
+    while IFS= read -r -d '' _profile; do
+        _core_profiles+=("$_profile")
+    done < <(core_compose_profile_args)
 
     reset_core_postgres_volume_if_present
 
@@ -66,13 +73,13 @@ start_services() {
     success "Caddy is up."
 
     echo
-    info "Starting core Matrix services (Redis + PostgreSQL + Synapse${_element_label})…"
+    info "Starting core Matrix services (Redis + PostgreSQL + Synapse${_client_label})…"
     info "  Pulling images — this may take a few minutes on first run."
 
     (
         cd "${SCRIPT_DIR}/modules/core"
         POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-            "${DOCKER_COMPOSE[@]}" "${_element_profile[@]}" up -d --pull always
+            "${DOCKER_COMPOSE[@]}" "${_core_profiles[@]}" up -d --pull always
     )
     success "Core services started."
 

@@ -39,6 +39,7 @@ def resolve_runtime_state(project_root: Path) -> dict[str, str]:
 
     features = _as_dict(deploy.get("features"))
     element = _as_dict(features.get("element"))
+    cinny = _as_dict(features.get("cinny"))
     modules_cfg = _as_dict(deploy.get("modules"))
 
     def module_enabled(config_key: str) -> bool:
@@ -56,8 +57,13 @@ def resolve_runtime_state(project_root: Path) -> dict[str, str]:
     if "enabled" in element:
         install_element = _as_bool(element.get("enabled"), True)
 
+    install_cinny = False
+    if "enabled" in cinny:
+        install_cinny = _as_bool(cinny.get("enabled"), False)
+
     return {
         "INSTALL_ELEMENT": "true" if install_element else "false",
+        "INSTALL_CINNY": "true" if install_cinny else "false",
         "HOOKSHOT_ENABLED": "true" if module_enabled("hookshot") else "false",
         "WHATSAPP_BRIDGE_ENABLED": "true" if module_enabled("whatsapp_bridge") else "false",
         "SLACK_BRIDGE_ENABLED": "true" if module_enabled("slack_bridge") else "false",

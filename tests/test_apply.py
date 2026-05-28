@@ -19,6 +19,7 @@ class ApplyTests(unittest.TestCase):
         (self.root / "caddy").mkdir(parents=True)
         (self.root / "modules/core/synapse").mkdir(parents=True)
         (self.root / "modules/core/element").mkdir(parents=True)
+        (self.root / "modules/core/cinny").mkdir(parents=True)
         (self.root / "modules/calls/coturn").mkdir(parents=True)
         (self.root / "modules/calls/livekit").mkdir(parents=True)
         (self.root / "modules/hookshot").mkdir(parents=True)
@@ -39,7 +40,6 @@ class ApplyTests(unittest.TestCase):
             "    }\n"
             "}\n"
         )
-        (self.root / "caddy/Caddyfile-no-element.template").write_text("no-element {{MATRIX_DOMAIN}}")
         (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
             "server_name: {{SERVER_NAME}}\n"
             "public_baseurl: https://{{MATRIX_DOMAIN}}\n"
@@ -82,6 +82,7 @@ class ApplyTests(unittest.TestCase):
                 "federation_enabled": True,
                 "local_login_enabled": True,
                 "element": {"enabled": True, "domain": "element.example.com"},
+                "cinny": {"enabled": False, "domain": "cinny.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
                 "sso": {"enabled": False, "providers": []},
             },
@@ -957,6 +958,58 @@ class ApplyTests(unittest.TestCase):
         ctx = apply.ApplyContext(self.root)
         with self.assertRaises(RuntimeError):
             apply.reconcile_module_bootstrap(ctx, cfg)
+
+    def test_build_cinny_config(self):
+        cfg = self.sample_config()
+        cfg["features"]["cinny"] = {
+            "enabled": True,
+            "domain": "cinny.example.com",
+            "allow_custom_homeservers": True,
+        }
+        cinny = apply.build_cinny_config(cfg)
+        self.assertEqual(cinny["homeserverList"], ["example.com"])
+        self.assertTrue(cinny["allowCustomHomeservers"])
+
+    def test_apply_configuration_renders_cinny(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        (self.root / "caddy/Caddyfile.template").write_text(
+            (repo_root / "caddy/Caddyfile.template").read_text()
+        )
+        cfg = self.sample_config()
+        cfg["features"]["cinny"] = {"enabled": True, "domain": "cinny.example.com"}
+        self.write_config(cfg)
+        ctx = apply.ApplyContext(self.root)
+
+        apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        cinny = json.loads((self.root / "modules/core/cinny/config.json").read_text())
+        self.assertEqual(cinny["homeserverList"], ["example.com"])
+        self.assertFalse(cinny["allowCustomHomeservers"])
+
+        caddy = (self.root / "caddy/Caddyfile").read_text()
+        self.assertIn("reverse_proxy matrix_cinny:80", caddy)
+        self.assertNotIn("app.element.io", caddy)
+
+        env_text = (self.root / ".env").read_text()
+        self.assertIn("INSTALL_CINNY=true", env_text)
+
+    def test_apply_configuration_redirect_when_no_web_clients(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        (self.root / "caddy/Caddyfile.template").write_text(
+            (repo_root / "caddy/Caddyfile.template").read_text()
+        )
+        cfg = self.sample_config()
+        cfg["features"]["element"]["enabled"] = False
+        cfg["features"]["cinny"]["enabled"] = False
+        self.write_config(cfg)
+        ctx = apply.ApplyContext(self.root)
+
+        apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        caddy = (self.root / "caddy/Caddyfile").read_text()
+        self.assertIn("app.element.io", caddy)
+        self.assertNotIn("reverse_proxy matrix_element:80", caddy)
+        self.assertNotIn("reverse_proxy matrix_cinny:80", caddy)
 
 
 if __name__ == "__main__":

@@ -63,6 +63,8 @@ OIDC_PROVIDER_NAMES=${OIDC_PROVIDER_NAMES}
 OIDC_PROVIDERS_JSON=${OIDC_PROVIDERS_JSON}
 INSTALL_ELEMENT=${INSTALL_ELEMENT}
 ELEMENT_DOMAIN=${ELEMENT_DOMAIN}
+INSTALL_CINNY=${INSTALL_CINNY}
+CINNY_DOMAIN=${CINNY_DOMAIN}
 
 SERVER_IP=${SERVER_IP}
 COTURN_SECRET=${COTURN_SECRET}
@@ -93,6 +95,9 @@ FEDERATION_WHITELIST=${FEDERATION_WHITELIST}
 ALLOW_PUBLIC_ROOMS_FEDERATION=${ALLOW_PUBLIC_ROOMS_FEDERATION}
 OIDC_PROVIDERS_JSON=${OIDC_PROVIDERS_JSON}
 ELEMENT_DOMAIN=${ELEMENT_DOMAIN}
+CINNY_DOMAIN=${CINNY_DOMAIN}
+INSTALL_CINNY=${INSTALL_CINNY}
+INSTALL_ELEMENT=${INSTALL_ELEMENT}
 SERVER_IP=${SERVER_IP}
 COTURN_SECRET=${COTURN_SECRET}
 LIVEKIT_DOMAIN=${LIVEKIT_DOMAIN}
@@ -104,15 +109,27 @@ SHARED_REDIS_URL=${SHARED_REDIS_URL}
 CADDY_MATRIX_HOSTS=${CADDY_MATRIX_HOSTS}
 EOF
 
-    info "Rendering Caddyfile…"
-    local _caddyfile_template
-    if [[ "$INSTALL_ELEMENT" == "true" ]]; then
-        _caddyfile_template="${SCRIPT_DIR}/caddy/Caddyfile.template"
+    if [[ "$INSTALL_ELEMENT" != "true" && "$INSTALL_CINNY" != "true" ]]; then
+        MATRIX_CLIENT_REDIRECT_BLOCK=$'    # Redirect visitors when no self-hosted web client is configured\n    handle {\n        redir https://app.element.io/#/login?hs_url=https://'"${MATRIX_DOMAIN}"$' temporary\n    }\n\n'
     else
-        _caddyfile_template="${SCRIPT_DIR}/caddy/Caddyfile-no-element.template"
+        MATRIX_CLIENT_REDIRECT_BLOCK=""
     fi
+
+    if [[ "$INSTALL_ELEMENT" != "true" ]]; then
+        ELEMENT_DOMAIN=""
+    fi
+    if [[ "$INSTALL_CINNY" != "true" ]]; then
+        CINNY_DOMAIN=""
+    fi
+
+    cat >> "$vars_file" <<EOF
+MATRIX_CLIENT_REDIRECT_BLOCK=${MATRIX_CLIENT_REDIRECT_BLOCK}
+CINNY_ALLOW_CUSTOM_HOMESERVERS=false
+EOF
+
+    info "Rendering Caddyfile…"
     render_template \
-        "$_caddyfile_template" \
+        "${SCRIPT_DIR}/caddy/Caddyfile.template" \
         "${SCRIPT_DIR}/caddy/Caddyfile" \
         "$vars_file"
     if grep -q '{{[A-Z_][A-Z0-9_]*}}' "${SCRIPT_DIR}/caddy/Caddyfile"; then
@@ -139,6 +156,15 @@ finalize_caddyfile(Path('${SCRIPT_DIR}/caddy/Caddyfile'))
             "${SCRIPT_DIR}/modules/core/element/config.json" \
             "$vars_file"
         success "modules/core/element/config.json written."
+    fi
+
+    if [[ "$INSTALL_CINNY" == "true" ]]; then
+        info "Rendering cinny/config.json…"
+        render_template \
+            "${SCRIPT_DIR}/modules/core/cinny/config.json.template" \
+            "${SCRIPT_DIR}/modules/core/cinny/config.json" \
+            "$vars_file"
+        success "modules/core/cinny/config.json written."
     fi
 
     info "Rendering coturn/turnserver.conf…"

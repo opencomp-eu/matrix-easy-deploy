@@ -57,7 +57,8 @@ After running `matrix-wizard.sh` you'll have a working Matrix homeserver — the
 | Service | What it does |
 |---------|-------------|
 | <img src="https://matrix.org/images/matrix-logo-white.svg" alt="Synapse" width="28"/> **[Synapse](https://github.com/element-hq/synapse)** | The Matrix homeserver. Handles federation, rooms, messages. |
-| <img src="https://element.io/assets-32bb636196f91ed59d7a49190e26b42c/5ef25c0d30ee3108da4c25e9/5f365d3197194f8c73b00112_logo-mark-primary.svg" alt="Element Web" width="28"/> **[Element Web](https://github.com/element-web/element-web)** | The web client. Served at your domain so anyone can log in from a browser. |
+| <img src="https://element.io/assets-32bb636196f91ed59d7a49190e26b42c/5ef25c0d30ee3108da4c25e9/5f365d3197194f8c73b00112_logo-mark-primary.svg" alt="Element Web" width="28"/> **[Element Web](https://github.com/element-web/element-web)** | Optional web client. Considered the most fully-featured option (integrations, Element Call / MatrixRTC, org branding). |
+| **[Cinny](https://github.com/cinnyapp/cinny)** | Optional web client. Lighter Matrix UI with a cleaner, more modern feel — good for chat-first deployments. Advanced calling and org features may still favor Element. |
 | <img src="https://caddyserver.com/resources/images/logo-dark.svg" alt="Caddy" width="28"/> **[Caddy](https://caddyserver.com)** | Reverse proxy. Handles TLS automatically via Let's Encrypt. |
 | <img src="https://www.postgresql.org/media/img/about/press/elephant.png" alt="PostgreSQL" width="28"/> **PostgreSQL** | Database for Synapse. Considerably more robust than SQLite for anything beyond a toy. |
 | <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Redis_logo.svg/250px-Redis_logo.svg.png" alt="Redis" width="28"/> **Redis** | Shared cache/event store for modules (Hookshot E2EE now, others later). |
@@ -394,7 +395,8 @@ The wizard will ask you:
 9. For each provider: whether unknown users can auto-register via that provider
 10. For each provider: optional OIDC claim allowlist (org/group/domain control)
 11. Whether to install Element Web, and on which domain
-12. **Your LiveKit domain** — something like `livekit.example.com` (defaults to `livekit.<basedomain>`)
+12. Whether to install Cinny, and on which domain (can enable both clients)
+13. **Your LiveKit domain** — something like `livekit.example.com` (defaults to `livekit.<basedomain>`)
 
 ### Configuration model
 
@@ -427,6 +429,20 @@ bash apply.sh --rotate-secrets
 - `room_preset`: `public_chat`, `private_chat`, or `trusted_private_chat` (default `public_chat`).
 - `mxid_localpart`: localpart of the user that creates or invites to auto-join rooms; **required** for `private_chat` and `trusted_private_chat`.
 - `rooms_for_guests`: auto-join guest accounts too (default `true`).
+
+### Cinny
+
+Enable Cinny alongside or instead of Element in `deploy.yaml`:
+
+```yaml
+features:
+  cinny:
+    enabled: true
+    domain: cinny.example.com
+    allow_custom_homeservers: false
+```
+
+`bash apply.sh` writes `modules/core/cinny/config.json` with your server as the default homeserver. Cinny is served from the [`ajbura/cinny`](https://hub.docker.com/r/ajbura/cinny) image on its own subdomain (same pattern as Element).
 
 ### Element Web customization
 
@@ -663,7 +679,8 @@ matrix-easy-deploy/
 │   │   │   ├── homeserver.yaml.template
 │   │   │   ├── homeserver.yaml   # Generated during setup
 │   │   │   └── log.config
-│   │   └── element/
+│   │   ├── element/
+│   │   └── cinny/
 │   │       ├── config.json.template
 │   │       └── config.json       # Generated during setup
 │   ├── calls/                    # Voice and video calling stack
@@ -736,6 +753,7 @@ By default, modules should use `SHARED_REDIS_URL` from `.env` and keep separatio
 docker logs -f matrix_synapse
 docker logs -f caddy
 docker logs -f matrix_element
+docker logs -f matrix_cinny
 docker logs -f matrix_postgres
 docker logs -f matrix_redis
 docker logs -f matrix_livekit

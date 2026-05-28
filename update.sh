@@ -6,6 +6,7 @@ source "${SCRIPT_DIR}/scripts/lib.sh"
 
 # Load settings from .env so we know what's actually installed
 INSTALL_ELEMENT="true"   # default: assume Element is present if .env is missing
+INSTALL_CINNY="false"
 HOOKSHOT_ENABLED="false"
 WHATSAPP_BRIDGE_ENABLED="false"
 SLACK_BRIDGE_ENABLED="false"
@@ -28,6 +29,10 @@ docker pull livekit/livekit-server:latest
 
 if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
     docker pull vectorim/element-web:latest
+fi
+
+if [[ "${INSTALL_CINNY:-false}" == "true" ]]; then
+    docker pull ajbura/cinny:latest
 fi
 
 if [[ "${HOOKSHOT_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/hookshot/hookshot/config.yml" ]]; then

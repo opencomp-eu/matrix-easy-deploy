@@ -65,6 +65,17 @@ services:
     networks:
       - caddy_net
 
+  cinny:
+    image: ajbura/cinny:latest
+    container_name: matrix_cinny
+    restart: unless-stopped
+    profiles:
+      - cinny
+    volumes:
+      - ./cinny/config.json:/app/config.json:ro
+    networks:
+      - caddy_net
+
 volumes:
   postgres_data:
   redis_data:

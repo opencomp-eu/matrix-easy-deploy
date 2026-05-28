@@ -92,6 +92,10 @@ class ConfigEditTests(unittest.TestCase):
             "false",
             "--element-domain",
             "",
+            "--install-cinny",
+            "true",
+            "--cinny-domain",
+            "cinny.example.com",
             "--calls-enabled",
             "false",
             "--livekit-domain",
@@ -106,6 +110,8 @@ class ConfigEditTests(unittest.TestCase):
         self.assertTrue(updated["features"]["registration_enabled"])
         self.assertFalse(updated["features"]["federation_enabled"])
         self.assertFalse(updated["features"]["element"]["enabled"])
+        self.assertTrue(updated["features"]["cinny"]["enabled"])
+        self.assertEqual(updated["features"]["cinny"]["domain"], "cinny.example.com")
         self.assertFalse(updated["features"]["calls"]["enabled"])
         self.assertTrue(updated["modules"]["hookshot"]["enabled"])
         self.assertTrue(updated["features"]["sso"]["enabled"])
@@ -190,6 +196,7 @@ class ConfigEditTests(unittest.TestCase):
                 "registration_enabled": True,
                 "federation_enabled": False,
                 "element": {"enabled": False, "domain": ""},
+                "cinny": {"enabled": True, "domain": "cinny.dev.local"},
                 "calls": {"enabled": True, "livekit_domain": "calls.dev.local"},
             },
         }
@@ -204,6 +211,8 @@ class ConfigEditTests(unittest.TestCase):
         self.assertIn("config_registration_default=y", defaults)
         self.assertIn("config_federation_default=n", defaults)
         self.assertIn("config_element_default=n", defaults)
+        self.assertIn("config_cinny_default=y", defaults)
+        self.assertIn("config_cinny_domain=cinny.dev.local", defaults)
         self.assertIn("config_calls_default=y", defaults)
 
     def test_set_backup_config_updates_backup_fields(self):

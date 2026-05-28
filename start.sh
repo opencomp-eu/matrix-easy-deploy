@@ -16,6 +16,7 @@ info "Starting Caddy…"
 info "Starting core services…"
 # Load .env if it exists so POSTGRES_PASSWORD and INSTALL_ELEMENT are available
 INSTALL_ELEMENT="true"  # default: assume Element is present if .env is missing
+INSTALL_CINNY="false"
 HOOKSHOT_ENABLED="false"
 WHATSAPP_BRIDGE_ENABLED="false"
 SLACK_BRIDGE_ENABLED="false"
@@ -28,12 +29,12 @@ fi
 
 load_runtime_desired_state "${SCRIPT_DIR}"
 
-_element_profile=""
-if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
-    _element_profile="--profile element"
-fi
+_core_profiles=()
+while IFS= read -r -d '' _profile; do
+    _core_profiles+=("$_profile")
+done < <(core_compose_profile_args)
 
-(cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" $_element_profile up -d)
+(cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${_core_profiles[@]}" up -d)
 
 info "Starting calls services (coturn + LiveKit)…"
 (cd "${SCRIPT_DIR}/modules/calls" && "${DOCKER_COMPOSE[@]}" up -d)

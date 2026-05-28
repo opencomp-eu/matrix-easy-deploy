@@ -1,0 +1,9 @@
+{
+    "defaultHomeserver": 1,
+    "homeserverList": ["{{SERVER_NAME}}"],
+    "allowCustomHomeservers": {{CINNY_ALLOW_CUSTOM_HOMESERVERS}},
+    "hashRouter": {
+        "enabled": false,
+        "basename": "/"
+    }
+}

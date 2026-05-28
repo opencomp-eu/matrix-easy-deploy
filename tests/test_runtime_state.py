@@ -27,6 +27,7 @@ class RuntimeStateTests(unittest.TestCase):
 
             state = runtime_state.resolve_runtime_state(root)
             self.assertEqual(state["INSTALL_ELEMENT"], "false")
+            self.assertEqual(state["INSTALL_CINNY"], "false")
             self.assertEqual(state["HOOKSHOT_ENABLED"], "true")
             self.assertEqual(state["WHATSAPP_BRIDGE_ENABLED"], "false")
             self.assertEqual(state["SLACK_BRIDGE_ENABLED"], "true")
@@ -65,6 +66,7 @@ class RuntimeStateTests(unittest.TestCase):
             root = Path(tmp)
             state = runtime_state.resolve_runtime_state(root)
             self.assertEqual(state["INSTALL_ELEMENT"], "true")
+            self.assertEqual(state["INSTALL_CINNY"], "false")
             self.assertEqual(state["HOOKSHOT_ENABLED"], "false")
             self.assertEqual(state["WHATSAPP_BRIDGE_ENABLED"], "false")
             self.assertEqual(state["SLACK_BRIDGE_ENABLED"], "false")

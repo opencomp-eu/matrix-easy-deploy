@@ -196,6 +196,18 @@ load_runtime_desired_state() {
     fi
 }
 
+# Returns Docker Compose --profile flags for optional core web clients.
+core_compose_profile_args() {
+    local args=()
+    if [[ "${INSTALL_ELEMENT:-false}" == "true" ]]; then
+        args+=(--profile element)
+    fi
+    if [[ "${INSTALL_CINNY:-false}" == "true" ]]; then
+        args+=(--profile cinny)
+    fi
+    printf '%s\0' "${args[@]}"
+}
+
 # ---------------------------------------------------------------------------
 # Synapse data directory permissions
 # Ensures modules/core/synapse_data is writable by Synapse (UID 991).
