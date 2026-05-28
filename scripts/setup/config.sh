@@ -71,7 +71,7 @@ gather_config() {
     gather_sso_config
 
     ask_yn INSTALL_ELEMENT_INPUT \
-        "Install Element web client? (skip if you already have a client)" \
+        "Install Element web client? (most fully-featured; skip if using another client)" \
         "y"
     if [[ "$INSTALL_ELEMENT_INPUT" == "y" ]]; then
         INSTALL_ELEMENT="true"
@@ -87,6 +87,25 @@ gather_config() {
     else
         INSTALL_ELEMENT="false"
         ELEMENT_DOMAIN=""
+    fi
+
+    ask_yn INSTALL_CINNY_INPUT \
+        "Install Cinny web client? (lighter UI; can run alongside Element)" \
+        "n"
+    if [[ "$INSTALL_CINNY_INPUT" == "y" ]]; then
+        INSTALL_CINNY="true"
+        local _suggested_cinny_domain
+        _suggested_cinny_domain="cinny.$(extract_base_domain "$MATRIX_DOMAIN")"
+        ask CINNY_DOMAIN \
+            "Cinny domain  (e.g. cinny.example.com)" \
+            "$_suggested_cinny_domain"
+        while [[ -z "$CINNY_DOMAIN" ]]; do
+            warn "Cinny domain is required when installing Cinny."
+            ask CINNY_DOMAIN "Cinny domain" "$_suggested_cinny_domain"
+        done
+    else
+        INSTALL_CINNY="false"
+        CINNY_DOMAIN=""
     fi
 
     echo
@@ -120,6 +139,11 @@ gather_config() {
     else
         echo -e "  Element client  : ${CYAN}not installed${RESET}"
     fi
+    if [[ "$INSTALL_CINNY" == "true" ]]; then
+        echo -e "  Cinny client    : ${CYAN}${CINNY_DOMAIN}${RESET}"
+    else
+        echo -e "  Cinny client    : ${CYAN}not installed${RESET}"
+    fi
     echo -e "  LiveKit (calls) : ${CYAN}${LIVEKIT_DOMAIN}${RESET}"
     echo
     echo -e "  ${YELLOW}DNS check:${RESET} make sure these A records point to this server before proceeding:"
@@ -129,6 +153,9 @@ gather_config() {
     fi
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         echo -e "    ${CYAN}${ELEMENT_DOMAIN}${RESET}  →  <this server's IP>"
+    fi
+    if [[ "$INSTALL_CINNY" == "true" ]]; then
+        echo -e "    ${CYAN}${CINNY_DOMAIN}${RESET}  →  <this server's IP>"
     fi
     echo -e "    ${CYAN}${LIVEKIT_DOMAIN}${RESET}  →  <this server's IP>"
     echo

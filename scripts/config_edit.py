@@ -35,6 +35,7 @@ def load_or_init(path: Path) -> dict:
                 "federation_enabled": True,
                 "local_login_enabled": True,
                 "element": {"enabled": True, "domain": "element.example.com"},
+                "cinny": {"enabled": False, "domain": "cinny.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
                 "sso": {"enabled": False, "providers": []},
                 "synapse": {
@@ -143,6 +144,8 @@ def update_core_config(
     federation_enabled: bool,
     install_element: bool,
     element_domain: str,
+    install_cinny: bool,
+    cinny_domain: str,
     calls_enabled: bool,
     livekit_domain: str,
 ) -> None:
@@ -169,6 +172,13 @@ def update_core_config(
         features["element"] = element
     element["enabled"] = bool(install_element)
     element["domain"] = element_domain if install_element else ""
+
+    cinny = features.setdefault("cinny", {})
+    if not isinstance(cinny, dict):
+        cinny = {}
+        features["cinny"] = cinny
+    cinny["enabled"] = bool(install_cinny)
+    cinny["domain"] = cinny_domain if install_cinny else ""
 
     calls = features.setdefault("calls", {})
     if not isinstance(calls, dict):
@@ -242,6 +252,7 @@ def emit_wizard_defaults(config: dict) -> str:
     features = config.get("features", {}) if isinstance(config.get("features", {}), dict) else {}
 
     element = features.get("element", {}) if isinstance(features.get("element", {}), dict) else {}
+    cinny = features.get("cinny", {}) if isinstance(features.get("cinny", {}), dict) else {}
     calls = features.get("calls", {}) if isinstance(features.get("calls", {}), dict) else {}
 
     matrix_domain = matrix.get("domain", "matrix.example.com")
@@ -262,6 +273,10 @@ def emit_wizard_defaults(config: dict) -> str:
             to_bool(element.get("enabled", True)), yes_default="y", no_default="n"
         ),
         "config_element_domain": element.get("domain", ""),
+        "config_cinny_default": shell_bool_default(
+            to_bool(cinny.get("enabled", False)), yes_default="y", no_default="n"
+        ),
+        "config_cinny_domain": cinny.get("domain", ""),
         "config_calls_default": shell_bool_default(
             to_bool(calls.get("enabled", True)), yes_default="y", no_default="n"
         ),
@@ -346,6 +361,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--federation-enabled")
     parser.add_argument("--install-element")
     parser.add_argument("--element-domain")
+    parser.add_argument("--install-cinny")
+    parser.add_argument("--cinny-domain")
     parser.add_argument("--calls-enabled")
     parser.add_argument("--livekit-domain")
 
@@ -411,6 +428,8 @@ def main(argv: list[str] | None = None) -> int:
             "federation_enabled": args.federation_enabled,
             "install_element": args.install_element,
             "element_domain": args.element_domain,
+            "install_cinny": args.install_cinny,
+            "cinny_domain": args.cinny_domain,
             "calls_enabled": args.calls_enabled,
             "livekit_domain": args.livekit_domain,
         }
@@ -427,6 +446,8 @@ def main(argv: list[str] | None = None) -> int:
             federation_enabled=to_bool(args.federation_enabled),
             install_element=to_bool(args.install_element),
             element_domain=args.element_domain,
+            install_cinny=to_bool(args.install_cinny),
+            cinny_domain=args.cinny_domain,
             calls_enabled=to_bool(args.calls_enabled),
             livekit_domain=args.livekit_domain,
         )

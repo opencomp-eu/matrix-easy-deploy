@@ -23,7 +23,6 @@ class SmokeWorkflowTests(unittest.TestCase):
         (self.root / "modules/hookshot").mkdir(parents=True)
 
         (self.root / "caddy/Caddyfile.template").write_text("{{MATRIX_DOMAIN}} {{CADDY_MATRIX_HOSTS}}\n")
-        (self.root / "caddy/Caddyfile-no-element.template").write_text("no-element {{MATRIX_DOMAIN}}\n")
         (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
             "server_name: {{SERVER_NAME}}\npublic_baseurl: https://{{MATRIX_DOMAIN}}\n"
         )

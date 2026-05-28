@@ -18,10 +18,10 @@ fi
 
 load_runtime_desired_state "${SCRIPT_DIR}"
 
-_element_profile=""
-if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
-    _element_profile="--profile element"
-fi
+_core_profiles=()
+while IFS= read -r -d '' _profile; do
+    _core_profiles+=("$_profile")
+done < <(core_compose_profile_args)
 
 # Stop WhatsApp bridge when its module was previously installed
 if [[ -f "${SCRIPT_DIR}/modules/whatsapp-bridge/whatsapp/config.yaml" ]]; then
@@ -45,7 +45,7 @@ info "Stopping calls services (coturn + LiveKit)…"
 (cd "${SCRIPT_DIR}/modules/calls" && "${DOCKER_COMPOSE[@]}" down)
 
 info "Stopping core services…"
-(cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" $_element_profile down --remove-orphans)
+(cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${_core_profiles[@]}" down --remove-orphans)
 
 info "Stopping Caddy…"
 (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" down)

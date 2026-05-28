@@ -44,6 +44,8 @@ edit_deploy_config() {
     local config_federation_default="y"
     local config_element_default="y"
     local config_element_domain=""
+    local config_cinny_default="n"
+    local config_cinny_domain=""
     local config_calls_default="y"
     local config_livekit_domain=""
 
@@ -89,7 +91,7 @@ edit_deploy_config() {
     ENABLE_SSO="false"
 
     ask_yn INSTALL_ELEMENT_INPUT \
-        "Install Element web client? (skip if you already have a client)" \
+        "Install Element web client? (most fully-featured; skip if using another client)" \
         "$config_element_default"
     INSTALL_ELEMENT="$([ "$INSTALL_ELEMENT_INPUT" == "y" ] && echo "true" || echo "false")"
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
@@ -104,6 +106,24 @@ edit_deploy_config() {
         done
     else
         ELEMENT_DOMAIN=""
+    fi
+
+    ask_yn INSTALL_CINNY_INPUT \
+        "Install Cinny web client? (lighter UI; can run alongside Element)" \
+        "$config_cinny_default"
+    INSTALL_CINNY="$([ "$INSTALL_CINNY_INPUT" == "y" ] && echo "true" || echo "false")"
+    if [[ "$INSTALL_CINNY" == "true" ]]; then
+        local _suggested_cinny_domain
+        _suggested_cinny_domain="cinny.$(extract_base_domain "$MATRIX_DOMAIN")"
+        ask CINNY_DOMAIN \
+            "Cinny domain  (e.g. cinny.example.com)" \
+            "${config_cinny_domain:-$_suggested_cinny_domain}"
+        while [[ -z "$CINNY_DOMAIN" ]]; do
+            warn "Cinny domain is required when installing Cinny."
+            ask CINNY_DOMAIN "Cinny domain" "${config_cinny_domain:-$_suggested_cinny_domain}"
+        done
+    else
+        CINNY_DOMAIN=""
     fi
 
     echo
@@ -140,6 +160,11 @@ edit_deploy_config() {
     else
         echo -e "  Element client  : ${CYAN}not installed${RESET}"
     fi
+    if [[ "$INSTALL_CINNY" == "true" ]]; then
+        echo -e "  Cinny client    : ${CYAN}${CINNY_DOMAIN}${RESET}"
+    else
+        echo -e "  Cinny client    : ${CYAN}not installed${RESET}"
+    fi
     if [[ "$ENABLE_CALLS" == "true" ]]; then
         echo -e "  LiveKit (calls) : ${CYAN}${LIVEKIT_DOMAIN}${RESET}"
     else
@@ -153,6 +178,9 @@ edit_deploy_config() {
     fi
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         echo -e "    ${CYAN}${ELEMENT_DOMAIN}${RESET}  →  <this server's IP>"
+    fi
+    if [[ "$INSTALL_CINNY" == "true" ]]; then
+        echo -e "    ${CYAN}${CINNY_DOMAIN}${RESET}  →  <this server's IP>"
     fi
     if [[ "$ENABLE_CALLS" == "true" ]]; then
         echo -e "    ${CYAN}${LIVEKIT_DOMAIN}${RESET}  →  <this server's IP>"
@@ -177,6 +205,8 @@ edit_deploy_config() {
         --federation-enabled "$ENABLE_FEDERATION" \
         --install-element "$INSTALL_ELEMENT" \
         --element-domain "$ELEMENT_DOMAIN" \
+        --install-cinny "$INSTALL_CINNY" \
+        --cinny-domain "$CINNY_DOMAIN" \
         --calls-enabled "$ENABLE_CALLS" \
         --livekit-domain "$LIVEKIT_DOMAIN"
     success "Configuration saved to deploy.yaml"
@@ -390,13 +420,14 @@ run_logs_wizard() {
     echo -e "  ${CYAN}1)${RESET} Synapse"
     echo -e "  ${CYAN}2)${RESET} Caddy"
     echo -e "  ${CYAN}3)${RESET} Element"
-    echo -e "  ${CYAN}4)${RESET} PostgreSQL"
-    echo -e "  ${CYAN}5)${RESET} Redis"
-    echo -e "  ${CYAN}6)${RESET} LiveKit"
-    echo -e "  ${CYAN}7)${RESET} Coturn"
-    echo -e "  ${CYAN}8)${RESET} Hookshot"
-    echo -e "  ${CYAN}9)${RESET} WhatsApp bridge"
-    echo -e "  ${CYAN}10)${RESET} Slack bridge"
+    echo -e "  ${CYAN}4)${RESET} Cinny"
+    echo -e "  ${CYAN}5)${RESET} PostgreSQL"
+    echo -e "  ${CYAN}6)${RESET} Redis"
+    echo -e "  ${CYAN}7)${RESET} LiveKit"
+    echo -e "  ${CYAN}8)${RESET} Coturn"
+    echo -e "  ${CYAN}9)${RESET} Hookshot"
+    echo -e "  ${CYAN}10)${RESET} WhatsApp bridge"
+    echo -e "  ${CYAN}11)${RESET} Slack bridge"
     echo -e "  ${CYAN}b)${RESET} Back"
     echo -e "  ${CYAN}q)${RESET} Quit"
 
@@ -410,13 +441,14 @@ run_logs_wizard() {
         1) container="matrix_synapse" ;;
         2) container="caddy" ;;
         3) container="matrix_element" ;;
-        4) container="matrix_postgres" ;;
-        5) container="matrix_redis" ;;
-        6) container="matrix_livekit" ;;
-        7) container="matrix_coturn" ;;
-        8) container="matrix-hookshot" ;;
-        9) container="mautrix-whatsapp" ;;
-        10) container="mautrix-slack" ;;
+        4) container="matrix_cinny" ;;
+        5) container="matrix_postgres" ;;
+        6) container="matrix_redis" ;;
+        7) container="matrix_livekit" ;;
+        8) container="matrix_coturn" ;;
+        9) container="matrix-hookshot" ;;
+        10) container="mautrix-whatsapp" ;;
+        11) container="mautrix-slack" ;;
         b) return ;;
         q)
             success "Exiting wizard."

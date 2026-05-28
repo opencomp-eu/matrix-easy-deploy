@@ -17,6 +17,9 @@ EOF
     if [[ "${INSTALL_ELEMENT}" == "true" ]]; then
         echo -e "  ${BOLD}Element client${RESET}     https://${ELEMENT_DOMAIN}/"
     fi
+    if [[ "${INSTALL_CINNY:-false}" == "true" ]]; then
+        echo -e "  ${BOLD}Cinny client${RESET}       https://${CINNY_DOMAIN}/"
+    fi
     echo -e "  ${BOLD}LiveKit SFU${RESET}        https://${LIVEKIT_DOMAIN}/"
     echo -e "  ${BOLD}TURN server${RESET}        ${MATRIX_DOMAIN}:3478 (UDP/TCP) and :5349 (TLS)"
     echo -e "  ${BOLD}Synapse admin${RESET}      https://${MATRIX_DOMAIN}/_synapse/admin/v1/"

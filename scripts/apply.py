@@ -190,6 +190,17 @@ def _require_bool_map(value, path: str) -> None:
         _require_bool(item, f"{path}.{key}")
 
 
+def validate_cinny_config(cinny: dict) -> None:
+    if "enabled" in cinny:
+        _require_bool(cinny.get("enabled"), "features.cinny.enabled")
+
+    if "domain" in cinny and cinny.get("domain") not in (None, ""):
+        _require_str(cinny.get("domain"), "features.cinny.domain")
+
+    if "allow_custom_homeservers" in cinny:
+        _require_bool(cinny.get("allow_custom_homeservers"), "features.cinny.allow_custom_homeservers")
+
+
 def validate_element_config(element: dict) -> None:
     for key in ("enabled",):
         if key in element:
@@ -417,13 +428,17 @@ def validate_config(config: dict) -> None:
             if key in features and not isinstance(features[key], bool):
                 raise ValueError(f"features.{key} must be true/false")
 
-        for section in ("element", "calls", "sso", "synapse"):
+        for section in ("element", "cinny", "calls", "sso", "synapse"):
             if section in features and not isinstance(features.get(section), dict):
                 raise ValueError(f"features.{section} must be an object")
 
         element = features.get("element", {}) if isinstance(features.get("element", {}), dict) else {}
         if element:
             validate_element_config(element)
+
+        cinny = features.get("cinny", {}) if isinstance(features.get("cinny", {}), dict) else {}
+        if cinny:
+            validate_cinny_config(cinny)
 
         auto_join = get_synapse_auto_join_config(features)
         if auto_join:
@@ -578,6 +593,25 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
         derived["ELEMENT_DOMAIN"] = element.get("domain") or f"element.{extract_base_domain(matrix_domain)}"
     else:
         derived["ELEMENT_DOMAIN"] = ""
+
+    cinny = features.get("cinny", {}) if isinstance(features.get("cinny", {}), dict) else {}
+    cinny_enabled = bool(cinny.get("enabled", False))
+    derived["INSTALL_CINNY"] = "true" if cinny_enabled else "false"
+    if cinny_enabled:
+        derived["CINNY_DOMAIN"] = cinny.get("domain") or f"cinny.{extract_base_domain(matrix_domain)}"
+    else:
+        derived["CINNY_DOMAIN"] = ""
+
+    if not element_enabled and not cinny_enabled:
+        derived["MATRIX_CLIENT_REDIRECT_BLOCK"] = (
+            "    # Redirect visitors when no self-hosted web client is configured\n"
+            "    handle {\n"
+            f"        redir https://app.element.io/#/login?hs_url=https://{matrix_domain} temporary\n"
+            "    }\n"
+            "\n"
+        )
+    else:
+        derived["MATRIX_CLIENT_REDIRECT_BLOCK"] = ""
 
     calls = features.get("calls", {}) if isinstance(features.get("calls", {}), dict) else {}
     calls_enabled = bool(calls.get("enabled", True))
@@ -851,6 +885,23 @@ def build_element_config(config: dict) -> dict:
     return merge_element_customizations(build_default_element_config(config), element_cfg)
 
 
+def build_cinny_config(config: dict) -> dict:
+    matrix = config.get("matrix", {}) if isinstance(config.get("matrix", {}), dict) else {}
+    features = config.get("features", {}) if isinstance(config.get("features", {}), dict) else {}
+    cinny_cfg = features.get("cinny", {}) if isinstance(features.get("cinny", {}), dict) else {}
+
+    matrix_domain = matrix.get("domain", "")
+    server_name = matrix.get("server_name") or extract_base_domain(matrix_domain)
+    allow_custom = bool(cinny_cfg.get("allow_custom_homeservers", False))
+
+    return {
+        "defaultHomeserver": 1,
+        "homeserverList": [server_name],
+        "allowCustomHomeservers": allow_custom,
+        "hashRouter": {"enabled": False, "basename": "/"},
+    }
+
+
 def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=4) + "\n")
 
@@ -1049,24 +1100,29 @@ def fail_if_unresolved_placeholder(path: Path) -> None:
         raise ValueError(f"{path} still contains unresolved template placeholders")
 
 
-def render_templates(ctx: ApplyContext, config: dict, env_vars: dict) -> None:
-    install_element = env_vars.get("INSTALL_ELEMENT", "true") == "true"
-    caddy_template = (
-        ctx.project_root / "caddy" / ("Caddyfile.template" if install_element else "Caddyfile-no-element.template")
-    )
-    caddy_dest = ctx.project_root / "caddy" / "Caddyfile"
+def render_caddyfile(project_root: Path, env_vars: dict) -> None:
+    caddy_template = project_root / "caddy" / "Caddyfile.template"
+    caddy_dest = project_root / "caddy" / "Caddyfile"
     render_template(caddy_template, caddy_dest, env_vars)
     caddy_dest.write_text(finalize_caddyfile_content(caddy_dest.read_text()))
     fail_if_unresolved_placeholder(caddy_dest)
+
+
+def render_templates(ctx: ApplyContext, config: dict, env_vars: dict) -> None:
+    render_caddyfile(ctx.project_root, env_vars)
 
     synapse_template = ctx.project_root / "modules" / "core" / "synapse" / "homeserver.yaml.template"
     synapse_dest = ctx.project_root / "modules" / "core" / "synapse" / "homeserver.yaml"
     render_template(synapse_template, synapse_dest, env_vars)
     fail_if_unresolved_placeholder(synapse_dest)
 
-    if install_element:
+    if env_vars.get("INSTALL_ELEMENT", "true") == "true":
         element_dest = ctx.project_root / "modules" / "core" / "element" / "config.json"
         write_json(element_dest, build_element_config(config))
+
+    if env_vars.get("INSTALL_CINNY", "false") == "true":
+        cinny_dest = ctx.project_root / "modules" / "core" / "cinny" / "config.json"
+        write_json(cinny_dest, build_cinny_config(config))
 
     coturn_template = ctx.project_root / "modules" / "calls" / "coturn" / "turnserver.conf.template"
     coturn_dest = ctx.project_root / "modules" / "calls" / "coturn" / "turnserver.conf"

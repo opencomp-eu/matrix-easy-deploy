@@ -18,6 +18,7 @@
         reverse_proxy matrix_synapse:8008
     }
 
+{{MATRIX_CLIENT_REDIRECT_BLOCK}}
     # Security headers
     header {
         X-Content-Type-Options nosniff
@@ -54,6 +55,22 @@
 # Element web client — served on its own domain
 {{ELEMENT_DOMAIN}} {
     reverse_proxy matrix_element:80
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "interest-cohort=()"
+        -Server
+    }
+
+    encode gzip
+    log
+}
+
+# Cinny web client — served on its own domain
+{{CINNY_DOMAIN}} {
+    reverse_proxy matrix_cinny:80
 
     header {
         X-Content-Type-Options nosniff

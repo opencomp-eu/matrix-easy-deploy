@@ -52,6 +52,10 @@ features:
       create_public_rooms: true
       create_public_spaces: true
     extra_config: {}
+  cinny:
+    enabled: false
+    domain: cinny.example.com
+    allow_custom_homeservers: false
   calls:
     enabled: true
     livekit_domain: livekit.example.com
