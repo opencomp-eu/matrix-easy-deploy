@@ -707,6 +707,8 @@ matrix-easy-deploy/
     │   ├── runtime.sh            # Docker setup/start + admin bootstrap
     │   ├── summary.sh            # Final post-setup summary
     │   └── modules.sh            # --module dispatcher helper
+    ├── med-admin.sh              # Thin wrapper for the med-admin Python CLI
+    ├── med_admin.py              # Operator admin CLI (bootstrap/list/query/reset/rooms)
     └── create-account.sh         # Account registration helper (user or admin)
 ├── ensure_dependencies.sh       # Non-interactive host dependency installer
 ```
@@ -761,6 +763,102 @@ To create an admin account non-interactively:
 ```bash
 bash scripts/create-account.sh --username alice --password 'replace-with-a-long-random-password' --admin --yes
 ```
+
+**Admin account operations with `med-admin`**
+
+`med-admin.sh` is a command-line tool for bootstrapping and managing a dedicated operator admin account. After initial bootstrap, all admin commands work seamlessly without requiring credentials to be passed.
+
+**Bootstrap a `med-admin` account** (one-time setup, automatic)
+
+Create and store the dedicated admin account. The tool generates its own secure password:
+
+```bash
+bash scripts/med-admin.sh bootstrap
+```
+
+Optionally, you can specify a custom password:
+
+```bash
+bash scripts/med-admin.sh bootstrap --password 'replace-with-a-long-random-password'
+```
+
+This command:
+1. Generates a secure password (or uses your custom one)
+2. Creates the `med-admin` admin account via shared-secret registration
+3. Stores both username and password in `.env` automatically
+4. All subsequent admin commands use these stored credentials
+
+**List all local accounts**
+
+After bootstrap, commands work without additional credentials:
+
+```bash
+bash scripts/med-admin.sh list-accounts
+```
+
+With optional filtering and pagination:
+
+```bash
+bash scripts/med-admin.sh list-accounts --filter alice --limit 50
+```
+
+**List admins only**
+
+```bash
+bash scripts/med-admin.sh list-admins
+```
+
+**Query a specific account**
+
+```bash
+bash scripts/med-admin.sh get-account alice
+```
+
+**Reset a local account password**
+
+```bash
+bash scripts/med-admin.sh reset-password alice --password 'new-long-random-password' --yes
+```
+
+**Create a room (interactive)**
+
+```bash
+bash scripts/med-admin.sh create-room
+```
+
+This prompts for optional details and creates a private room by default if you do not choose public visibility.
+
+**Create a room (non-interactive)**
+
+```bash
+bash scripts/med-admin.sh create-room \
+  --name "Care Team" \
+  --alias care-team \
+  --topic "Clinical coordination" \
+  --private \
+  --invite alice \
+  --invite @bob:example.com \
+  --yes
+```
+
+Notes:
+- `--name`, `--alias`, `--topic`, `--invite`, and `--direct` are optional.
+- Visibility defaults to private when omitted (`--public` or `--private` can be passed explicitly).
+- `--invite` accepts either usernames or full MXIDs and can be provided multiple times.
+
+**How it works**
+
+- `bootstrap` generates a secure password automatically and stores both username and password in `.env`
+- All subsequent admin commands automatically use the stored `med-admin` credentials
+- No need to pass credentials with each command
+- If you need to use a different admin account, override with `--access-token` or `--admin-username`/`--admin-password`
+
+**Important: SSO-only deployments**
+
+If you have `features.local_login_enabled: false` in `deploy.yaml`:
+- Bootstrap must happen **before** disabling password login
+- Once password login is disabled, the stored credentials cannot be used to obtain new tokens
+- If you hit this situation, obtain a token from elsewhere (e.g. temporarily re-enable password login, use Element's token export, or query Synapse directly) and pass it with `--access-token`
 
 **Stop all services** (data stays intact in Docker volumes)
 ```bash
