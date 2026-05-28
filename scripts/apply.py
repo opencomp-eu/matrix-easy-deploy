@@ -320,6 +320,76 @@ def validate_element_config(element: dict) -> None:
         raise ValueError("features.element.extra_config must be an object")
 
 
+AUTO_JOIN_ROOM_PRESETS = frozenset({"public_chat", "private_chat", "trusted_private_chat"})
+
+
+def get_synapse_auto_join_config(features: dict) -> dict:
+    synapse = features.get("synapse", {}) if isinstance(features.get("synapse", {}), dict) else {}
+    auto_join = synapse.get("auto_join", {}) if isinstance(synapse.get("auto_join", {}), dict) else {}
+    return auto_join
+
+
+def validate_auto_join_config(auto_join: dict) -> None:
+    if "rooms" in auto_join:
+        _require_str_list(auto_join.get("rooms"), "features.synapse.auto_join.rooms")
+
+    for key in ("autocreate", "autocreate_federated", "rooms_for_guests"):
+        if key in auto_join:
+            _require_bool(auto_join.get(key), f"features.synapse.auto_join.{key}")
+
+    room_preset = auto_join.get("room_preset")
+    if room_preset is not None:
+        if not isinstance(room_preset, str) or room_preset not in AUTO_JOIN_ROOM_PRESETS:
+            raise ValueError(
+                "features.synapse.auto_join.room_preset must be one of: "
+                "public_chat, private_chat, trusted_private_chat"
+            )
+
+    if "mxid_localpart" in auto_join and auto_join.get("mxid_localpart") is not None:
+        _require_str(auto_join.get("mxid_localpart"), "features.synapse.auto_join.mxid_localpart")
+
+    if room_preset in ("private_chat", "trusted_private_chat"):
+        localpart = auto_join.get("mxid_localpart")
+        if not isinstance(localpart, str) or not localpart.strip():
+            raise ValueError(
+                "features.synapse.auto_join.mxid_localpart is required when "
+                "features.synapse.auto_join.room_preset is private_chat or trusted_private_chat"
+            )
+
+
+def build_synapse_auto_join_section(auto_join: dict) -> str:
+    rooms = auto_join.get("rooms") or []
+    if not rooms:
+        return ""
+
+    lines = [
+        "# Auto-join rooms for new registrations",
+        "auto_join_rooms:",
+    ]
+    for alias in rooms:
+        lines.append(f"  - {yaml.safe_dump(alias).strip()}")
+
+    autocreate = auto_join.get("autocreate", True)
+    lines.append(f"autocreate_auto_join_rooms: {'true' if autocreate else 'false'}")
+
+    if "autocreate_federated" in auto_join:
+        federated = auto_join["autocreate_federated"]
+        lines.append(f"autocreate_auto_join_rooms_federated: {'true' if federated else 'false'}")
+
+    if "room_preset" in auto_join:
+        lines.append(f'autocreate_auto_join_room_preset: "{auto_join["room_preset"]}"')
+
+    mxid_localpart = auto_join.get("mxid_localpart")
+    if mxid_localpart is not None:
+        lines.append(f"auto_join_mxid_localpart: {yaml.safe_dump(mxid_localpart).strip()}")
+
+    if "rooms_for_guests" in auto_join:
+        guests = auto_join["rooms_for_guests"]
+        lines.append(f"auto_join_rooms_for_guests: {'true' if guests else 'false'}")
+
+    return "\n".join(lines)
+
+
 def validate_config(config: dict) -> None:
     matrix = config.get("matrix")
     if not isinstance(matrix, dict):
@@ -347,13 +417,17 @@ def validate_config(config: dict) -> None:
             if key in features and not isinstance(features[key], bool):
                 raise ValueError(f"features.{key} must be true/false")
 
-        for section in ("element", "calls", "sso"):
+        for section in ("element", "calls", "sso", "synapse"):
             if section in features and not isinstance(features.get(section), dict):
                 raise ValueError(f"features.{section} must be an object")
 
         element = features.get("element", {}) if isinstance(features.get("element", {}), dict) else {}
         if element:
             validate_element_config(element)
+
+        auto_join = get_synapse_auto_join_config(features)
+        if auto_join:
+            validate_auto_join_config(auto_join)
 
         sso = features.get("sso", {}) if isinstance(features.get("sso", {}), dict) else {}
         if "providers" in sso and not isinstance(sso.get("providers"), list):
@@ -494,6 +568,8 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
 
     local_login_enabled = bool(features.get("local_login_enabled", True))
     derived["LOCAL_LOGIN_ENABLED"] = "true" if local_login_enabled else "false"
+
+    derived["SYNAPSE_AUTO_JOIN_SECTION"] = build_synapse_auto_join_section(get_synapse_auto_join_config(features))
 
     element = features.get("element", {}) if isinstance(features.get("element", {}), dict) else {}
     element_enabled = bool(element.get("enabled", True))
@@ -788,7 +864,13 @@ def write_env_file(ctx: ApplyContext, env_vars: dict) -> None:
         "",
     ]
     for key in sorted(env_vars.keys()):
-        lines.append(f"{key}={env_vars[key]}")
+        value = str(env_vars[key])
+        # .env is shell-sourced by helper scripts; multiline values break parsing.
+        # Keep multiline placeholders available for template rendering, but do not
+        # persist them in the environment file.
+        if "\n" in value:
+            continue
+        lines.append(f"{key}={value}")
     lines.append("")
 
     ctx.env_file.write_text("\n".join(lines))
