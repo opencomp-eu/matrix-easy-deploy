@@ -38,9 +38,15 @@
     log
 }
 
-# LiveKit SFU — WebSocket API for group video calls (Element Call)
+# MatrixRTC backend — JWT auth service and LiveKit SFU for group calls
 {{LIVEKIT_DOMAIN}} {
-    reverse_proxy matrix_livekit:7880
+    handle_path /livekit/jwt* {
+        reverse_proxy matrix_lk_jwt_service:8080
+    }
+
+    handle_path /livekit/sfu* {
+        reverse_proxy matrix_livekit:7880
+    }
 
     header {
         X-Content-Type-Options nosniff

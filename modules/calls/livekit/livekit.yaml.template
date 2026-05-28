@@ -17,6 +17,10 @@ rtc:
   # Automatically discover and advertise the host's public IP to clients.
   use_external_ip: true
 
+room:
+  # MatrixRTC room creation is handled by the JWT service after OpenID checks.
+  auto_create: false
+
 # ---------------------------------------------------------------------------
 # API keys
 # The key name is arbitrary; the secret must match what Synapse is told.

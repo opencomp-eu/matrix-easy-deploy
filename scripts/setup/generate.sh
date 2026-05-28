@@ -38,7 +38,7 @@ generate_config() {
     if [[ "$SERVER_NAME" == "$MATRIX_DOMAIN" ]]; then
         CADDY_MATRIX_HOSTS="$MATRIX_DOMAIN"
     else
-        CADDY_MATRIX_HOSTS="$MATRIX_DOMAIN,$SERVER_NAME"
+        CADDY_MATRIX_HOSTS="$MATRIX_DOMAIN, $SERVER_NAME"
     fi
 
     info "Writing ${DEPLOY_ENV}…"
@@ -118,6 +118,11 @@ EOF
     if grep -q '{{[A-Z_][A-Z0-9_]*}}' "${SCRIPT_DIR}/caddy/Caddyfile"; then
         die "Caddyfile still contains unresolved template placeholders. Aborting to avoid booting broken Caddy config."
     fi
+    PYTHONPATH="${SCRIPT_DIR}" python3 -c "
+from pathlib import Path
+from scripts.apply import finalize_caddyfile
+finalize_caddyfile(Path('${SCRIPT_DIR}/caddy/Caddyfile'))
+"
     success "caddy/Caddyfile written."
 
     info "Rendering homeserver.yaml…"

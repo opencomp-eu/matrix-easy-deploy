@@ -417,6 +417,17 @@ bash apply.sh --rotate-secrets
 
 > `--rotate-secrets` is destructive for existing deployments unless you plan migration/restart carefully.
 
+### Synapse auto-join rooms
+
+`features.synapse.auto_join` controls which rooms new users are joined to on registration, and whether those rooms are auto-created on first signup. Settings map to [Synapse auto-join configuration](https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html#auto_join_rooms) in the generated `homeserver.yaml`.
+
+- `rooms`: list of room or space aliases (for example `#welcome:example.com`). When empty, no auto-join block is written.
+- `autocreate`: create listed rooms when the first user registers (default `true`).
+- `autocreate_federated`: whether auto-created rooms are federated (default `true`).
+- `room_preset`: `public_chat`, `private_chat`, or `trusted_private_chat` (default `public_chat`).
+- `mxid_localpart`: localpart of the user that creates or invites to auto-join rooms; **required** for `private_chat` and `trusted_private_chat`.
+- `rooms_for_guests`: auto-join guest accounts too (default `true`).
+
 ### Element Web customization
 
 `features.element` exposes high-value org-facing Element Web options directly in `deploy.yaml`. `bash apply.sh` now writes `modules/core/element/config.json` from that YAML, so nested branding, support links, integrations, and home-page settings render as real JSON instead of string-substituted fragments.
@@ -1076,11 +1087,22 @@ Issues, fixes, and module contributions are welcome. If you're adding a new modu
 
 ## Verification (local-dev friendly)
 
-You can validate logic and idempotency on a local laptop without a full server deployment:
+You can validate logic and idempotency on a local laptop without a full server deployment.
+
+Install test dependencies once (pytest gives a quiet summary by default; unittest is used as a fallback):
 
 ```bash
-# Unit and logic tests
+pip install -r requirements-dev.txt
+```
+
+```bash
+# All unit tests (quiet)
 ./test
+
+# Verbose / single file / filter by name
+./test -v
+./test tests/test_apply.py
+./test -k caddy
 
 # Deterministic apply run with fixed IP for local smoke checks
 bash apply.sh --server-ip 127.0.0.1

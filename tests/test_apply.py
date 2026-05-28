@@ -26,16 +26,39 @@ class ApplyTests(unittest.TestCase):
         (self.root / "modules/whatsapp-bridge/whatsapp").mkdir(parents=True)
         (self.root / "modules/slack-bridge/slack").mkdir(parents=True)
 
-        (self.root / "caddy/Caddyfile.template").write_text("{{MATRIX_DOMAIN}} {{CADDY_MATRIX_HOSTS}}")
+        (self.root / "caddy/Caddyfile.template").write_text(
+            "{{CADDY_MATRIX_HOSTS}} {\n"
+            "    reverse_proxy matrix_synapse:8008\n"
+            "}\n\n"
+            "{{LIVEKIT_DOMAIN}} {\n"
+            "    handle_path /livekit/jwt* {\n"
+            "        reverse_proxy matrix_lk_jwt_service:8080\n"
+            "    }\n"
+            "    handle_path /livekit/sfu* {\n"
+            "        reverse_proxy matrix_livekit:7880\n"
+            "    }\n"
+            "}\n"
+        )
         (self.root / "caddy/Caddyfile-no-element.template").write_text("no-element {{MATRIX_DOMAIN}}")
         (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
             "server_name: {{SERVER_NAME}}\n"
             "public_baseurl: https://{{MATRIX_DOMAIN}}\n"
             "password_config:\n  enabled: {{LOCAL_LOGIN_ENABLED}}\n"
+            "extra_well_known_client_content:\n"
+            "  org.matrix.msc4143.rtc_foci:\n"
+            "    - type: livekit\n"
+            "      livekit_service_url: \"https://{{LIVEKIT_DOMAIN}}/livekit/jwt\"\n"
+            "matrix_rtc:\n"
+            "  transports:\n"
+            "    - type: livekit\n"
+            "      livekit_service_url: \"https://{{LIVEKIT_DOMAIN}}/livekit/jwt\"\n"
         )
         (self.root / "modules/core/element/config.json.template").write_text('{"base_url":"https://{{MATRIX_DOMAIN}}"}')
         (self.root / "modules/calls/coturn/turnserver.conf.template").write_text("realm={{MATRIX_DOMAIN}}")
-        (self.root / "modules/calls/livekit/livekit.yaml.template").write_text("keys:\n  {{LIVEKIT_KEY}}: {{LIVEKIT_SECRET}}")
+        (self.root / "modules/calls/livekit/livekit.yaml.template").write_text(
+            "room:\n  auto_create: false\n"
+            "keys:\n  {{LIVEKIT_KEY}}: {{LIVEKIT_SECRET}}"
+        )
         (self.root / "modules/hookshot/module.yaml").write_text(
             "name: hookshot\n"
             "config_key: hookshot\n"
@@ -84,6 +107,10 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(derived["SERVER_IP"], "1.2.3.4")
         self.assertEqual(derived["HOOKSHOT_ENABLED"], "true")
         self.assertEqual(derived["WHATSAPP_BRIDGE_ENABLED"], "false")
+
+    def test_derive_values_caddy_matrix_hosts_space_after_comma(self):
+        derived = apply.derive_values(self.sample_config(), server_ip="1.2.3.4")
+        self.assertEqual(derived["CADDY_MATRIX_HOSTS"], "matrix.example.com, example.com")
 
     def test_derive_values_with_oidc_providers(self):
         cfg = self.sample_config()
@@ -233,6 +260,96 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
+    def test_validate_config_rejects_invalid_auto_join_rooms(self):
+        cfg = self.sample_config()
+        cfg["features"]["synapse"] = {"auto_join": {"rooms": "not-a-list"}}
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_invalid_auto_join_room_preset(self):
+        cfg = self.sample_config()
+        cfg["features"]["synapse"] = {
+            "auto_join": {
+                "rooms": ["#welcome:example.com"],
+                "room_preset": "secret_lair",
+            },
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_private_preset_without_mxid_localpart(self):
+        cfg = self.sample_config()
+        cfg["features"]["synapse"] = {
+            "auto_join": {
+                "rooms": ["#welcome:example.com"],
+                "room_preset": "private_chat",
+            },
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_build_synapse_auto_join_section_empty(self):
+        self.assertEqual(apply.build_synapse_auto_join_section({}), "")
+        self.assertEqual(apply.build_synapse_auto_join_section({"rooms": []}), "")
+
+    def test_build_synapse_auto_join_section_with_rooms(self):
+        section = apply.build_synapse_auto_join_section(
+            {
+                "rooms": ["#welcome:example.com", "#announce:example.com"],
+                "autocreate": False,
+                "autocreate_federated": False,
+                "room_preset": "private_chat",
+                "mxid_localpart": "system",
+                "rooms_for_guests": False,
+            }
+        )
+        self.assertIn("auto_join_rooms:", section)
+        self.assertIn("'#welcome:example.com'", section)
+        self.assertIn("'#announce:example.com'", section)
+        self.assertIn("autocreate_auto_join_rooms: false", section)
+        self.assertIn("autocreate_auto_join_rooms_federated: false", section)
+        self.assertIn('autocreate_auto_join_room_preset: "private_chat"', section)
+        self.assertIn("auto_join_mxid_localpart: system", section)
+        self.assertIn("auto_join_rooms_for_guests: false", section)
+
+    def test_derive_values_synapse_auto_join_section(self):
+        cfg = self.sample_config()
+        cfg["features"]["synapse"] = {
+            "auto_join": {
+                "rooms": ["#welcome:example.com"],
+                "autocreate": True,
+            },
+        }
+        derived = apply.derive_values(cfg, server_ip="1.2.3.4")
+        self.assertIn("auto_join_rooms:", derived["SYNAPSE_AUTO_JOIN_SECTION"])
+        self.assertIn("autocreate_auto_join_rooms: true", derived["SYNAPSE_AUTO_JOIN_SECTION"])
+
+    def test_apply_configuration_renders_auto_join(self):
+        cfg = self.sample_config()
+        cfg["features"]["synapse"] = {
+            "auto_join": {
+                "rooms": ["#welcome:example.com"],
+                "autocreate": True,
+                "autocreate_federated": False,
+            },
+        }
+        self.write_config(cfg)
+        template = (self.root / "modules/core/synapse/homeserver.yaml.template").read_text()
+        (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
+            template + "\n{{SYNAPSE_AUTO_JOIN_SECTION}}\n"
+        )
+        ctx = apply.ApplyContext(self.root)
+        apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
+        self.assertIn("auto_join_rooms:", synapse)
+        self.assertIn("'#welcome:example.com'", synapse)
+        self.assertIn("autocreate_auto_join_rooms: true", synapse)
+        self.assertIn("autocreate_auto_join_rooms_federated: false", synapse)
+        self.assertNotIn("{{SYNAPSE_AUTO_JOIN_SECTION}}", synapse)
+        env_text = (self.root / ".env").read_text()
+        self.assertNotIn("SYNAPSE_AUTO_JOIN_SECTION=", env_text)
+
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
         first = apply.create_or_update_secrets(ctx, {})
@@ -264,13 +381,24 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("LOCAL_LOGIN_ENABLED=true", env_text)
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
-        self.assertIn("matrix.example.com", caddy)
+        self.assertIn("matrix.example.com, example.com {", caddy)
+        self.assertIn("handle_path /livekit/jwt*", caddy)
+        self.assertIn("reverse_proxy matrix_lk_jwt_service:8080", caddy)
+        self.assertIn("handle_path /livekit/sfu*", caddy)
         self.assertNotIn("{{", caddy)
 
         synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
         self.assertIn("server_name: example.com", synapse)
         self.assertIn("enabled: true", synapse)
+        self.assertIn("extra_well_known_client_content:", synapse)
+        self.assertIn("org.matrix.msc4143.rtc_foci:", synapse)
+        self.assertIn("matrix_rtc:", synapse)
+        self.assertIn('livekit_service_url: "https://livekit.example.com/livekit/jwt"', synapse)
+        self.assertNotIn("\nlivekit:\n", synapse)
         self.assertNotIn("{{", synapse)
+
+        livekit = (self.root / "modules/calls/livekit/livekit.yaml").read_text()
+        self.assertIn("room:\n  auto_create: false", livekit)
 
         modules_state = yaml.safe_load((self.root / ".matrix-easy-deploy/modules.yaml").read_text())
         self.assertIn("hookshot", modules_state)
@@ -431,6 +559,79 @@ class ApplyTests(unittest.TestCase):
         self.assertNotIn("matrix_livekit:7880", caddy)
         self.assertNotIn('"" {', caddy)
         self.assertNotIn("# LiveKit SFU", caddy)
+
+    def test_merge_duplicate_caddy_site_blocks_ignores_comment_with_brace(self):
+        original = (
+            "# Comment {\n"
+            "example.com {\n"
+            "    reverse_proxy matrix_synapse:8008\n"
+            "}\n"
+        )
+        merged = apply.merge_duplicate_caddy_site_blocks(original)
+        self.assertIn("# Comment {", merged)
+        self.assertEqual(merged.count("example.com {"), 1)
+        self.assertIn("reverse_proxy matrix_synapse:8008", merged)
+
+    def test_merge_duplicate_caddy_site_blocks_combines_identical_hosts(self):
+        original = (
+            "# Matrix\n"
+            "example.com {\n"
+            "    handle /_matrix/* {\n"
+            "        reverse_proxy matrix_synapse:8008\n"
+            "    }\n"
+            "}\n\n"
+            "# LiveKit\n"
+            "example.com {\n"
+            "    handle /livekit/jwt* {\n"
+            "        reverse_proxy matrix_lk_jwt_service:8080\n"
+            "    }\n"
+            "}\n\n"
+            "# Element\n"
+            "example.com {\n"
+            "    reverse_proxy matrix_element:80\n"
+            "}\n"
+        )
+        merged = apply.merge_duplicate_caddy_site_blocks(original)
+        self.assertEqual(merged.count("example.com {"), 1)
+        self.assertIn("handle /_matrix/*", merged)
+        self.assertIn("handle /livekit/jwt*", merged)
+        self.assertIn("reverse_proxy matrix_element:80", merged)
+
+    def test_merge_duplicate_caddy_site_blocks_leaves_distinct_hosts(self):
+        original = (
+            "matrix.example.com {\n"
+            "    reverse_proxy matrix_synapse:8008\n"
+            "}\n\n"
+            "element.example.com {\n"
+            "    reverse_proxy matrix_element:80\n"
+            "}\n"
+        )
+        merged = apply.merge_duplicate_caddy_site_blocks(original)
+        self.assertEqual(merged.count("matrix.example.com {"), 1)
+        self.assertEqual(merged.count("element.example.com {"), 1)
+
+    def test_apply_configuration_merges_unified_domain_caddy_blocks(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        (self.root / "caddy/Caddyfile.template").write_text(
+            (repo_root / "caddy/Caddyfile.template").read_text()
+        )
+        cfg = self.sample_config()
+        unified = "example.com"
+        cfg["matrix"]["domain"] = unified
+        cfg["matrix"]["server_name"] = unified
+        cfg["features"]["element"]["domain"] = unified
+        cfg["features"]["calls"]["livekit_domain"] = unified
+        self.write_config(cfg)
+        ctx = apply.ApplyContext(self.root)
+
+        apply.apply_configuration(ctx, server_ip="9.8.7.6")
+
+        caddy = (self.root / "caddy/Caddyfile").read_text()
+        self.assertEqual(caddy.count("example.com {"), 1)
+        self.assertIn("handle /_matrix/*", caddy)
+        self.assertIn("handle /livekit/jwt*", caddy)
+        self.assertIn("reverse_proxy matrix_element:80", caddy)
+        self.assertNotIn("{{", caddy)
 
     def test_apply_configuration_writes_bridge_env_values(self):
         cfg = self.sample_config()

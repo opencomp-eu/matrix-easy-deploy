@@ -95,9 +95,9 @@ setup_admin() {
             warn "Synapse hasn't responded after $((max * 5))s."
             warn "It may still be starting. You can create the admin user later:"
             echo
-            echo -e "  ${CYAN}bash scripts/create-account.sh \\\" 
-            echo -e "      --username ${ADMIN_USERNAME} \\\" 
-            echo -e "      --password <your_password> \\\" 
+            echo -e "  ${CYAN}bash scripts/create-account.sh \\"
+            echo -e "      --username ${ADMIN_USERNAME} \\"
+            echo -e "      --password <your_password> \\"
             echo -e "      --admin --yes${RESET}"
             echo
             return 0

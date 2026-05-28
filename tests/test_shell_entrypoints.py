@@ -11,8 +11,8 @@ class ShellEntrypointTests(unittest.TestCase):
         self.repo_root = Path(__file__).resolve().parents[1]
         self.apply_script = self.repo_root / "apply.sh"
         self.ensure_dependencies_script = self.repo_root / "ensure_dependencies.sh"
-        self.create_user_script = self.repo_root / "scripts/create-user.sh"
         self.med_admin_script = self.repo_root / "scripts/med-admin.sh"
+        self.create_account_script = self.repo_root / "scripts/create-account.sh"
         self.lib_script = self.repo_root / "scripts/lib.sh"
         self.dependencies_script = self.repo_root / "scripts/setup/dependencies.sh"
 
@@ -199,48 +199,63 @@ class ShellEntrypointTests(unittest.TestCase):
             self.assertIn("systemctl:enable --now docker", lines)
             self.assertIn("All dependencies satisfied.", result.stdout)
 
-    def test_create_user_supports_noninteractive_flags(self):
+    def test_create_account_noninteractive_keeps_nonce_output_clean(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             events = root / "events.log"
+            payload_file = root / "payload.json"
 
-            self._copy_executable(self.create_user_script, root / "scripts/create-user.sh")
+            self._copy_executable(self.create_account_script, root / "scripts/create-account.sh")
             self._copy_executable(self.lib_script, root / "scripts/lib.sh")
-            (root / ".env").write_text("SERVER_NAME=example.com\n")
+            (root / ".env").write_text(
+                "SERVER_NAME=example.com\n"
+                "MATRIX_DOMAIN=matrix.example.com\n"
+                "REGISTRATION_SHARED_SECRET=sharedsecret\n"
+            )
 
             fake_bin = root / "bin"
             fake_bin.mkdir(parents=True, exist_ok=True)
             self._write_executable(
-                fake_bin / "docker",
+                fake_bin / "curl",
                 "#!/usr/bin/env bash\n"
-                "echo docker:$* >> \"$EVENTS\"\n"
-                "if [[ \"${1:-}\" == \"inspect\" ]]; then\n"
-                "  if [[ \"${2:-}\" == \"--format={{.State.Running}}\" ]]; then\n"
-                "    echo true\n"
-                "    exit 0\n"
-                "  fi\n"
+                "echo curl:$* >> \"$EVENTS\"\n"
+                "outfile=''\n"
+                "write_status='false'\n"
+                "url=''\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  case \"$1\" in\n"
+                "    -o) outfile=\"$2\"; shift 2 ;;\n"
+                "    -w) write_status='true'; shift 2 ;;\n"
+                "    http*://*|https*://*) url=\"$1\"; shift ;;\n"
+                "    *) shift ;;\n"
+                "  esac\n"
+                "done\n"
+                "if [[ \"$url\" == *\"/_synapse/admin/v1/register\" && \"$write_status\" == 'false' ]]; then\n"
+                "  printf '{\"nonce\":\"abc123\"}'\n"
                 "  exit 0\n"
                 "fi\n"
-                "if [[ \"${1:-}\" == \"exec\" ]]; then\n"
+                "if [[ \"$url\" == *\"/_synapse/admin/v1/register\" && \"$write_status\" == 'true' ]]; then\n"
+                "  cat > \"$PAYLOAD_FILE\"\n"
+                "  printf '{}' > \"$outfile\"\n"
+                "  printf '200'\n"
                 "  exit 0\n"
                 "fi\n"
                 "exit 1\n",
             )
-            self._write_executable(fake_bin / "openssl", "#!/usr/bin/env bash\nexit 0\n")
 
             env = os.environ.copy()
             env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
             env["EVENTS"] = str(events)
+            env["PAYLOAD_FILE"] = str(payload_file)
 
             result = subprocess.run(
                 [
                     "bash",
-                    "scripts/create-user.sh",
+                    "scripts/create-account.sh",
                     "--username",
-                    "alice",
+                    "test",
                     "--password",
                     "averylongsecret",
-                    "--admin",
                     "--yes",
                 ],
                 cwd=root,
@@ -251,15 +266,11 @@ class ShellEntrypointTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            lines = events.read_text().splitlines()
-            self.assertIn("docker:inspect matrix_synapse", lines)
-            self.assertIn("docker:inspect --format={{.State.Running}} matrix_synapse", lines)
-            self.assertIn(
-                "docker:exec -i matrix_synapse register_new_matrix_user -c /data/homeserver.yaml -u alice -p averylongsecret -a http://localhost:8008",
-                lines,
-            )
-            self.assertIn("@alice:example.com", result.stdout)
-            self.assertIn("User created successfully.", result.stdout)
+            self.assertIn("Account '@test:example.com' created successfully.", result.stdout)
+            self.assertIn("Fetching registration nonce from Synapse", result.stderr)
+            payload = payload_file.read_text()
+            self.assertIn('"nonce": "abc123"', payload)
+            self.assertNotIn("Fetching registration nonce", payload)
 
     def test_med_admin_bootstrap_delegates_to_create_account(self):
         with tempfile.TemporaryDirectory() as tmp:

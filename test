@@ -1,7 +1,100 @@
 #!/usr/bin/env bash
+# Run unit tests. Prefers pytest (quiet by default); falls back to unittest.
+#
+# Usage:
+#   ./test                  # all tests, quiet summary
+#   ./test -v               # verbose (pytest -v or unittest -v)
+#   ./test tests/test_apply.py
+#   ./test -k create_account
+#   ./test --help
+#
+# Install dev deps once:
+#   pip install -r requirements-dev.txt
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-python3 -m unittest discover -s tests -p 'test_*.py' -v
+export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+
+usage() {
+    cat <<'EOF'
+Usage: ./test [options] [path ...]
+
+Run unit tests for matrix-easy-deploy.
+
+Options (pytest when installed):
+  -v, --verbose     Show each test name
+  -k EXPR           Run tests matching expression (pytest -k)
+  -x                Stop on first failure
+  --lf              Re-run only last failed tests
+  -h, --help        Show this help
+
+Examples:
+  ./test
+  ./test -v
+  ./test tests/test_apply.py
+  ./test -k caddy
+
+Dev dependencies: pip install -r requirements-dev.txt
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+if python3 -c 'import pytest' 2>/dev/null; then
+    args=(tests)
+    verbose=false
+    passthrough=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -v|--verbose)
+                verbose=true
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            tests/*|*/test_*.py|test_*.py)
+                args=("$1")
+                shift
+                ;;
+            *)
+                passthrough+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    pytest_args=("${args[@]}")
+    if [[ "$verbose" == true ]]; then
+        pytest_args=(-v "${pytest_args[@]}")
+    else
+        pytest_args=(-q --tb=short "${pytest_args[@]}")
+    fi
+    if [[ ${#passthrough[@]} -gt 0 ]]; then
+        pytest_args+=("${passthrough[@]}")
+    fi
+
+    exec python3 -m pytest "${pytest_args[@]}"
+fi
+
+warn() { printf 'test: %s\n' "$*" >&2; }
+warn "pytest not found; using unittest (install: pip install -r requirements-dev.txt)"
+
+verbosity=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -v|--verbose) verbosity=(-v); shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) break ;;
+    esac
+done
+
+exec python3 -m unittest discover -s tests -p 'test_*.py' "${verbosity[@]}" "$@"
