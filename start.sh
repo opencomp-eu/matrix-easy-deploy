@@ -8,7 +8,7 @@ IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 # Ensure external Docker resources exist for direct apply/start workflows.
 ensure_docker_network "caddy_net"
 ensure_docker_volume "caddy_data"
-ensure_synapse_data_permissions "${SCRIPT_DIR}"
+ensure_homeserver_data_permissions "${SCRIPT_DIR}"
 
 info "Starting Caddy…"
 (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" up -d)
@@ -28,12 +28,8 @@ fi
 
 load_runtime_desired_state "${SCRIPT_DIR}"
 
-_element_profile=""
-if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
-    _element_profile="--profile element"
-fi
-
-(cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" $_element_profile up -d)
+build_core_compose_start_profiles
+(cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${CORE_COMPOSE_PROFILES[@]}" up -d)
 
 info "Starting calls services (coturn + LiveKit)…"
 (cd "${SCRIPT_DIR}/modules/calls" && "${DOCKER_COMPOSE[@]}" up -d)

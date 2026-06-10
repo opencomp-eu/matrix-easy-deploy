@@ -56,11 +56,22 @@ def resolve_runtime_state(project_root: Path) -> dict[str, str]:
     if "enabled" in element:
         install_element = _as_bool(element.get("enabled"), True)
 
+    matrix = _as_dict(deploy.get("matrix"))
+    server_implementation = str(matrix.get("server_implementation", "synapse")).strip().lower() or "synapse"
+    if server_implementation not in {"synapse", "tuwunel"}:
+        server_implementation = "synapse"
+
+    compose_profile = "tuwunel" if server_implementation == "tuwunel" else "synapse"
+    container = "matrix_tuwunel" if server_implementation == "tuwunel" else "matrix_synapse"
+
     return {
         "INSTALL_ELEMENT": "true" if install_element else "false",
         "HOOKSHOT_ENABLED": "true" if module_enabled("hookshot") else "false",
         "WHATSAPP_BRIDGE_ENABLED": "true" if module_enabled("whatsapp_bridge") else "false",
         "SLACK_BRIDGE_ENABLED": "true" if module_enabled("slack_bridge") else "false",
+        "SERVER_IMPLEMENTATION": server_implementation,
+        "HOMESERVER_COMPOSE_PROFILE": compose_profile,
+        "HOMESERVER_CONTAINER": container,
     }
 
 

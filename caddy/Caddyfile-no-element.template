@@ -3,21 +3,16 @@
 # Element was not selected during setup. The Matrix API is served as normal;
 # visitors are redirected to app.element.io pre-configured for this server.
 
-# Matrix homeserver — Synapse API only
+# Matrix homeserver API
 {{CADDY_MATRIX_HOSTS}} {
-    # Synapse client & federation API
+    # Client & federation API
     handle /_matrix/* {
-        reverse_proxy matrix_synapse:8008
+        reverse_proxy {{HOMESERVER_UPSTREAM}}
     }
-
-    # Synapse admin API
-    handle /_synapse/* {
-        reverse_proxy matrix_synapse:8008
-    }
-
+{{CADDY_SYNAPSE_ADMIN_BLOCK}}
     # Well-known for Matrix federation & client autodiscovery
     handle /.well-known/matrix/* {
-        reverse_proxy matrix_synapse:8008
+        reverse_proxy {{HOMESERVER_UPSTREAM}}
     }
 
     # Redirect visitors to the hosted Element client pre-pointed at this server
@@ -45,7 +40,7 @@
     }
 
     handle_path /livekit/sfu* {
-        reverse_proxy matrix_livekit:7880
+        reverse_proxy host.docker.internal:7880
     }
 
     header {

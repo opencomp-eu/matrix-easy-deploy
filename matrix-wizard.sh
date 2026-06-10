@@ -46,6 +46,7 @@ edit_deploy_config() {
     local config_element_domain=""
     local config_calls_default="y"
     local config_livekit_domain=""
+    local config_server_implementation="synapse"
 
     if [[ -f "$DEPLOY_YAML" ]]; then
         info "Loading existing configuration from deploy.yaml"
@@ -71,6 +72,22 @@ edit_deploy_config() {
         warn "Admin username is required."
         ask ADMIN_USERNAME "Admin username" "$config_admin_username"
     done
+
+    echo
+    echo -e "  ${BOLD}Homeserver software${RESET}"
+    echo -e "  ${CYAN}synapse${RESET} — mature Matrix reference server (default)"
+    echo -e "  ${CYAN}tuwunel${RESET} — Rust homeserver (lower resource use; no Synapse migration yet)"
+    ask SERVER_IMPLEMENTATION \
+        "Homeserver implementation (synapse or tuwunel)" \
+        "$config_server_implementation"
+    SERVER_IMPLEMENTATION="${SERVER_IMPLEMENTATION,,}"
+  case "$SERVER_IMPLEMENTATION" in
+        synapse|tuwunel) ;;
+        *)
+            warn "Invalid choice '${SERVER_IMPLEMENTATION}'. Using synapse."
+            SERVER_IMPLEMENTATION="synapse"
+            ;;
+    esac
 
     echo
     echo -e "  ${BOLD}Optional features${RESET}"
@@ -132,6 +149,7 @@ edit_deploy_config() {
     echo -e "  Matrix domain   : ${CYAN}${MATRIX_DOMAIN}${RESET}"
     echo -e "  Server name     : ${CYAN}${SERVER_NAME}${RESET}  (IDs look like @${ADMIN_USERNAME}:${SERVER_NAME})"
     echo -e "  Admin user      : ${CYAN}${ADMIN_USERNAME}${RESET}"
+    echo -e "  Homeserver      : ${CYAN}${SERVER_IMPLEMENTATION}${RESET}"
     echo -e "  Public reg.     : ${CYAN}${ENABLE_REGISTRATION}${RESET}"
     echo -e "  Federation      : ${CYAN}${ENABLE_FEDERATION_INPUT}${RESET}"
     echo -e "  SSO (OIDC)      : ${CYAN}disabled${RESET}"
@@ -173,6 +191,7 @@ edit_deploy_config() {
         --matrix-domain "$MATRIX_DOMAIN" \
         --server-name "$SERVER_NAME" \
         --admin-username "$ADMIN_USERNAME" \
+        --server-implementation "$SERVER_IMPLEMENTATION" \
         --registration-enabled "$ENABLE_REGISTRATION" \
         --federation-enabled "$ENABLE_FEDERATION" \
         --install-element "$INSTALL_ELEMENT" \
@@ -407,7 +426,12 @@ run_logs_wizard() {
     choice="${choice,,}"
 
     case "$choice" in
-        1) container="matrix_synapse" ;;
+        1)
+            if [[ -f "$DEPLOY_ENV" ]]; then
+                container="$(sed -n 's/^HOMESERVER_CONTAINER=//p' "$DEPLOY_ENV" | head -n1)"
+            fi
+            container="${container:-matrix_synapse}"
+            ;;
         2) container="caddy" ;;
         3) container="matrix_element" ;;
         4) container="matrix_postgres" ;;

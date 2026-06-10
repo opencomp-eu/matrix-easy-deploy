@@ -2,6 +2,8 @@ matrix:
   domain: matrix.example.com
   server_name: example.com
   admin_username: admin
+  # Homeserver software: synapse (default) or tuwunel
+  server_implementation: synapse
 features:
   registration_enabled: false
   federation_enabled: true

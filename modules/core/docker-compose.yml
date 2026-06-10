@@ -3,6 +3,8 @@ services:
     image: redis:7-alpine
     container_name: matrix_redis
     restart: unless-stopped
+    profiles:
+      - synapse
     command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
     volumes:
       - redis_data:/data
@@ -32,6 +34,8 @@ services:
   synapse:
     image: matrixdotorg/synapse:latest
     container_name: matrix_synapse
+    profiles:
+      - synapse
     restart: unless-stopped
     environment:
       SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
@@ -49,6 +53,26 @@ services:
       # curl is not installed in the slim Synapse image; use Python instead.
       # Port 8008 is bound on 0.0.0.0 inside the container so localhost works.
       test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8008/health\")' 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  tuwunel:
+    image: ghcr.io/matrix-construct/tuwunel:latest
+    container_name: matrix_tuwunel
+    profiles:
+      - tuwunel
+    restart: unless-stopped
+    volumes:
+      - ./tuwunel_data:/data
+      - ./tuwunel/tuwunel.toml:/tuwunel.toml:ro
+    command: ["--config", "/tuwunel.toml"]
+    networks:
+      - matrix_internal
+      - caddy_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8008/_matrix/client/versions >/dev/null 2>&1 || curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 10

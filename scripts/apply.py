@@ -14,16 +14,20 @@ import yaml
 
 try:
     from scripts import synapse_appservice
+    from scripts import tuwunel_appservice
     from scripts import hookshot_caddy
     from scripts import backup_schedule
+    from scripts import homeserver
 except ModuleNotFoundError:
     # When run as scripts/apply.py, Python may not include project root in sys.path.
     project_root = Path(__file__).resolve().parent.parent
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
     from scripts import synapse_appservice
+    from scripts import tuwunel_appservice
     from scripts import hookshot_caddy
     from scripts import backup_schedule
+    from scripts import homeserver
 
 
 DEFAULT_SECRET_KEYS = [
@@ -93,23 +97,28 @@ MODULE_CONFIG_KEY_TO_DIR = {
     "slack_bridge": "slack-bridge",
 }
 
-BRIDGE_APP_SERVICE_SPECS = {
-    "hookshot": {
-        "registration_src": "modules/hookshot/hookshot/registration.yml",
-        "registration_dest": "modules/core/synapse_data/hookshot-registration.yml",
-        "registration_path": "/data/hookshot-registration.yml",
-    },
-    "whatsapp_bridge": {
-        "registration_src": "modules/whatsapp-bridge/whatsapp/registration.yaml",
-        "registration_dest": "modules/core/synapse_data/whatsapp-registration.yaml",
-        "registration_path": "/data/whatsapp-registration.yaml",
-    },
-    "slack_bridge": {
-        "registration_src": "modules/slack-bridge/slack/registration.yaml",
-        "registration_dest": "modules/core/synapse_data/slack-registration.yaml",
-        "registration_path": "/data/slack-registration.yaml",
-    },
-}
+def bridge_appservice_specs(spec: homeserver.HomeserverSpec) -> dict[str, dict[str, str]]:
+    appservice_data = spec.appservice_data_rel
+    return {
+      "hookshot": {
+          "registration_src": "modules/hookshot/hookshot/registration.yml",
+          "registration_dest": f"{appservice_data}/hookshot-registration.yml",
+          "registration_filename": "hookshot-registration.yml",
+          "registration_path": "/data/hookshot-registration.yml",
+      },
+      "whatsapp_bridge": {
+          "registration_src": "modules/whatsapp-bridge/whatsapp/registration.yaml",
+          "registration_dest": f"{appservice_data}/whatsapp-registration.yaml",
+          "registration_filename": "whatsapp-registration.yaml",
+          "registration_path": "/data/whatsapp-registration.yaml",
+      },
+      "slack_bridge": {
+          "registration_src": "modules/slack-bridge/slack/registration.yaml",
+          "registration_dest": f"{appservice_data}/slack-registration.yaml",
+          "registration_filename": "slack-registration.yaml",
+          "registration_path": "/data/slack-registration.yaml",
+      },
+  }
 
 
 class ApplyContext:
@@ -400,6 +409,9 @@ def validate_config(config: dict) -> None:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"Missing or invalid matrix.{key} in deploy.yaml")
 
+    if "server_implementation" in matrix:
+        homeserver.normalize_implementation(matrix.get("server_implementation"))
+
     features = config.get("features", {})
     if features is not None and not isinstance(features, dict):
         raise ValueError("features must be an object when provided")
@@ -554,17 +566,25 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     matrix = config["matrix"]
     features = config.get("features", {})
     modules = config.get("modules", {})
+    hs_spec = homeserver.get_spec(config)
 
     matrix_domain = matrix["domain"]
     server_name = matrix.get("server_name") or extract_base_domain(matrix_domain)
     derived["SERVER_NAME"] = server_name
+    derived.update(homeserver.spec_env_overrides(hs_spec))
+    derived["CADDY_SYNAPSE_ADMIN_BLOCK"] = homeserver.caddy_synapse_admin_block(hs_spec)
 
     fed_enabled = bool(features.get("federation_enabled", True))
     derived["FEDERATION_WHITELIST"] = "~" if fed_enabled else "[]"
     derived["ALLOW_PUBLIC_ROOMS_FEDERATION"] = "true" if fed_enabled else "false"
+    derived["TUWUNEL_ALLOW_FEDERATION"] = "true" if fed_enabled else "false"
+    derived["TUWUNEL_ALLOW_PUBLIC_ROOMS_FEDERATION"] = "true" if fed_enabled else "false"
 
     reg_enabled = bool(features.get("registration_enabled", False))
     derived["ENABLE_REGISTRATION"] = "true" if reg_enabled else "false"
+    # Tuwunel requires allow_registration=true for token-based registration; the
+    # registration_token secret gates who can register (not open public signup).
+    derived["TUWUNEL_ALLOW_REGISTRATION"] = "true"
 
     local_login_enabled = bool(features.get("local_login_enabled", True))
     derived["LOCAL_LOGIN_ENABLED"] = "true" if local_login_enabled else "false"
@@ -1051,6 +1071,7 @@ def fail_if_unresolved_placeholder(path: Path) -> None:
 
 def render_templates(ctx: ApplyContext, config: dict, env_vars: dict) -> None:
     install_element = env_vars.get("INSTALL_ELEMENT", "true") == "true"
+    hs_spec = homeserver.get_spec(config)
     caddy_template = (
         ctx.project_root / "caddy" / ("Caddyfile.template" if install_element else "Caddyfile-no-element.template")
     )
@@ -1059,10 +1080,18 @@ def render_templates(ctx: ApplyContext, config: dict, env_vars: dict) -> None:
     caddy_dest.write_text(finalize_caddyfile_content(caddy_dest.read_text()))
     fail_if_unresolved_placeholder(caddy_dest)
 
-    synapse_template = ctx.project_root / "modules" / "core" / "synapse" / "homeserver.yaml.template"
-    synapse_dest = ctx.project_root / "modules" / "core" / "synapse" / "homeserver.yaml"
-    render_template(synapse_template, synapse_dest, env_vars)
-    fail_if_unresolved_placeholder(synapse_dest)
+    if hs_spec.implementation == "synapse":
+        hs_template = ctx.project_root / hs_spec.rendered_config_template_rel
+        hs_dest = ctx.project_root / hs_spec.rendered_config_rel
+        render_template(hs_template, hs_dest, env_vars)
+        fail_if_unresolved_placeholder(hs_dest)
+    elif hs_spec.implementation == "tuwunel":
+        hs_template = ctx.project_root / hs_spec.rendered_config_template_rel
+        hs_dest = ctx.project_root / hs_spec.rendered_config_rel
+        render_template(hs_template, hs_dest, env_vars)
+        fail_if_unresolved_placeholder(hs_dest)
+        appservice_dir = ctx.project_root / hs_spec.appservice_data_rel
+        appservice_dir.mkdir(parents=True, exist_ok=True)
 
     if install_element:
         element_dest = ctx.project_root / "modules" / "core" / "element" / "config.json"
@@ -1209,14 +1238,16 @@ def reconcile_module_bootstrap(ctx: ApplyContext, config: dict) -> None:
 
 def reconcile_bridge_appservices(ctx: ApplyContext, config: dict) -> None:
     modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
-    homeserver_yaml = ctx.project_root / "modules" / "core" / "synapse" / "homeserver.yaml"
+    hs_spec = homeserver.get_spec(config)
+    bridge_specs = bridge_appservice_specs(hs_spec)
     failures: list[str] = []
     changes: list[str] = []
 
-    if not homeserver_yaml.exists():
+    homeserver_config = ctx.project_root / hs_spec.rendered_config_rel
+    if not homeserver_config.exists():
         return
 
-    for config_key, spec in BRIDGE_APP_SERVICE_SPECS.items():
+    for config_key, spec in bridge_specs.items():
         desired = modules_cfg.get(config_key, {}) if isinstance(modules_cfg.get(config_key, {}), dict) else {}
         enabled = bool(desired.get("enabled", False))
 
@@ -1237,15 +1268,34 @@ def reconcile_bridge_appservices(ctx: ApplyContext, config: dict) -> None:
                 reg_dest.write_bytes(reg_src.read_bytes())
                 changes.append(f"{config_key}: synced {reg_dest.relative_to(ctx.project_root)}")
 
-            if synapse_appservice.ensure_appservice_registration(homeserver_yaml, reg_path):
-                changes.append(f"{config_key}: ensured {reg_path} in homeserver.yaml")
+            if hs_spec.supports_synapse_appservice_yaml:
+                if synapse_appservice.ensure_appservice_registration(homeserver_config, reg_path):
+                    changes.append(f"{config_key}: ensured {reg_path} in homeserver.yaml")
+            elif hs_spec.supports_tuwunel_appservice_dir:
+                if tuwunel_appservice.sync_appservice_registration(
+                    ctx.project_root / hs_spec.appservice_data_rel,
+                    reg_src,
+                    spec["registration_filename"],
+                ):
+                    changes.append(
+                        f"{config_key}: synced {spec['registration_filename']} into tuwunel appservice_dir"
+                    )
         else:
             if reg_dest.exists():
                 reg_dest.unlink()
                 changes.append(f"{config_key}: removed {reg_dest.relative_to(ctx.project_root)}")
 
-            if synapse_appservice.remove_appservice_registration(homeserver_yaml, reg_path):
-                changes.append(f"{config_key}: removed {reg_path} from homeserver.yaml")
+            if hs_spec.supports_synapse_appservice_yaml:
+                if synapse_appservice.remove_appservice_registration(homeserver_config, reg_path):
+                    changes.append(f"{config_key}: removed {reg_path} from homeserver.yaml")
+            elif hs_spec.supports_tuwunel_appservice_dir:
+                if tuwunel_appservice.remove_appservice_registration(
+                    ctx.project_root / hs_spec.appservice_data_rel,
+                    spec["registration_filename"],
+                ):
+                    changes.append(
+                        f"{config_key}: removed {spec['registration_filename']} from tuwunel appservice_dir"
+                    )
 
     if changes:
         print("Bridge appservice reconciliation changes:")

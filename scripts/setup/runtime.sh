@@ -30,12 +30,9 @@ stop_existing_services_for_first_setup_reset() {
         fi
     fi
 
-    local _element_profile=()
-    if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
-        _element_profile=(--profile element)
-    fi
+    build_core_compose_stop_profiles
 
-    (cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${_element_profile[@]}" down --remove-orphans) || true
+    (cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${CORE_COMPOSE_PROFILES[@]}" down --remove-orphans) || true
     (cd "${SCRIPT_DIR}/modules/calls" && "${DOCKER_COMPOSE[@]}" down) || true
     (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" down) || true
 }
@@ -52,10 +49,8 @@ reset_core_postgres_volume_if_present() {
 
 start_services() {
     local _element_label=""
-    local _element_profile=()
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         _element_label=" + Element"
-        _element_profile=(--profile element)
     fi
 
     reset_core_postgres_volume_if_present
@@ -66,13 +61,18 @@ start_services() {
     success "Caddy is up."
 
     echo
-    info "Starting core Matrix services (Redis + PostgreSQL + Synapse${_element_label})…"
+    local _hs_label="Synapse"
+    if [[ "${SERVER_IMPLEMENTATION:-synapse}" == "tuwunel" ]]; then
+        _hs_label="Tuwunel"
+    fi
+    info "Starting core Matrix services (${_hs_label}${_element_label})…"
     info "  Pulling images — this may take a few minutes on first run."
 
     (
         cd "${SCRIPT_DIR}/modules/core"
+        build_core_compose_start_profiles
         POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-            "${DOCKER_COMPOSE[@]}" "${_element_profile[@]}" up -d --pull always
+            "${DOCKER_COMPOSE[@]}" "${CORE_COMPOSE_PROFILES[@]}" up -d --pull always
     )
     success "Core services started."
 
@@ -84,15 +84,21 @@ start_services() {
 
 setup_admin() {
     echo
-    info "Waiting for Synapse to finish starting…"
+    local _hs_container="${HOMESERVER_CONTAINER:-matrix_synapse}"
+    local _hs_name="Synapse"
+    if [[ "${SERVER_IMPLEMENTATION:-synapse}" == "tuwunel" ]]; then
+        _hs_name="Tuwunel"
+    fi
+
+    info "Waiting for ${_hs_name} to finish starting…"
     echo -e "  ${CYAN}(This usually takes 20–60 s on first boot while the database is initialised.)${RESET}"
 
     local attempt=0
     local max=30
-    until [[ "$(docker inspect --format='{{.State.Health.Status}}' matrix_synapse 2>/dev/null)" == "healthy" ]]; do
+    until [[ "$(docker inspect --format='{{.State.Health.Status}}' "${_hs_container}" 2>/dev/null)" == "healthy" ]]; do
         attempt=$((attempt + 1))
         if [[ $attempt -ge $max ]]; then
-            warn "Synapse hasn't responded after $((max * 5))s."
+            warn "${_hs_name} hasn't responded after $((max * 5))s."
             warn "It may still be starting. You can create the admin user later:"
             echo
             echo -e "  ${CYAN}bash scripts/create-account.sh \\"
@@ -106,7 +112,7 @@ setup_admin() {
         sleep 5
     done
     echo
-    success "Synapse is responding."
+    success "${_hs_name} is responding."
 
     echo
     local _admin_password=""

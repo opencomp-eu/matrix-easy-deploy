@@ -6,7 +6,7 @@ bridge:
   # The homeserver's server_name (used in Matrix IDs)
   domain: {{SERVER_NAME}}
   # How Hookshot reaches Synapse's client-server API (internal Docker network)
-  url: http://matrix_synapse:8008
+  url: {{HOMESERVER_INTERNAL_URL}}
   # The public URL of the homeserver (used in media URLs etc.)
   mediaUrl: https://{{MATRIX_DOMAIN}}
   # Port Hookshot listens on for appservice traffic from Synapse

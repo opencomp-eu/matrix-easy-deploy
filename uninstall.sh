@@ -143,6 +143,7 @@ main() {
         local containers=(
             "caddy"
             "matrix_synapse"
+            "matrix_tuwunel"
             "matrix_postgres"
             "matrix_redis"
             "matrix_element"
