@@ -30,12 +30,9 @@ stop_existing_services_for_first_setup_reset() {
         fi
     fi
 
-    local _element_profile=()
-    if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
-        _element_profile=(--profile element)
-    fi
+    build_core_compose_stop_profiles
 
-    (cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${_element_profile[@]}" down --remove-orphans) || true
+    (cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${CORE_COMPOSE_PROFILES[@]}" down --remove-orphans) || true
     (cd "${SCRIPT_DIR}/modules/calls" && "${DOCKER_COMPOSE[@]}" down) || true
     (cd "${SCRIPT_DIR}/caddy" && "${DOCKER_COMPOSE[@]}" down) || true
 }
@@ -52,10 +49,8 @@ reset_core_postgres_volume_if_present() {
 
 start_services() {
     local _element_label=""
-    local _element_profile=()
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         _element_label=" + Element"
-        _element_profile=(--profile element)
     fi
 
     reset_core_postgres_volume_if_present
@@ -75,9 +70,9 @@ start_services() {
 
     (
         cd "${SCRIPT_DIR}/modules/core"
-        _homeserver_profile=(--profile "${HOMESERVER_COMPOSE_PROFILE:-synapse}")
+        build_core_compose_start_profiles
         POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-            "${DOCKER_COMPOSE[@]}" "${_homeserver_profile[@]}" "${_element_profile[@]}" up -d --pull always
+            "${DOCKER_COMPOSE[@]}" "${CORE_COMPOSE_PROFILES[@]}" up -d --pull always
     )
     success "Core services started."
 

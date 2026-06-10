@@ -196,6 +196,22 @@ load_runtime_desired_state() {
     fi
 }
 
+# Compose profiles for modules/core/docker-compose.yml
+# Start only the selected homeserver; stop all homeserver profiles so nothing is left running.
+build_core_compose_start_profiles() {
+    CORE_COMPOSE_PROFILES=(--profile "${HOMESERVER_COMPOSE_PROFILE:-synapse}")
+    if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
+        CORE_COMPOSE_PROFILES+=(--profile element)
+    fi
+}
+
+build_core_compose_stop_profiles() {
+    CORE_COMPOSE_PROFILES=(--profile synapse --profile tuwunel)
+    if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
+        CORE_COMPOSE_PROFILES+=(--profile element)
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Homeserver data directory permissions
 # ---------------------------------------------------------------------------

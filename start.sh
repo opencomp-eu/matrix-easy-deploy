@@ -28,12 +28,8 @@ fi
 
 load_runtime_desired_state "${SCRIPT_DIR}"
 
-_homeserver_profile="${HOMESERVER_COMPOSE_PROFILE:-synapse}"
-_core_profiles=(--profile "${_homeserver_profile}")
-if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
-    _core_profiles+=(--profile element)
-fi
-(cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${_core_profiles[@]}" up -d)
+build_core_compose_start_profiles
+(cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${CORE_COMPOSE_PROFILES[@]}" up -d)
 
 info "Starting calls services (coturn + LiveKit)…"
 (cd "${SCRIPT_DIR}/modules/calls" && "${DOCKER_COMPOSE[@]}" up -d)
