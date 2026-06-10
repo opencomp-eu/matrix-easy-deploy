@@ -38,7 +38,7 @@ class ApplyTests(unittest.TestCase):
             "        reverse_proxy matrix_lk_jwt_service:8080\n"
             "    }\n"
             "    handle_path /livekit/sfu* {\n"
-            "        reverse_proxy matrix_livekit:7880\n"
+            "        reverse_proxy host.docker.internal:7880\n"
             "    }\n"
             "}\n"
         )
@@ -577,7 +577,7 @@ class ApplyTests(unittest.TestCase):
             "}\n\n"
             "# LiveKit SFU\n"
             "{{LIVEKIT_DOMAIN}} {\n"
-            "    reverse_proxy matrix_livekit:7880\n"
+            "    reverse_proxy host.docker.internal:7880\n"
             "}\n"
         )
         ctx = apply.ApplyContext(self.root)
@@ -586,7 +586,7 @@ class ApplyTests(unittest.TestCase):
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
         self.assertIn("matrix.example.com {", caddy)
-        self.assertNotIn("matrix_livekit:7880", caddy)
+        self.assertNotIn("host.docker.internal:7880", caddy)
         self.assertNotIn('"" {', caddy)
         self.assertNotIn("# LiveKit SFU", caddy)
 

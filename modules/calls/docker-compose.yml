@@ -13,13 +13,12 @@ services:
     image: livekit/livekit-server:latest
     container_name: matrix_livekit
     restart: unless-stopped
+    # Host networking binds WebRTC UDP ports on the host directly (no per-port
+    # docker-proxy processes). Caddy reaches the API on host.docker.internal:7880.
+    network_mode: host
     command: --config /livekit.yaml
-    ports:
-      - "50000-50200:50000-50200/udp"   # WebRTC media relay
     volumes:
       - ./livekit/livekit.yaml:/livekit.yaml:ro
-    networks:
-      - caddy_net
 
   lk-jwt-service:
     image: ghcr.io/element-hq/lk-jwt-service:latest

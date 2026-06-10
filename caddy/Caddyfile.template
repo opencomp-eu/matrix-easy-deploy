@@ -33,7 +33,7 @@
     }
 
     handle /livekit/sfu* {
-        reverse_proxy matrix_livekit:7880
+        reverse_proxy host.docker.internal:7880
     }
 
     header {

@@ -11,9 +11,11 @@ log_level: info
 # WebRTC / RTC
 # ---------------------------------------------------------------------------
 rtc:
-  # UDP port range for WebRTC media.  Must match ports in docker-compose.yml.
+  # UDP port range for WebRTC media (bound on the host via network_mode: host).
+  # ~100 ports is enough for small group calls on a homeserver; open the same
+  # range in your firewall.
   port_range_start: 50000
-  port_range_end: 50200
+  port_range_end: 50100
   # Automatically discover and advertise the host's public IP to clients.
   use_external_ip: true
 

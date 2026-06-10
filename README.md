@@ -1068,7 +1068,7 @@ Check that LiveKit is running and that your `livekit.example.com` DNS record is 
 docker logs matrix_livekit
 curl -I https://livekit.example.com
 ```
-Also make sure port range 50000–50200/UDP is open in your firewall.
+Also make sure port range 50000–50100/UDP is open in your firewall.
 
 **Synapse takes a long time to start**
 
@@ -1105,7 +1105,7 @@ docker inspect matrix_postgres | grep -A 5 Health
   - TCP/UDP 3478 (TURN)
   - TCP/UDP 5349 (TURN over TLS)
   - UDP 49152–49400 (TURN relay range)
-  - UDP 50000–50200 (LiveKit WebRTC media)
+  - UDP 50000–50100 (LiveKit WebRTC media; bound on the host, not via docker-proxy)
 
 ---
 
