@@ -582,7 +582,9 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
 
     reg_enabled = bool(features.get("registration_enabled", False))
     derived["ENABLE_REGISTRATION"] = "true" if reg_enabled else "false"
-    derived["TUWUNEL_ALLOW_REGISTRATION"] = "true" if reg_enabled else "false"
+    # Tuwunel requires allow_registration=true for token-based registration; the
+    # registration_token secret gates who can register (not open public signup).
+    derived["TUWUNEL_ALLOW_REGISTRATION"] = "true"
 
     local_login_enabled = bool(features.get("local_login_enabled", True))
     derived["LOCAL_LOGIN_ENABLED"] = "true" if local_login_enabled else "false"

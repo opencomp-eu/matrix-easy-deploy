@@ -301,8 +301,8 @@ def cmd_bootstrap(ctx: Context, args: argparse.Namespace) -> None:
 
     if ctx.is_tuwunel():
         tuwunel_admin = _load_tuwunel_admin_module()
-        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path)
-        info(f"Bootstrapping admin account '{args.username}' via Tuwunel…")
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path, project_root=ctx.repo_dir)
+        info(f"Bootstrapping admin account '{args.username}' via Tuwunel registration API…")
         try:
             admin.create_user(args.username, password, grant_admin=True)
         except tuwunel_admin.TuwunelAdminError as exc:
@@ -359,7 +359,7 @@ def cmd_list_accounts(ctx: Context, args: argparse.Namespace, admins_only: bool)
         if admins_only:
             warn("Tuwunel does not expose Synapse-style admin flags; listing all local users.")
         tuwunel_admin = _load_tuwunel_admin_module()
-        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path)
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path, project_root=ctx.repo_dir)
         users = []
         try:
             users = admin.list_users()
@@ -411,7 +411,7 @@ def cmd_get_account(ctx: Context, args: argparse.Namespace) -> None:
 
     if ctx.is_tuwunel():
         tuwunel_admin = _load_tuwunel_admin_module()
-        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path)
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path, project_root=ctx.repo_dir)
         users = []
         try:
             users = admin.list_users()
@@ -470,7 +470,7 @@ def cmd_reset_password(ctx: Context, args: argparse.Namespace) -> None:
             if not ask_yn("Reset this password now?", "n"):
                 die("Aborted.")
         tuwunel_admin = _load_tuwunel_admin_module()
-        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path)
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path, project_root=ctx.repo_dir)
         try:
             admin.reset_password(user_id, new_pw)
         except tuwunel_admin.TuwunelAdminError as exc:

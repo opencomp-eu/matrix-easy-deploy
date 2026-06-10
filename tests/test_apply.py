@@ -437,6 +437,7 @@ class ApplyTests(unittest.TestCase):
 
         tuwunel = (self.root / "modules/core/tuwunel/tuwunel.toml").read_text()
         self.assertIn('server_name = "example.com"', tuwunel)
+        self.assertIn("allow_registration = true", tuwunel)
         self.assertNotIn("{{", tuwunel)
 
     def test_apply_configuration_renders_element_customizations(self):

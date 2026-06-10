@@ -18,7 +18,29 @@ IS_ADMIN="false"
 BASE_URL=""
 SHARED_SECRET=""
 SERVER_NAME=""
-SERVER_IMPLEMENTATION="synapse"
+SERVER_IMPLEMENTATION=""
+
+# #region agent log
+_debug_log() {
+    local hypothesis_id="$1" location="$2" message="$3" data="$4"
+    python3 - <<PYEOF "$hypothesis_id" "$location" "$message" "$data" "${REPO_DIR}/.cursor/debug-6abaa7.log"
+import json, time, sys
+hypothesis_id, location, message, data, log_path = sys.argv[1:6]
+from pathlib import Path
+Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+entry = {
+    "sessionId": "6abaa7",
+    "hypothesisId": hypothesis_id,
+    "location": location,
+    "message": message,
+    "data": json.loads(data),
+    "timestamp": int(time.time() * 1000),
+}
+with open(log_path, "a", encoding="utf-8") as f:
+    f.write(json.dumps(entry) + "\n")
+PYEOF
+}
+# #endregion
 
 usage() {
     cat <<'EOF'
@@ -104,6 +126,9 @@ print_banner() {
 }
 
 read_deploy_env() {
+    # #region agent log
+    _debug_log "A" "create-account.sh:read_deploy_env:entry" "read_deploy_env called" "{\"deploy_env_exists\":$( [[ -f \"$DEPLOY_ENV\" ]] && echo true || echo false ),\"impl_before\":\"${SERVER_IMPLEMENTATION}\"}"
+    # #endregion
     if [[ -f "$DEPLOY_ENV" ]]; then
         if [[ -z "$SERVER_NAME" ]]; then
             SERVER_NAME="$(sed -n 's/^SERVER_NAME=//p' "$DEPLOY_ENV" | head -n1)"
@@ -118,13 +143,18 @@ read_deploy_env() {
         if [[ -z "$SHARED_SECRET" ]]; then
             SHARED_SECRET="$(sed -n 's/^REGISTRATION_SHARED_SECRET=//p' "$DEPLOY_ENV" | head -n1)"
         fi
-        if [[ -z "$SERVER_IMPLEMENTATION" ]]; then
-            SERVER_IMPLEMENTATION="$(sed -n 's/^SERVER_IMPLEMENTATION=//p' "$DEPLOY_ENV" | head -n1)"
+        local _env_impl
+        _env_impl="$(sed -n 's/^SERVER_IMPLEMENTATION=//p' "$DEPLOY_ENV" | head -n1)"
+        if [[ -n "$_env_impl" ]]; then
+            SERVER_IMPLEMENTATION="$_env_impl"
         fi
     fi
 
     SERVER_NAME="${SERVER_NAME:-unknown-server-name}"
     SERVER_IMPLEMENTATION="${SERVER_IMPLEMENTATION:-synapse}"
+    # #region agent log
+    _debug_log "A" "create-account.sh:read_deploy_env:exit" "resolved implementation" "{\"impl_after\":\"${SERVER_IMPLEMENTATION}\",\"base_url_set\":$( [[ -n \"$BASE_URL\" ]] && echo true || echo false )}"
+    # #endregion
 }
 
 check_dependencies() {
@@ -134,9 +164,6 @@ check_dependencies() {
 }
 
 ensure_registration_config() {
-    if [[ "${SERVER_IMPLEMENTATION,,}" == "tuwunel" ]]; then
-        return
-    fi
     [[ -n "$BASE_URL" ]] || die "Could not determine homeserver base URL. Pass --base-url or ensure MATRIX_DOMAIN exists in .env."
     [[ -n "$SHARED_SECRET" ]] || die "Could not determine REGISTRATION_SHARED_SECRET. Pass --shared-secret or ensure it exists in .env."
 }
@@ -270,12 +297,72 @@ PYEOF
 }
 
 create_account_tuwunel() {
-    # shellcheck source=scripts/tuwunel_admin.sh
-    source "${SCRIPT_DIR}/tuwunel_admin.sh"
+    local payload response_file http_status response_body err_info err_code err_msg
 
-    info "Creating user '${USERNAME}' via Tuwunel admin API…"
-    tuwunel_create_user "$USERNAME" "$PASSWORD" "$IS_ADMIN" >/dev/null
-    success "Account '@${USERNAME}:${SERVER_NAME}' created successfully."
+    info "Creating user '${USERNAME}' via Tuwunel registration API…"
+
+    payload="$(python3 - <<PYEOF
+import json
+
+print(json.dumps({
+    "username": ${USERNAME@Q},
+    "password": ${PASSWORD@Q},
+    "auth": {
+        "type": "m.login.registration_token",
+        "token": ${SHARED_SECRET@Q},
+    },
+}))
+PYEOF
+)"
+
+    response_file="$(mktemp)"
+    trap 'rm -f "${response_file:-}"' EXIT
+
+    http_status="$(curl -sS -o "$response_file" -w "%{http_code}" \
+        -X POST "${BASE_URL}/_matrix/client/v3/register" \
+        -H "Content-Type: application/json" \
+        --data-binary @- <<< "$payload")"
+
+    if [[ "$http_status" == "200" ]] || [[ "$http_status" == "201" ]]; then
+        # #region agent log
+        _debug_log "D" "create-account.sh:create_account_tuwunel" "registration API success" "{\"http_status\":\"${http_status}\",\"admin_requested\":${IS_ADMIN}}"
+        # #endregion
+        success "Account '@${USERNAME}:${SERVER_NAME}' created successfully."
+        if [[ "$IS_ADMIN" == "true" ]]; then
+            info "Tuwunel grants admin to the first registered user automatically (grant_admin_to_first_user)."
+        fi
+    else
+        response_body="$(cat "$response_file")"
+        err_info="$(python3 - <<'PYEOF' "$response_body"
+import json
+import sys
+
+raw = sys.argv[1]
+try:
+    data = json.loads(raw) if raw else {}
+except Exception:
+    data = {}
+
+print(f"{data.get('errcode', '')}\t{data.get('error', '')}")
+PYEOF
+)"
+        err_code="${err_info%%$'\t'*}"
+        err_msg="${err_info#*$'\t'}"
+
+        if [[ "$http_status" == "400" && "$err_code" == "M_USER_IN_USE" ]]; then
+            warn "User '${USERNAME}' already exists. Skipping."
+            return
+        fi
+
+        # #region agent log
+        _debug_log "D" "create-account.sh:create_account_tuwunel" "registration API failed" "{\"http_status\":\"${http_status}\",\"errcode\":\"${err_code}\"}"
+        # #endregion
+
+        if [[ -n "$err_code" || -n "$err_msg" ]]; then
+            die "Failed to create account (HTTP ${http_status}, ${err_code}: ${err_msg})."
+        fi
+        die "Failed to create account (HTTP ${http_status}). Response: ${response_body}"
+    fi
 
     echo
     echo -e "  ${BOLD}Login details${RESET}"
@@ -373,6 +460,9 @@ PYEOF
 }
 
 create_account() {
+    # #region agent log
+    _debug_log "C" "create-account.sh:create_account" "branch selection" "{\"implementation\":\"${SERVER_IMPLEMENTATION}\",\"branch\":\"$([ \"${SERVER_IMPLEMENTATION,,}\" == \"tuwunel\" ] && echo tuwunel || echo synapse)\"}"
+    # #endregion
     if [[ "${SERVER_IMPLEMENTATION,,}" == "tuwunel" ]]; then
         create_account_tuwunel
     else
