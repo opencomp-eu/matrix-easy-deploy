@@ -1,0 +1,7 @@
+name: hookshot
+config_key: hookshot
+generated_files:
+  - modules/hookshot/hookshot/config.yml
+  - modules/hookshot/hookshot/registration.yml
+runtime:
+  config_exists: modules/hookshot/hookshot/config.yml

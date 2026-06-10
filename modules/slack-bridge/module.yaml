@@ -1,0 +1,7 @@
+name: slack-bridge
+config_key: slack_bridge
+generated_files:
+  - modules/slack-bridge/slack/config.yaml
+  - modules/slack-bridge/slack/registration.yaml
+runtime:
+  config_exists: modules/slack-bridge/slack/config.yaml

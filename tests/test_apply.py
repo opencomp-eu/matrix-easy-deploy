@@ -69,10 +69,33 @@ class ApplyTests(unittest.TestCase):
         (self.root / "modules/hookshot/module.yaml").write_text(
             "name: hookshot\n"
             "config_key: hookshot\n"
+            "generated_files:\n"
+            "  - modules/hookshot/hookshot/config.yml\n"
+            "  - modules/hookshot/hookshot/registration.yml\n"
             "runtime:\n"
             "  config_exists: modules/hookshot/hookshot/config.yml\n"
         )
         (self.root / "modules/hookshot/setup.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        (self.root / "modules/whatsapp-bridge/module.yaml").write_text(
+            "name: whatsapp-bridge\n"
+            "config_key: whatsapp_bridge\n"
+            "generated_files:\n"
+            "  - modules/whatsapp-bridge/whatsapp/config.yaml\n"
+            "  - modules/whatsapp-bridge/whatsapp/registration.yaml\n"
+            "runtime:\n"
+            "  config_exists: modules/whatsapp-bridge/whatsapp/config.yaml\n"
+        )
+        (self.root / "modules/whatsapp-bridge/setup.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        (self.root / "modules/slack-bridge/module.yaml").write_text(
+            "name: slack-bridge\n"
+            "config_key: slack_bridge\n"
+            "generated_files:\n"
+            "  - modules/slack-bridge/slack/config.yaml\n"
+            "  - modules/slack-bridge/slack/registration.yaml\n"
+            "runtime:\n"
+            "  config_exists: modules/slack-bridge/slack/config.yaml\n"
+        )
+        (self.root / "modules/slack-bridge/setup.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -936,12 +959,43 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(env.get("MED_NON_INTERACTIVE"), "1")
         self.assertEqual(env.get("MODULE_HOOKSHOT_DOMAIN"), "hookshot.example.com")
 
-    def test_module_bootstrap_skips_when_config_exists(self):
+    def test_module_bootstrap_invoked_for_whatsapp_missing_registration(self):
+        cfg = self.sample_config()
+        cfg["modules"]["whatsapp_bridge"] = {
+            "enabled": True,
+            "admin_username": "waadmin",
+            "db_name": "wa_custom",
+        }
+
+        (self.root / "modules/whatsapp-bridge/whatsapp/config.yaml").write_text("ok\n")
+
+        ctx = apply.ApplyContext(self.root)
+
+        def _mock_setup(*args, **kwargs):
+            whatsapp_dir = self.root / "modules/whatsapp-bridge/whatsapp"
+            whatsapp_dir.mkdir(parents=True, exist_ok=True)
+            (whatsapp_dir / "registration.yaml").write_text("ok\n")
+
+        with patch("scripts.apply.subprocess.run") as mock_run:
+            mock_run.side_effect = _mock_setup
+            apply.reconcile_module_bootstrap(ctx, cfg)
+
+        self.assertEqual(mock_run.call_count, 1)
+        call = mock_run.call_args
+        cmd = call.args[0]
+        env = call.kwargs["env"]
+        self.assertTrue(str(cmd[1]).endswith("modules/whatsapp-bridge/setup.sh"))
+        self.assertEqual(env.get("MED_NON_INTERACTIVE"), "1")
+        self.assertEqual(env.get("MODULE_WA_ADMIN_USERNAME"), "waadmin")
+        self.assertEqual(env.get("MODULE_WA_DB_NAME"), "wa_custom")
+
+    def test_module_bootstrap_skips_when_required_files_exist(self):
         cfg = self.sample_config()
         cfg["modules"]["hookshot"]["enabled"] = True
 
         (self.root / "modules/hookshot/hookshot").mkdir(parents=True)
         (self.root / "modules/hookshot/hookshot/config.yml").write_text("ok\n")
+        (self.root / "modules/hookshot/hookshot/registration.yml").write_text("ok\n")
 
         ctx = apply.ApplyContext(self.root)
         with patch("scripts.apply.subprocess.run") as mock_run:

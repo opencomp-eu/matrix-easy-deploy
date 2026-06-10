@@ -1,0 +1,7 @@
+name: whatsapp-bridge
+config_key: whatsapp_bridge
+generated_files:
+  - modules/whatsapp-bridge/whatsapp/config.yaml
+  - modules/whatsapp-bridge/whatsapp/registration.yaml
+runtime:
+  config_exists: modules/whatsapp-bridge/whatsapp/config.yaml
