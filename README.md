@@ -308,7 +308,7 @@ Install prerequisites on the host:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y borgbackup borgmatic
+sudo apt-get install -y borgbackup borgmatic age
 ```
 
 Create a backup:
@@ -1172,8 +1172,9 @@ Use `./test` (recommended). It sets `PYTHONPYCACHEPREFIX=.pycache` so bytecode i
 ./test tests/test_apply.py
 ./test -k caddy
 
-# unittest directly (use discover, not tests/* glob)
-PYTHONPYCACHEPREFIX=.pycache python -m unittest discover -s tests -p 'test_*.py'
+# unittest directly (use discover — not `tests/*` glob, which can pick up __pycache__/)
+python3 run_unittests.py
+python3 run_unittests.py -v
 
 # Deterministic apply run with fixed IP for local smoke checks
 bash apply.sh --server-ip 127.0.0.1

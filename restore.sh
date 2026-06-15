@@ -286,14 +286,12 @@ main() {
 
         trap cleanup_and_restart EXIT
 
-        if [[ -f "${SCRIPT_DIR}/deploy.yaml" ]] && docker ps -q 2>/dev/null | grep -q .; then
+        if med_services_running || [[ -f "${SCRIPT_DIR}/.env" ]]; then
             info "Stopping services before restore..."
             bash "${SCRIPT_DIR}/stop.sh" || true
             STACK_STOPPED="true"
-        elif [[ -f "${SCRIPT_DIR}/stop.sh" ]]; then
-            info "Stopping services before restore..."
-            bash "${SCRIPT_DIR}/stop.sh" || true
-            STACK_STOPPED="true"
+        else
+            info "No running MED services detected — skipping stop before restore."
         fi
 
         run_restore_from_file

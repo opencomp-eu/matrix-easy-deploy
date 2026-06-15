@@ -2,7 +2,7 @@
 # Host dependency checks for setup wizard.
 
 required_dependency_keys() {
-    printf '%s\n' docker docker-compose openssl curl python3 borg borgmatic
+    printf '%s\n' docker docker-compose openssl curl python3 borg borgmatic age
 }
 
 is_dependency_missing() {

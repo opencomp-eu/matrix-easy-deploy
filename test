@@ -98,4 +98,4 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-exec python3 -m unittest discover -s tests -p 'test_*.py' "${verbosity[@]}" "$@"
+exec python3 "${SCRIPT_DIR}/run_unittests.py" "${verbosity[@]}" "$@"
