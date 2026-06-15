@@ -5,6 +5,10 @@ import textwrap
 import unittest
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 
 class SetupRuntimeTests(unittest.TestCase):
     def setUp(self):

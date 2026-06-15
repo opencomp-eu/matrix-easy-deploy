@@ -7,69 +7,23 @@ from unittest.mock import patch
 import yaml
 
 from scripts import apply
+from tests.helpers.project_tree import build_minimal_project, write_deploy_config
 
 
 class SmokeWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-
-        (self.root / "caddy").mkdir(parents=True)
-        (self.root / "modules/core/synapse").mkdir(parents=True)
-        (self.root / "modules/core/element").mkdir(parents=True)
-        (self.root / "modules/core/synapse_data").mkdir(parents=True)
-        (self.root / "modules/calls/coturn").mkdir(parents=True)
-        (self.root / "modules/calls/livekit").mkdir(parents=True)
-        (self.root / "modules/hookshot").mkdir(parents=True)
-
-        (self.root / "caddy/Caddyfile.template").write_text("{{MATRIX_DOMAIN}} {{CADDY_MATRIX_HOSTS}}\n")
-        (self.root / "caddy/Caddyfile-no-element.template").write_text("no-element {{MATRIX_DOMAIN}}\n")
-        (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
-            "server_name: {{SERVER_NAME}}\npublic_baseurl: https://{{MATRIX_DOMAIN}}\n"
-        )
-        (self.root / "modules/core/element/config.json.template").write_text('{"base_url":"https://{{MATRIX_DOMAIN}}"}\n')
-        (self.root / "modules/calls/coturn/turnserver.conf.template").write_text("realm={{MATRIX_DOMAIN}}\n")
-        (self.root / "modules/calls/livekit/livekit.yaml.template").write_text("keys:\n  {{LIVEKIT_KEY}}: {{LIVEKIT_SECRET}}\n")
-
-        (self.root / "modules/hookshot/module.yaml").write_text(
-            "name: hookshot\n"
-            "config_key: hookshot\n"
-            "generated_files:\n"
-            "  - modules/hookshot/hookshot/config.yml\n"
-            "  - modules/hookshot/hookshot/registration.yml\n"
-            "runtime:\n"
-            "  config_exists: modules/hookshot/hookshot/config.yml\n"
-        )
-        (self.root / "modules/hookshot/setup.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        build_minimal_project(self.root, preset="core_only")
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def _write_config(self, modules=None):
-        modules_cfg = {
-            "hookshot": {"enabled": False, "domain": "hookshot.example.com"},
-            "whatsapp_bridge": {"enabled": False},
-            "slack_bridge": {"enabled": False},
-        }
+        overrides: dict = {}
         if modules:
-            modules_cfg.update(modules)
-
-        cfg = {
-            "matrix": {
-                "domain": "matrix.example.com",
-                "server_name": "example.com",
-                "admin_username": "admin",
-            },
-            "features": {
-                "registration_enabled": False,
-                "federation_enabled": True,
-                "element": {"enabled": True, "domain": "element.example.com"},
-                "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
-                "sso": {"enabled": False, "providers": []},
-            },
-            "modules": modules_cfg,
-        }
-        (self.root / "deploy.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+            overrides["modules"] = modules
+        write_deploy_config(self.root, **overrides)
 
     def _env_map(self):
         return apply.load_env_map(self.root / ".env")
