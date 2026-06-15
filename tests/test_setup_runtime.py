@@ -219,6 +219,14 @@ class SetupRuntimeTests(unittest.TestCase):
                 DOCKER_COMPOSE=(record_compose)
                 INSTALL_ELEMENT="true"
                 POSTGRES_PASSWORD="secret"
+                HOMESERVER_COMPOSE_PROFILE="synapse"
+
+                build_core_compose_stop_profiles() {
+                    CORE_COMPOSE_PROFILES=(--profile synapse --profile tuwunel --profile element)
+                }
+                build_core_compose_start_profiles() {
+                    CORE_COMPOSE_PROFILES=(--profile synapse --profile element)
+                }
 
                 start_services
                 """
@@ -284,6 +292,14 @@ class SetupRuntimeTests(unittest.TestCase):
                 DOCKER_COMPOSE=(record_compose)
                 INSTALL_ELEMENT="false"
                 POSTGRES_PASSWORD="secret"
+                HOMESERVER_COMPOSE_PROFILE="synapse"
+
+                build_core_compose_stop_profiles() {
+                    CORE_COMPOSE_PROFILES=(--profile synapse --profile tuwunel --profile element)
+                }
+                build_core_compose_start_profiles() {
+                    CORE_COMPOSE_PROFILES=(--profile synapse)
+                }
 
                 start_services
                 """

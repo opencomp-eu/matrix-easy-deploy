@@ -61,3 +61,17 @@ matrix:
 ```
 
 Then run `bash apply.sh` and `bash start.sh` as usual. Admin tooling (`scripts/create-account.sh`, `scripts/med-admin.sh`) uses Tuwunel's `docker exec … --execute` admin commands instead of Synapse's HTTP admin API. Do not change `server_implementation` on a deployment that already has user data unless you are starting fresh.
+
+## Moving to a new host
+
+You no longer need to copy the Borg repository directory manually. Export a portable archive from the old host and restore it on the new one:
+
+```bash
+# Old host
+bash backup.sh --export ~/med-kit-backup.tar.gz --encrypt
+
+# New host (fresh clone)
+bash bootstrap-from-backup.sh ~/med-kit-backup.tar.gz --encrypt --yes
+```
+
+Local Borg retention on the old host is unchanged; portable export is an additional copy step.

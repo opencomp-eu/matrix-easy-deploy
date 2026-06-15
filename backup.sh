@@ -4,42 +4,36 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/lib.sh"
+# shellcheck source=scripts/backup_payload.sh
+source "${SCRIPT_DIR}/scripts/backup_payload.sh"
+# shellcheck source=scripts/backup_crypto.sh
+source "${SCRIPT_DIR}/scripts/backup_crypto.sh"
 
 LIST_ONLY="false"
+EXPORT_PATH=""
+EXPORT_ONLY="false"
+EXPORT_FROM_ARCHIVE=""
+ENCRYPT_EXPORT="false"
 
 BACKUP_STATE_DIR="${SCRIPT_DIR}/.matrix-easy-deploy/backup"
 BACKUP_STAGING_ROOT="${BACKUP_STATE_DIR}/staging"
 BACKUP_STAGING_CURRENT="${BACKUP_STAGING_ROOT}/current"
-BACKUP_PAYLOAD_DIR="${BACKUP_STAGING_CURRENT}/payload"
 BORG_CONFIG_PATH="${BACKUP_STATE_DIR}/borgmatic.yaml"
-
-CADDY_VOLUME_EXPORTS=(
-    "caddy_data"
-    "caddy_caddy_config"
-)
-
-DATABASE_DUMP_DIR="${BACKUP_PAYLOAD_DIR}/database"
-SYNAPSE_DUMP_FILE="${DATABASE_DUMP_DIR}/synapse.dump"
-
-PERSISTENT_PATHS=(
-    "deploy.yaml"
-    ".matrix-easy-deploy/secrets.yaml"
-    ".matrix-easy-deploy/modules.yaml"
-    "modules/core/synapse_data"
-    "modules/hookshot/hookshot"
-    "modules/whatsapp-bridge/whatsapp"
-    "modules/slack-bridge/slack"
-    "modules/draupnir/draupnir"
-)
 
 print_help() {
     cat <<EOF
 Usage:
   bash backup.sh [--list]
+  bash backup.sh [--export PATH] [--export-only] [--encrypt]
+  bash backup.sh --export-from-archive ARCHIVE --export PATH [--encrypt]
 
 Options:
-  --list          List available archives in the configured repository.
-  -h, --help      Show this help message.
+  --list                  List available archives in the configured repository.
+  --export PATH           Write a portable .tar.gz archive after staging (or from Borg).
+  --export-only PATH      Stage payload and export without updating the Borg repository.
+  --export-from-archive   Re-export an existing Borg archive to a portable file.
+  --encrypt               Encrypt portable export with age (passphrase).
+  -h, --help              Show this help message.
 EOF
 }
 
@@ -61,31 +55,14 @@ load_runtime_env() {
     fi
 }
 
-read_state_secret() {
-    local key="$1"
-    local secrets_path="${SCRIPT_DIR}/.matrix-easy-deploy/secrets.yaml"
-
-    [[ -f "${secrets_path}" ]] || return 1
-
-    python3 - "$secrets_path" "$key" <<'PY'
-from pathlib import Path
-import sys
-
-import yaml
-
-data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
-value = data.get(sys.argv[2], "")
-if value:
-    print(value)
-PY
-}
-
 load_backup_settings() {
     local exports
+    local require_enabled="${1:-true}"
+
     exports="$(python3 "${SCRIPT_DIR}/scripts/backup_config.py" --deploy-yaml "${SCRIPT_DIR}/deploy.yaml" --emit-shell)"
     eval "$exports"
 
-    if [[ "${BACKUP_ENABLED}" != "true" ]]; then
+    if [[ "${require_enabled}" == "true" && "${BACKUP_ENABLED}" != "true" ]]; then
         die "Backups are disabled. Set backup.enabled=true in deploy.yaml."
     fi
 }
@@ -107,94 +84,86 @@ working_directory: ${BACKUP_STAGING_CURRENT}
 EOF
 }
 
-stage_copy_path() {
-    local rel_path="$1"
-    local src="${SCRIPT_DIR}/${rel_path}"
-    local dest="${BACKUP_PAYLOAD_DIR}/${rel_path}"
-
-    [[ -e "$src" ]] || return 0
-
-    mkdir -p "$(dirname "$dest")"
-    cp -a "$src" "$dest"
-}
-
-export_volume_if_present() {
-    local volume_name="$1"
-    local target_dir="$2"
-
-    if ! docker volume inspect "$volume_name" &>/dev/null; then
-        return 0
-    fi
-
-    info "Exporting Docker volume '${volume_name}'..."
-    docker run --rm \
-        -v "${volume_name}:/source:ro" \
-        -v "${target_dir}:/backup" \
-        alpine:3 sh -c "cd /source && tar -cf /backup/${volume_name}.tar ."
-}
-
-dump_synapse_database() {
-    local postgres_password="${POSTGRES_PASSWORD:-}"
-
-    if [[ -z "${postgres_password}" ]]; then
-        postgres_password="$(read_state_secret "POSTGRES_PASSWORD")"
-    fi
-    [[ -n "${postgres_password}" ]] || die "POSTGRES_PASSWORD not available in .env or .matrix-easy-deploy/secrets.yaml"
-
-    if ! docker ps --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
-        die "matrix_postgres is not running. Start the core stack before creating a live backup."
-    fi
-
-    mkdir -p "${DATABASE_DUMP_DIR}"
-
-    info "Creating logical PostgreSQL dump for Synapse..."
-    docker exec -e PGPASSWORD="${postgres_password}" matrix_postgres \
-        pg_dump -U synapse -d synapse -Fc --exclude-table-data=e2e_one_time_keys_json \
-        > "${SYNAPSE_DUMP_FILE}"
-}
-
-write_manifest() {
-    local manifest_path="${BACKUP_PAYLOAD_DIR}/manifest.json"
-    local timestamp
-    timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    local version="unknown"
-
-    if [[ -f "${SCRIPT_DIR}/VERSION" ]]; then
-        version="$(tr -d ' \n\r' < "${SCRIPT_DIR}/VERSION")"
-    fi
-
-    cat > "$manifest_path" <<EOF
-{
-  "format": 1,
-  "created_at": "${timestamp}",
-  "version": "${version}",
-  "repository_path": "${BACKUP_REPOSITORY_PATH}",
-    "database_dumps": ["database/synapse.dump"],
-    "volumes": ["caddy_data", "caddy_caddy_config"]
-}
-EOF
-}
-
 list_archives() {
     info "Listing backup archive names from ${BACKUP_REPOSITORY_PATH}..."
     borg list "${BACKUP_REPOSITORY_PATH}" | awk '{print $1}'
 }
 
+resolve_archive_name() {
+    local requested="$1"
+    local entries
+    local matches
+
+    entries="$(borg list "${BACKUP_REPOSITORY_PATH}")"
+
+    matches="$(printf '%s\n' "${entries}" | awk -v requested="${requested}" '
+        {
+            archive=$1
+            archive_id=$NF
+            gsub(/^\[/, "", archive_id)
+            gsub(/\]$/, "", archive_id)
+            if (archive == requested || index(archive_id, requested) == 1) {
+                print archive
+            }
+        }
+    ')"
+
+    if [[ -z "${matches}" ]]; then
+        die "Archive '${requested}' does not exist. Use 'bash backup.sh --list' and pass the full archive name or a unique ID prefix."
+    fi
+
+    if [[ "$(printf '%s\n' "${matches}" | wc -l)" -gt 1 ]]; then
+        error "Archive reference '${requested}' is ambiguous. Matching archive names:"
+        printf '%s\n' "${matches}" >&2
+        exit 1
+    fi
+
+    printf '%s\n' "${matches}"
+}
+
+export_portable_archive() {
+    local export_path="$1"
+    local staging_current="$2"
+
+    local export_dir
+    export_dir="$(dirname "${export_path}")"
+    mkdir -p "${export_dir}"
+
+    info "Writing portable archive to ${export_path}..."
+    if [[ "${ENCRYPT_EXPORT}" == "true" ]]; then
+        (
+            cd "${staging_current}"
+            tar -cf - payload
+        ) | med_backup_encrypt_stream "${export_path}"
+    else
+        tar -C "${staging_current}" -cf - payload | gzip -c > "${export_path}"
+    fi
+
+    success "Portable archive written to ${export_path}"
+}
+
+export_from_borg_archive() {
+    local archive_name="$1"
+    local export_path="$2"
+
+    info "Exporting Borg archive '${archive_name}' to portable format..."
+    if [[ "${ENCRYPT_EXPORT}" == "true" ]]; then
+        borg export-tar "${BACKUP_REPOSITORY_PATH}::${archive_name}" - | med_backup_encrypt_stream "${export_path}"
+    else
+        borg export-tar "${BACKUP_REPOSITORY_PATH}::${archive_name}" - | gzip -c > "${export_path}"
+    fi
+
+    success "Portable archive written to ${export_path}"
+}
+
 create_backup() {
-    rm -rf "${BACKUP_STAGING_CURRENT}"
-    mkdir -p "${BACKUP_PAYLOAD_DIR}" "${BACKUP_PAYLOAD_DIR}/docker-volumes"
+    backup_payload_stage "${BACKUP_STAGING_CURRENT}" "${BACKUP_REPOSITORY_PATH}" "${ENCRYPT_EXPORT}"
 
-    for rel_path in "${PERSISTENT_PATHS[@]}"; do
-        stage_copy_path "$rel_path"
-    done
-
-    dump_synapse_database
-
-    for volume_name in "${CADDY_VOLUME_EXPORTS[@]}"; do
-        export_volume_if_present "$volume_name" "${BACKUP_PAYLOAD_DIR}/docker-volumes"
-    done
-
-    write_manifest
+    if [[ "${EXPORT_ONLY}" == "true" ]]; then
+        [[ -n "${EXPORT_PATH}" ]] || die "--export-only requires --export PATH"
+        export_portable_archive "${EXPORT_PATH}" "${BACKUP_STAGING_CURRENT}"
+        return 0
+    fi
 
     info "Ensuring local borg repository exists..."
     borgmatic --config "${BORG_CONFIG_PATH}" repo-create --encryption none
@@ -208,6 +177,10 @@ create_backup() {
     info "Checking repository consistency..."
     borgmatic --config "${BORG_CONFIG_PATH}" check
 
+    if [[ -n "${EXPORT_PATH}" ]]; then
+        export_portable_archive "${EXPORT_PATH}" "${BACKUP_STAGING_CURRENT}"
+    fi
+
     success "Backup completed successfully."
     list_archives
 }
@@ -217,6 +190,26 @@ main() {
         case "$1" in
             --list)
                 LIST_ONLY="true"
+                ;;
+            --export)
+                EXPORT_PATH="${2:-}"
+                [[ -n "$EXPORT_PATH" ]] || die "--export requires a path"
+                shift
+                ;;
+            --export-only)
+                EXPORT_ONLY="true"
+                if [[ -n "${2:-}" && "${2}" != --* ]]; then
+                    EXPORT_PATH="$2"
+                    shift
+                fi
+                ;;
+            --export-from-archive)
+                EXPORT_FROM_ARCHIVE="${2:-}"
+                [[ -n "$EXPORT_FROM_ARCHIVE" ]] || die "--export-from-archive requires an archive name"
+                shift
+                ;;
+            --encrypt)
+                ENCRYPT_EXPORT="true"
                 ;;
             -h|--help)
                 print_help
@@ -231,6 +224,25 @@ main() {
 
     require_command python3
     require_command docker
+
+    if [[ -n "${EXPORT_FROM_ARCHIVE}" ]]; then
+        require_command borg
+        load_backup_settings
+        write_borgmatic_config
+        EXPORT_FROM_ARCHIVE="$(resolve_archive_name "${EXPORT_FROM_ARCHIVE}")"
+        [[ -n "${EXPORT_PATH}" ]] || die "--export-from-archive requires --export PATH"
+        export_from_borg_archive "${EXPORT_FROM_ARCHIVE}" "${EXPORT_PATH}"
+        exit 0
+    fi
+
+    if [[ "${EXPORT_ONLY}" == "true" ]]; then
+        load_backup_settings "false"
+        [[ -n "${EXPORT_PATH}" ]] || die "--export-only requires --export PATH"
+        trap cleanup_staging EXIT
+        create_backup
+        exit 0
+    fi
+
     require_command borgmatic
     require_command borg
 

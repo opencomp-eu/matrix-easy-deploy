@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import subprocess
@@ -19,17 +20,35 @@ class BackupRestoreScriptTests(unittest.TestCase):
         mode = path.stat().st_mode
         path.chmod(mode | stat.S_IXUSR)
 
+    def _copy_support_scripts(self, root: Path) -> None:
+        for rel in (
+            "scripts/lib.sh",
+            "scripts/backup_config.py",
+            "scripts/backup_payload.py",
+            "scripts/backup_payload.sh",
+            "scripts/backup_crypto.sh",
+            "scripts/restore_payload.sh",
+            "scripts/module_common.sh",
+        ):
+            src = self.repo_root / rel
+            dest = root / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(src.read_text())
+            if rel.endswith(".sh"):
+                dest.chmod(0o755)
+
     def _create_min_repo(self, root: Path) -> None:
         (root / "scripts").mkdir(parents=True)
         (root / ".matrix-easy-deploy").mkdir(parents=True)
         (root / "modules/core/synapse_data").mkdir(parents=True)
+        (root / "modules/core").mkdir(parents=True, exist_ok=True)
+        (root / "modules/core/docker-compose.yml").write_text("services: {}\n")
         (root / "modules/hookshot/hookshot").mkdir(parents=True)
         (root / "modules/whatsapp-bridge/whatsapp").mkdir(parents=True)
         (root / "modules/slack-bridge/slack").mkdir(parents=True)
         (root / "modules/draupnir/draupnir").mkdir(parents=True)
 
-        (root / "scripts/lib.sh").write_text(self.lib_script.read_text())
-        (root / "scripts/backup_config.py").write_text(self.backup_config_script.read_text())
+        self._copy_support_scripts(root)
         (root / "backup.sh").write_text(self.backup_script.read_text())
         (root / "restore.sh").write_text(self.restore_script.read_text())
         (root / "backup.sh").chmod(0o755)
@@ -117,6 +136,179 @@ class BackupRestoreScriptTests(unittest.TestCase):
             self.assertIn("keep_daily: 7", borgmatic_config)
             self.assertNotIn("retention:", borgmatic_config)
 
+    def test_backup_manifest_v2_in_export_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._create_min_repo(root)
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True)
+            self._write_executable(
+                fake_bin / "docker",
+                "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == \"ps\" ]]; then echo matrix_postgres; exit 0; fi\n"
+                "if [[ \"${1:-}\" == \"volume\" && \"${2:-}\" == \"inspect\" ]]; then exit 1; fi\n"
+                "if [[ \"${1:-}\" == \"exec\" ]]; then echo dump-bytes; exit 0; fi\n"
+                "exit 0\n",
+            )
+
+            export_path = root / "portable.tar.gz"
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+
+            result = subprocess.run(
+                ["bash", "backup.sh", "--export-only", str(export_path)],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertTrue(export_path.exists())
+            list_result = subprocess.run(
+                ["tar", "-tzf", str(export_path)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(list_result.returncode, 0)
+            self.assertIn("payload/manifest.json", list_result.stdout)
+            self.assertIn("payload/deploy.yaml", list_result.stdout)
+
+            manifest_result = subprocess.run(
+                ["tar", "-xOzf", str(export_path), "payload/manifest.json"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(manifest_result.returncode, 0)
+            manifest = json.loads(manifest_result.stdout)
+            self.assertEqual(manifest["format"], 2)
+
+    def test_restore_from_portable_file_without_backup_enabled(self):
+        import tarfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._create_min_repo(root)
+
+            (root / "deploy.yaml").write_text(
+                "matrix:\n"
+                "  domain: matrix.example.com\n"
+                "  server_name: example.com\n"
+                "  admin_username: admin\n"
+                "backup:\n"
+                "  enabled: false\n"
+            )
+
+            archive_path = root / "portable.tar.gz"
+            payload_root = root / "payload-build"
+            payload_root.mkdir()
+            (payload_root / "deploy.yaml").write_text((root / "deploy.yaml").read_text())
+            (payload_root / ".matrix-easy-deploy").mkdir()
+            (payload_root / ".matrix-easy-deploy/secrets.yaml").write_text("POSTGRES_PASSWORD: restored\n")
+            (payload_root / ".matrix-easy-deploy/modules.yaml").write_text("{}\n")
+            (payload_root / "database").mkdir()
+            (payload_root / "database/synapse.dump").write_text("dump\n")
+            (payload_root / "manifest.json").write_text(
+                '{"format":2,"database_dumps":[{"name":"synapse","path":"database/synapse.dump","db_user":"synapse"}]}\n'
+            )
+
+            with tarfile.open(archive_path, "w:gz") as tar:
+                tar.add(payload_root, arcname="payload")
+
+            events = root / "events.log"
+            self._write_executable(root / "stop.sh", "#!/usr/bin/env bash\necho stop >> \"$EVENTS\"\n")
+            self._write_executable(root / "start.sh", "#!/usr/bin/env bash\necho start >> \"$EVENTS\"\n")
+            self._write_executable(root / "apply.sh", "#!/usr/bin/env bash\necho apply >> \"$EVENTS\"\n")
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True)
+            self._write_executable(
+                fake_bin / "docker",
+                "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == \"compose\" && \"${2:-}\" == \"version\" ]]; then exit 0; fi\n"
+                "if [[ \"${1:-}\" == \"ps\" ]]; then echo matrix_postgres; exit 0; fi\n"
+                "if [[ \"${1:-}\" == \"inspect\" ]]; then echo healthy; exit 0; fi\n"
+                "if [[ \"${1:-}\" == \"volume\" && \"${2:-}\" == \"inspect\" ]]; then exit 1; fi\n"
+                "if [[ \"${1:-}\" == \"network\" && \"${2:-}\" == \"inspect\" ]]; then exit 0; fi\n"
+                "if [[ \"${1:-}\" == \"compose\" && \"${2:-}\" == \"up\" ]]; then echo docker:$* >> \"$EVENTS\"; exit 0; fi\n"
+                "if [[ \"${1:-}\" == \"exec\" ]]; then echo docker:$* >> \"$EVENTS\"; if [[ \"$*\" == *\" pg_restore \"* ]]; then cat >/dev/null; fi; exit 0; fi\n"
+                "exit 0\n",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["EVENTS"] = str(events)
+
+            result = subprocess.run(
+                ["bash", "restore.sh", "--file", str(archive_path), "--yes"],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            lines = events.read_text().splitlines()
+            self.assertEqual(lines[0], "stop")
+            self.assertEqual(lines[1], "apply")
+            self.assertTrue(any("pg_restore" in line for line in lines))
+            self.assertEqual(lines[-2], "apply")
+            self.assertEqual(lines[-1], "start")
+
+    def test_encrypted_export_round_trip_with_openssl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._create_min_repo(root)
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True)
+            self._write_executable(
+                fake_bin / "docker",
+                "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == \"ps\" ]]; then echo matrix_postgres; exit 0; fi\n"
+                "if [[ \"${1:-}\" == \"volume\" && \"${2:-}\" == \"inspect\" ]]; then exit 1; fi\n"
+                "if [[ \"${1:-}\" == \"exec\" ]]; then echo dump-bytes; exit 0; fi\n"
+                "exit 0\n",
+            )
+
+            export_path = root / "portable.tar.gz.age"
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["MED_BACKUP_PASSPHRASE"] = "test-passphrase"
+
+            result = subprocess.run(
+                ["bash", "backup.sh", "--export-only", str(export_path), "--encrypt"],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertTrue(export_path.exists())
+
+            extract_dir = root / "extract"
+            extract_dir.mkdir()
+            decrypt = subprocess.run(
+                [
+                    "bash",
+                    "-lc",
+                    f"source scripts/lib.sh && source scripts/backup_crypto.sh && med_backup_decrypt_stream '{export_path}' | tar -xf - -C '{extract_dir}'",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(decrypt.returncode, 0, msg=decrypt.stderr)
+            self.assertTrue((extract_dir / "payload/manifest.json").exists())
+
     def test_restore_requires_archive_argument(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -145,7 +337,8 @@ class BackupRestoreScriptTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Provide --archive", result.stderr)
+            combined = result.stderr + result.stdout
+            self.assertIn("Provide --archive", combined)
 
     def test_restore_runs_expected_order_for_archive(self):
         with tempfile.TemporaryDirectory() as tmp:

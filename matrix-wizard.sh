@@ -531,6 +531,57 @@ run_backup_config_wizard() {
     bash "${SCRIPT_DIR}/apply.sh"
 }
 
+run_export_backup_wizard() {
+    echo
+    local export_path
+    local default_path="${HOME}/med-kit-backup-$(date -u +%Y-%m-%dT%H%M%SZ).tar.gz"
+    ask export_path "Portable archive path" "$default_path"
+    if [[ -z "$export_path" ]]; then
+        warn "Export path is required."
+        return
+    fi
+
+    ask_yn _encrypt "Encrypt the portable archive?" "y"
+    local encrypt_args=()
+    if [[ "$_encrypt" == "y" ]]; then
+        encrypt_args+=(--encrypt)
+        case "$export_path" in
+            *.tar.gz|*.tgz) export_path="${export_path}.age" ;;
+            *.age|*.enc) ;;
+            *) export_path="${export_path}.age" ;;
+        esac
+    fi
+
+    ask_yn _export_only "Export only (skip Borg repository update)?" "n"
+    if [[ "$_export_only" == "y" ]]; then
+        bash "${SCRIPT_DIR}/backup.sh" --export-only "$export_path" --export "$export_path" "${encrypt_args[@]}"
+    else
+        bash "${SCRIPT_DIR}/backup.sh" --export "$export_path" "${encrypt_args[@]}"
+    fi
+}
+
+run_restore_portable_wizard() {
+    echo
+    local portable_path
+    ask portable_path "Portable archive path (.tar.gz or .tar.gz.age)" ""
+    if [[ -z "$portable_path" ]]; then
+        warn "Portable archive path is required."
+        return
+    fi
+
+    local restore_args=(--file "$portable_path")
+    case "$portable_path" in
+        *.age|*.enc) restore_args+=(--encrypt) ;;
+    esac
+
+    ask_yn _keep_stopped "Keep services stopped after restore?" "n"
+    if [[ "$_keep_stopped" == "y" ]]; then
+        restore_args+=(--keep-stopped)
+    fi
+
+    bash "${SCRIPT_DIR}/restore.sh" "${restore_args[@]}"
+}
+
 run_restore_wizard() {
     echo
     info "Available backups:"
@@ -570,8 +621,10 @@ print_wizard_menu() {
     echo -e "  ${CYAN}10)${RESET} Uninstall/reset stack"
     echo -e "  ${CYAN}11)${RESET} Create backup"
     echo -e "  ${CYAN}12)${RESET} List backups"
-    echo -e "  ${CYAN}13)${RESET} Restore backup"
+    echo -e "  ${CYAN}13)${RESET} Restore backup (Borg archive)"
     echo -e "  ${CYAN}14)${RESET} Configure backup settings"
+    echo -e "  ${CYAN}15)${RESET} Export portable backup"
+    echo -e "  ${CYAN}16)${RESET} Restore portable backup"
     echo -e "  ${CYAN}q)${RESET} Exit"
     echo
 }
@@ -636,6 +689,14 @@ run_wizard_hub() {
                 ;;
             14)
                 run_backup_config_wizard
+                pause_screen
+                ;;
+            15)
+                run_export_backup_wizard
+                pause_screen
+                ;;
+            16)
+                run_restore_portable_wizard
                 pause_screen
                 ;;
             q)
