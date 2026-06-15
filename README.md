@@ -308,7 +308,7 @@ Install prerequisites on the host:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y borgbackup borgmatic
+sudo apt-get install -y borgbackup borgmatic age
 ```
 
 Create a backup:
@@ -363,6 +363,44 @@ Behavior notes:
 - Existing logged-in sessions can keep showing rooms or messages that no longer exist on the restored server. Logging out and back in usually resolves that stale client state.
 - For encrypted history on a new login, users typically need another verified session or their recovery key/secret storage. Registration tokens are unrelated to restoring message access after a rollback.
 - This phase supports only local repository targets (`backup.repository.type: local`).
+
+#### Portable export and restore (single file)
+
+For moving hosts or off-site copies, export the same backup payload as a single compressed archive. Unencrypted archives contain full secrets (`deploy.yaml`, `secrets.yaml`, TLS state, database dumps) — use `--encrypt` for off-site storage.
+
+Create a portable backup (updates the local Borg repo unless you pass `--export-only`):
+
+```bash
+bash backup.sh --export ~/med-kit-backup.tar.gz
+bash backup.sh --export ~/med-kit-backup.tar.gz.age --encrypt
+bash backup.sh --export-only ~/med-kit-backup.tar.gz   # stage + export, skip Borg
+```
+
+Re-export an older Borg snapshot without re-staging:
+
+```bash
+bash backup.sh --export-from-archive MED_Backup_2026-01-01T03:00:00 --export ~/snapshot.tar.gz
+```
+
+Restore from a portable file (no Borg repo required — works on a fresh clone):
+
+```bash
+bash restore.sh --file ~/med-kit-backup.tar.gz --yes
+bash restore.sh --file ~/med-kit-backup.tar.gz.age --encrypt --yes
+```
+
+Fresh-host bootstrap:
+
+```bash
+git clone <repo> && cd matrix-easy-deploy
+bash bootstrap-from-backup.sh ~/med-kit-backup.tar.gz.age --encrypt --yes
+```
+
+Encryption notes:
+
+- Interactive `--encrypt` uses `age` (passphrase prompt).
+- Set `MED_BACKUP_PASSPHRASE` for non-interactive export/restore (uses OpenSSL AES-256-CBC internally).
+- Portable archives include Synapse DB dumps, bridge DB dumps when enabled, module state, Caddy volumes, and Tuwunel data when applicable.
 
 ### Run with Docker (single command)
 
@@ -1123,6 +1161,8 @@ Install test dependencies once (pytest gives a quiet summary by default; unittes
 pip install -r requirements-dev.txt
 ```
 
+Use `./test` (recommended). It sets `PYTHONPYCACHEPREFIX=.pycache` so bytecode is not written under `tests/__pycache__/` — that avoids a common pitfall where `python -m unittest tests/*` tries to load `tests/__pycache__` as a test module.
+
 ```bash
 # All unit tests (quiet)
 ./test
@@ -1131,6 +1171,10 @@ pip install -r requirements-dev.txt
 ./test -v
 ./test tests/test_apply.py
 ./test -k caddy
+
+# unittest directly (use discover — not `tests/*` glob, which can pick up __pycache__/)
+python3 run_unittests.py
+python3 run_unittests.py -v
 
 # Deterministic apply run with fixed IP for local smoke checks
 bash apply.sh --server-ip 127.0.0.1

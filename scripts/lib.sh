@@ -144,6 +144,10 @@ ensure_docker_volume() {
     fi
 }
 
+med_services_running() {
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(caddy|matrix_|mautrix-|matrix-)'
+}
+
 # ---------------------------------------------------------------------------
 # Domain helpers
 # ---------------------------------------------------------------------------

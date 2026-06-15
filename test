@@ -17,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPYCACHEPREFIX="${SCRIPT_DIR}/.pycache"
 
 usage() {
     cat <<'EOF'
@@ -97,4 +98,4 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-exec python3 -m unittest discover -s tests -p 'test_*.py' "${verbosity[@]}" "$@"
+exec python3 "${SCRIPT_DIR}/run_unittests.py" "${verbosity[@]}" "$@"

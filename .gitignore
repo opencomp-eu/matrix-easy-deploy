@@ -31,3 +31,4 @@ modules/hookshot/hookshot/cryptostore
 !.github/workflows/*.yml
 *.pyc
 __pycache__/
+.pycache/

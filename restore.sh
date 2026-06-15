@@ -1,52 +1,44 @@
 #!/usr/bin/env bash
-# restore.sh — restore matrix-easy-deploy from a selected local borg archive
+# restore.sh — restore matrix-easy-deploy from a Borg archive or portable file
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/lib.sh"
+# shellcheck source=scripts/restore_payload.sh
+source "${SCRIPT_DIR}/scripts/restore_payload.sh"
+# shellcheck source=scripts/backup_crypto.sh
+source "${SCRIPT_DIR}/scripts/backup_crypto.sh"
 
 ARCHIVE_NAME=""
+PORTABLE_FILE=""
 ASSUME_YES="false"
 KEEP_STOPPED="false"
 LIST_ONLY="false"
 STACK_STOPPED="false"
 RESTORE_STAGE=""
+ENCRYPTED_FILE="false"
+PASSPHRASE_FILE=""
 
 BACKUP_STATE_DIR="${SCRIPT_DIR}/.matrix-easy-deploy/backup"
 RESTORE_ROOT="${BACKUP_STATE_DIR}/restore"
 BORG_CONFIG_PATH="${BACKUP_STATE_DIR}/borgmatic.yaml"
 
-CADDY_VOLUME_EXPORTS=(
-    "caddy_data"
-    "caddy_caddy_config"
-)
-
-DATABASE_RESTORE_DIR="database"
-SYNAPSE_DUMP_FILE="${DATABASE_RESTORE_DIR}/synapse.dump"
-
-PERSISTENT_RESTORE_PATHS=(
-    "deploy.yaml"
-    ".matrix-easy-deploy/secrets.yaml"
-    ".matrix-easy-deploy/modules.yaml"
-    "modules/core/synapse_data"
-    "modules/hookshot/hookshot"
-    "modules/whatsapp-bridge/whatsapp"
-    "modules/slack-bridge/slack"
-    "modules/draupnir/draupnir"
-)
-
 print_help() {
     cat <<EOF
 Usage:
   bash restore.sh --archive <archive-name> [--yes] [--keep-stopped]
+  bash restore.sh --file <portable-archive> [--encrypt] [--passphrase-file PATH] [--yes] [--keep-stopped]
   bash restore.sh --list
 
 Options:
-    --archive NAME  Archive name to restore, or a unique archive ID prefix.
-    --list          List available archive names in the configured repository.
-  --yes           Skip destructive confirmation prompt.
-  --keep-stopped  Do not restart services after restore.
-  -h, --help      Show this help message.
+  --archive NAME        Archive name to restore, or a unique archive ID prefix.
+  --file PATH           Restore from a portable .tar.gz or .tar.gz.age archive.
+  --list                List available archive names in the configured repository.
+  --encrypt             Decrypt an age-encrypted portable archive (.tar.gz.age).
+  --passphrase-file     File containing the age passphrase (non-interactive decrypt).
+  --yes                 Skip destructive confirmation prompt.
+  --keep-stopped        Do not restart services after restore.
+  -h, --help            Show this help message.
 EOF
 }
 
@@ -87,64 +79,6 @@ load_runtime_env() {
     fi
 }
 
-read_state_secret() {
-    local key="$1"
-    local secrets_path="${SCRIPT_DIR}/.matrix-easy-deploy/secrets.yaml"
-
-    [[ -f "${secrets_path}" ]] || return 1
-
-    python3 - "$secrets_path" "$key" <<'PY'
-from pathlib import Path
-import sys
-
-import yaml
-
-data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
-value = data.get(sys.argv[2], "")
-if value:
-    print(value)
-PY
-}
-
-postgres_password() {
-    if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
-        printf '%s\n' "${POSTGRES_PASSWORD}"
-        return 0
-    fi
-
-    read_state_secret "POSTGRES_PASSWORD"
-}
-
-start_postgres_restore_prerequisite() {
-    local inspect_status
-    local attempt=0
-    local max_attempts=30
-
-    ensure_docker_network "caddy_net"
-
-    local docker_compose
-    IFS=' ' read -ra docker_compose <<< "$(docker_compose_cmd)"
-
-    info "Starting PostgreSQL prerequisite for restore..."
-    (cd "${SCRIPT_DIR}/modules/core" && "${docker_compose[@]}" up -d postgres)
-
-    info "Waiting for PostgreSQL to become healthy..."
-    while true; do
-        inspect_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' matrix_postgres 2>/dev/null || true)"
-        if [[ "${inspect_status}" == "healthy" || "${inspect_status}" == "running" ]]; then
-            success "PostgreSQL restore prerequisite is ready."
-            return 0
-        fi
-
-        attempt=$((attempt + 1))
-        if [[ ${attempt} -ge ${max_attempts} ]]; then
-            die "Timed out waiting for matrix_postgres to become ready for restore."
-        fi
-
-        sleep 2
-    done
-}
-
 load_backup_settings() {
     local exports
     exports="$(python3 "${SCRIPT_DIR}/scripts/backup_config.py" --deploy-yaml "${SCRIPT_DIR}/deploy.yaml" --emit-shell)"
@@ -175,8 +109,9 @@ EOF
 confirm_restore() {
     [[ "${ASSUME_YES}" == "true" ]] && return 0
 
+    local target="${ARCHIVE_NAME:-${PORTABLE_FILE}}"
     echo
-    warn "Restore will overwrite current runtime state with archive '${ARCHIVE_NAME}'."
+    warn "Restore will overwrite current runtime state with '${target}'."
     local confirm
     ask_yn confirm "Continue with restore?" "n"
     [[ "$confirm" == "y" ]] || return 1
@@ -223,60 +158,42 @@ resolve_archive_name() {
     printf '%s\n' "${matches}"
 }
 
-restore_path_if_present() {
-    local payload_root="$1"
-    local rel_path="$2"
-    local src="${payload_root}/${rel_path}"
-    local dest="${SCRIPT_DIR}/${rel_path}"
+detect_encrypted_portable_file() {
+    local file_path="$1"
 
-    [[ -e "$src" ]] || return 0
-
-    rm -rf "$dest"
-    mkdir -p "$(dirname "$dest")"
-    cp -a "$src" "$dest"
-}
-
-import_volume_if_present() {
-    local payload_root="$1"
-    local volume_name="$2"
-    local archive_path="${payload_root}/docker-volumes/${volume_name}.tar"
-
-    [[ -f "$archive_path" ]] || return 0
-
-    ensure_docker_volume "$volume_name"
-    info "Importing Docker volume '${volume_name}'..."
-    docker run --rm \
-        -v "${volume_name}:/target" \
-        -v "${payload_root}/docker-volumes:/backup:ro" \
-        alpine:3 sh -c "rm -rf /target/* /target/.[!.]* /target/..?* 2>/dev/null || true; cd /target && tar -xf /backup/${volume_name}.tar"
-}
-
-restore_synapse_database_if_present() {
-    local payload_root="$1"
-    local archive_path="${payload_root}/${SYNAPSE_DUMP_FILE}"
-    local postgres_password_value
-
-    [[ -f "${archive_path}" ]] || return 0
-
-    postgres_password_value="$(postgres_password)"
-    [[ -n "${postgres_password_value}" ]] || die "POSTGRES_PASSWORD not available in .env or .matrix-easy-deploy/secrets.yaml"
-
-    if ! docker ps --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
-        die "matrix_postgres is not running. Start the core stack prerequisites before restoring."
+    if [[ "${ENCRYPTED_FILE}" == "true" ]]; then
+        return 0
     fi
 
-    info "Resetting Synapse PostgreSQL database..."
-    docker exec -e PGPASSWORD="${postgres_password_value}" matrix_postgres \
-        psql -U synapse -d postgres -c "DROP DATABASE IF EXISTS synapse WITH (FORCE);"
-    docker exec -e PGPASSWORD="${postgres_password_value}" matrix_postgres \
-        psql -U synapse -d postgres -c "CREATE DATABASE synapse OWNER synapse ENCODING 'UTF8' LC_COLLATE='C' LC_CTYPE='C' TEMPLATE template0;"
+    if med_backup_is_encrypted_path "${file_path}"; then
+        return 0
+    fi
 
-    info "Restoring Synapse PostgreSQL database..."
-    docker exec -i -e PGPASSWORD="${postgres_password_value}" matrix_postgres \
-        pg_restore -U synapse -d synapse --no-owner --no-privileges < "${archive_path}"
+    if med_backup_is_openssl_encrypted "${file_path}"; then
+        return 0
+    fi
+
+    return 1
 }
 
-run_restore() {
+extract_portable_file() {
+    local file_path="$1"
+    local extract_dir="$2"
+
+    [[ -f "${file_path}" ]] || die "Portable archive not found: ${file_path}"
+
+    mkdir -p "${extract_dir}"
+
+    if detect_encrypted_portable_file "${file_path}"; then
+        info "Decrypting and extracting portable archive..."
+        med_backup_decrypt_stream "${file_path}" | tar -xf - -C "${extract_dir}"
+    else
+        info "Extracting portable archive..."
+        gzip -dc "${file_path}" | tar -xf - -C "${extract_dir}"
+    fi
+}
+
+run_restore_from_borg() {
     mkdir -p "${RESTORE_ROOT}"
     RESTORE_STAGE="$(mktemp -d "${RESTORE_ROOT}/restore.XXXXXX")"
 
@@ -289,35 +206,19 @@ run_restore() {
     local payload_root="${RESTORE_STAGE}/payload"
     [[ -d "$payload_root" ]] || die "Archive '${ARCHIVE_NAME}' does not contain expected payload/ directory"
 
-    # Restore deploy/state inputs first.
-    restore_path_if_present "$payload_root" "deploy.yaml"
-    restore_path_if_present "$payload_root" ".matrix-easy-deploy/secrets.yaml"
-    restore_path_if_present "$payload_root" ".matrix-easy-deploy/modules.yaml"
+    restore_payload_from_directory "${payload_root}"
+}
 
-    info "Regenerating runtime artifacts from restored deploy/state..."
-    bash "${SCRIPT_DIR}/apply.sh"
+run_restore_from_file() {
+    mkdir -p "${RESTORE_ROOT}"
+    RESTORE_STAGE="$(mktemp -d "${RESTORE_ROOT}/restore.XXXXXX")"
 
-    for volume_name in "${CADDY_VOLUME_EXPORTS[@]}"; do
-        import_volume_if_present "$payload_root" "$volume_name"
-    done
+    extract_portable_file "${PORTABLE_FILE}" "${RESTORE_STAGE}"
 
-    for rel_path in "${PERSISTENT_RESTORE_PATHS[@]}"; do
-        case "$rel_path" in
-            deploy.yaml|.matrix-easy-deploy/secrets.yaml|.matrix-easy-deploy/modules.yaml)
-                continue
-                ;;
-        esac
-        restore_path_if_present "$payload_root" "$rel_path"
-    done
+    local payload_root="${RESTORE_STAGE}/payload"
+    [[ -d "$payload_root" ]] || die "Portable archive does not contain expected payload/ directory"
 
-    start_postgres_restore_prerequisite
-    restore_synapse_database_if_present "$payload_root"
-
-    info "Final reconciliation after payload restore..."
-    bash "${SCRIPT_DIR}/apply.sh"
-
-    success "Restore completed successfully."
-    print_post_restore_note
+    restore_payload_from_directory "${payload_root}"
 }
 
 main() {
@@ -328,8 +229,21 @@ main() {
                 [[ -n "$ARCHIVE_NAME" ]] || die "--archive requires a value"
                 shift
                 ;;
+            --file)
+                PORTABLE_FILE="${2:-}"
+                [[ -n "$PORTABLE_FILE" ]] || die "--file requires a value"
+                shift
+                ;;
             --list)
                 LIST_ONLY="true"
+                ;;
+            --encrypt)
+                ENCRYPTED_FILE="true"
+                ;;
+            --passphrase-file)
+                PASSPHRASE_FILE="${2:-}"
+                [[ -n "$PASSPHRASE_FILE" ]] || die "--passphrase-file requires a value"
+                shift
                 ;;
             --yes)
                 ASSUME_YES="true"
@@ -350,19 +264,50 @@ main() {
 
     require_command python3
     require_command docker
+
+    if [[ -n "${PORTABLE_FILE}" && -n "${ARCHIVE_NAME}" ]]; then
+        die "Provide either --archive or --file, not both."
+    fi
+
+    if [[ "${LIST_ONLY}" == "true" ]]; then
+        require_command borg
+        require_command borgmatic
+        load_backup_settings
+        write_borgmatic_config
+        list_archives
+        exit 0
+    fi
+
+    if [[ -n "${PORTABLE_FILE}" ]]; then
+        confirm_restore || {
+            info "Restore cancelled."
+            exit 0
+        }
+
+        trap cleanup_and_restart EXIT
+
+        if med_services_running || [[ -f "${SCRIPT_DIR}/.env" ]]; then
+            info "Stopping services before restore..."
+            bash "${SCRIPT_DIR}/stop.sh" || true
+            STACK_STOPPED="true"
+        else
+            info "No running MED services detected — skipping stop before restore."
+        fi
+
+        run_restore_from_file
+        success "Restore completed successfully."
+        print_post_restore_note
+        exit 0
+    fi
+
+    [[ -n "${ARCHIVE_NAME}" ]] || die "Provide --archive <archive-name>, --file <portable-archive>, or use --list"
+
     require_command borgmatic
     require_command borg
 
     load_runtime_env
     load_backup_settings
     write_borgmatic_config
-
-    if [[ "${LIST_ONLY}" == "true" ]]; then
-        list_archives
-        exit 0
-    fi
-
-    [[ -n "${ARCHIVE_NAME}" ]] || die "Provide --archive <archive-name> or use --list"
 
     ARCHIVE_NAME="$(resolve_archive_name "${ARCHIVE_NAME}")"
 
@@ -377,7 +322,9 @@ main() {
     bash "${SCRIPT_DIR}/stop.sh"
     STACK_STOPPED="true"
 
-    run_restore
+    run_restore_from_borg
+    success "Restore completed successfully."
+    print_post_restore_note
 }
 
 main "$@"

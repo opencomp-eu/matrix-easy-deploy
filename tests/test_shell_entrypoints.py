@@ -223,6 +223,13 @@ class ShellEntrypointTests(unittest.TestCase):
                 "EOF\n"
                 "        chmod +x \"$FAKE_BIN/borgmatic\"\n"
                 "        ;;\n"
+                "      age)\n"
+                "        /bin/cat > \"$FAKE_BIN/age\" <<'EOF'\n"
+                "#!/bin/bash\n"
+                "exit 0\n"
+                "EOF\n"
+                "        chmod +x \"$FAKE_BIN/age\"\n"
+                "        ;;\n"
                 "    esac\n"
                 "  done\n"
                 "fi\n"
@@ -286,7 +293,7 @@ class ShellEntrypointTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             lines = events.read_text().splitlines()
             self.assertTrue(any(line == "apt-get:update" for line in lines))
-            self.assertTrue(any(line == "apt-get:install -y borgbackup borgmatic" for line in lines))
+            self.assertTrue(any(line == "apt-get:install -y borgbackup borgmatic age" for line in lines))
             self.assertTrue(any(line.startswith("curl:-fsSL https://get.docker.com -o ") for line in lines))
             self.assertTrue(any(line.startswith("docker-script:") for line in lines))
             self.assertIn("systemctl:enable --now docker", lines)
