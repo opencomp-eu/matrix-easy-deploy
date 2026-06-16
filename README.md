@@ -488,7 +488,7 @@ features:
       rooms_for_guests: false
 ```
 
-When `rooms` is non-empty, `bash apply.sh` restarts services (by default) and provisions the rooms automatically via med-admin (which bootstraps itself on first use if needed). Use `bash apply.sh --skip-auto-join-provision` to render config without provisioning (for example in CI).
+When `rooms` is non-empty, `bash apply.sh` restarts services (by default), waits for the homeserver to respond, then provisions the rooms automatically via med-admin. Use `bash apply.sh --skip-auto-join-provision` to render config without provisioning (for example in CI).
 
 To re-provision manually or post the welcome message again, use:
 

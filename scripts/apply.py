@@ -8,6 +8,9 @@ import os
 import secrets
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -1448,7 +1451,41 @@ def apply_configuration(
         print(schedule_status)
 
 
-def reconcile_auto_join_rooms(ctx: ApplyContext, config: dict) -> None:
+def wait_for_homeserver(ctx: ApplyContext, *, after_restart: bool = False) -> None:
+    env = load_env_map(ctx.env_file)
+    matrix_domain = env.get("MATRIX_DOMAIN", "").strip()
+    if not matrix_domain:
+        print("Auto-join rooms: MATRIX_DOMAIN not set; skipping homeserver readiness wait.")
+        return
+
+    url = f"https://{matrix_domain}/_matrix/client/versions"
+    max_attempts = 30 if after_restart else 6
+    interval_sec = 5
+    print(f"Auto-join rooms: waiting for homeserver to become ready…")
+    for attempt in range(1, max_attempts + 1):
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status < 500:
+                    print("Auto-join rooms: homeserver is ready.")
+                    return
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                print("Auto-join rooms: homeserver is ready.")
+                return
+        except Exception:
+            pass
+
+        if attempt >= max_attempts:
+            raise RuntimeError(
+                f"Homeserver at {url} did not become ready after {max_attempts * interval_sec}s "
+                "(502/connection errors usually mean Synapse/Tuwunel is still starting). "
+                "Wait for the stack to finish booting, then re-run bash apply.sh."
+            )
+        time.sleep(interval_sec)
+
+
+def reconcile_auto_join_rooms(ctx: ApplyContext, config: dict, *, after_restart: bool = False) -> None:
     auto_join = get_auto_join_config(config.get("features", {}) if isinstance(config.get("features"), dict) else {})
     if not auto_join.get("rooms"):
         return
@@ -1457,6 +1494,7 @@ def reconcile_auto_join_rooms(ctx: ApplyContext, config: dict) -> None:
     if not med_admin.exists():
         raise RuntimeError(f"Missing med-admin script: {med_admin}")
 
+    wait_for_homeserver(ctx, after_restart=after_restart)
     print("Auto-join rooms: provisioning via med-admin…")
     result = subprocess.run(
         [
@@ -1544,11 +1582,13 @@ def main(argv: list[str] | None = None) -> int:
         rotate_secrets=args.rotate_secrets,
         reconcile_modules=not args.skip_module_bootstrap,
     )
+    restarted = False
     if args.reconcile_runtime:
         run_runtime_reconcile(ctx)
+        restarted = True
     if not args.skip_auto_join_provision:
         config = load_config(ctx)
-        reconcile_auto_join_rooms(ctx, config)
+        reconcile_auto_join_rooms(ctx, config, after_restart=restarted)
     print("Configuration applied successfully.")
     print("Generated .env file and rendered templates.")
     if args.reconcile_runtime:

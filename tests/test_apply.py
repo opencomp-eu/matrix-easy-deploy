@@ -343,13 +343,27 @@ class ApplyTests(unittest.TestCase):
         med_admin.write_text("#!/usr/bin/env bash\nexit 0\n")
         med_admin.chmod(0o755)
 
-        with patch("scripts.apply.subprocess.run") as mock_run:
+        with (
+            patch("scripts.apply.wait_for_homeserver") as mock_wait,
+            patch("scripts.apply.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = type("R", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})()
             apply.reconcile_auto_join_rooms(ctx, cfg)
+
+        mock_wait.assert_called_once_with(ctx, after_restart=False)
 
         cmd = mock_run.call_args.args[0]
         self.assertIn("setup-auto-join-rooms", cmd)
         self.assertIn("--yes", cmd)
+
+    def test_wait_for_homeserver_returns_when_versions_responds(self):
+        ctx = apply.ApplyContext(self.root)
+        ctx.env_file.write_text("MATRIX_DOMAIN=matrix.example.com\n")
+        with patch("scripts.apply.urllib.request.urlopen") as mock_urlopen:
+            mock_resp = mock_urlopen.return_value.__enter__.return_value
+            mock_resp.status = 200
+            apply.wait_for_homeserver(ctx, after_restart=False)
+        mock_urlopen.assert_called_once()
 
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
