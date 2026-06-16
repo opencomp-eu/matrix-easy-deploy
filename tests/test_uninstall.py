@@ -5,6 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 
 class UninstallScriptTests(unittest.TestCase):
     def setUp(self):

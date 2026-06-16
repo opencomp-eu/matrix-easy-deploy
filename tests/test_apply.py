@@ -8,119 +8,24 @@ from pathlib import Path
 import yaml
 
 from scripts import apply
+from tests.helpers.project_tree import (
+    build_minimal_project,
+    default_deploy_config,
+    write_deploy_config,
+)
 
 
 class ApplyTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-
-        # Minimal project structure expected by apply.py
-        (self.root / "caddy").mkdir(parents=True)
-        (self.root / "modules/core/synapse").mkdir(parents=True)
-        (self.root / "modules/core/tuwunel").mkdir(parents=True)
-        (self.root / "modules/core/tuwunel_data").mkdir(parents=True)
-        (self.root / "modules/core/element").mkdir(parents=True)
-        (self.root / "modules/calls/coturn").mkdir(parents=True)
-        (self.root / "modules/calls/livekit").mkdir(parents=True)
-        (self.root / "modules/hookshot").mkdir(parents=True)
-        (self.root / "modules/core/synapse_data").mkdir(parents=True)
-        (self.root / "modules/whatsapp-bridge/whatsapp").mkdir(parents=True)
-        (self.root / "modules/slack-bridge/slack").mkdir(parents=True)
-
-        (self.root / "caddy/Caddyfile.template").write_text(
-            "{{CADDY_MATRIX_HOSTS}} {\n"
-            "    reverse_proxy {{HOMESERVER_UPSTREAM}}\n"
-            "{{CADDY_SYNAPSE_ADMIN_BLOCK}}"
-            "}\n\n"
-            "{{LIVEKIT_DOMAIN}} {\n"
-            "    handle_path /livekit/jwt* {\n"
-            "        reverse_proxy matrix_lk_jwt_service:8080\n"
-            "    }\n"
-            "    handle_path /livekit/sfu* {\n"
-            "        reverse_proxy host.docker.internal:7880\n"
-            "    }\n"
-            "}\n"
-        )
-        (self.root / "caddy/Caddyfile-no-element.template").write_text("no-element {{MATRIX_DOMAIN}}")
-        (self.root / "modules/core/tuwunel/tuwunel.toml.template").write_text(
-            "server_name = \"{{SERVER_NAME}}\"\n"
-            "allow_registration = {{TUWUNEL_ALLOW_REGISTRATION}}\n"
-        )
-        (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
-            "server_name: {{SERVER_NAME}}\n"
-            "public_baseurl: https://{{MATRIX_DOMAIN}}\n"
-            "password_config:\n  enabled: {{LOCAL_LOGIN_ENABLED}}\n"
-            "extra_well_known_client_content:\n"
-            "  org.matrix.msc4143.rtc_foci:\n"
-            "    - type: livekit\n"
-            "      livekit_service_url: \"https://{{LIVEKIT_DOMAIN}}/livekit/jwt\"\n"
-            "matrix_rtc:\n"
-            "  transports:\n"
-            "    - type: livekit\n"
-            "      livekit_service_url: \"https://{{LIVEKIT_DOMAIN}}/livekit/jwt\"\n"
-        )
-        (self.root / "modules/core/element/config.json.template").write_text('{"base_url":"https://{{MATRIX_DOMAIN}}"}')
-        (self.root / "modules/calls/coturn/turnserver.conf.template").write_text("realm={{MATRIX_DOMAIN}}")
-        (self.root / "modules/calls/livekit/livekit.yaml.template").write_text(
-            "room:\n  auto_create: false\n"
-            "keys:\n  {{LIVEKIT_KEY}}: {{LIVEKIT_SECRET}}"
-        )
-        (self.root / "modules/hookshot/module.yaml").write_text(
-            "name: hookshot\n"
-            "config_key: hookshot\n"
-            "generated_files:\n"
-            "  - modules/hookshot/hookshot/config.yml\n"
-            "  - modules/hookshot/hookshot/registration.yml\n"
-            "runtime:\n"
-            "  config_exists: modules/hookshot/hookshot/config.yml\n"
-        )
-        (self.root / "modules/hookshot/setup.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        (self.root / "modules/whatsapp-bridge/module.yaml").write_text(
-            "name: whatsapp-bridge\n"
-            "config_key: whatsapp_bridge\n"
-            "generated_files:\n"
-            "  - modules/whatsapp-bridge/whatsapp/config.yaml\n"
-            "  - modules/whatsapp-bridge/whatsapp/registration.yaml\n"
-            "runtime:\n"
-            "  config_exists: modules/whatsapp-bridge/whatsapp/config.yaml\n"
-        )
-        (self.root / "modules/whatsapp-bridge/setup.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-        (self.root / "modules/slack-bridge/module.yaml").write_text(
-            "name: slack-bridge\n"
-            "config_key: slack_bridge\n"
-            "generated_files:\n"
-            "  - modules/slack-bridge/slack/config.yaml\n"
-            "  - modules/slack-bridge/slack/registration.yaml\n"
-            "runtime:\n"
-            "  config_exists: modules/slack-bridge/slack/config.yaml\n"
-        )
-        (self.root / "modules/slack-bridge/setup.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        build_minimal_project(self.root, preset="full")
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def sample_config(self):
-        return {
-            "matrix": {
-                "domain": "matrix.example.com",
-                "server_name": "example.com",
-                "admin_username": "admin",
-            },
-            "features": {
-                "registration_enabled": False,
-                "federation_enabled": True,
-                "local_login_enabled": True,
-                "element": {"enabled": True, "domain": "element.example.com"},
-                "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
-                "sso": {"enabled": False, "providers": []},
-            },
-            "modules": {
-                "hookshot": {"enabled": False, "domain": "hookshot.example.com"},
-                "whatsapp_bridge": {"enabled": False},
-                "slack_bridge": {"enabled": False},
-            },
-        }
+        return default_deploy_config()
 
     def write_config(self, cfg):
         (self.root / "deploy.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))

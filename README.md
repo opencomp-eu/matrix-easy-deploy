@@ -1155,35 +1155,69 @@ Issues, fixes, and module contributions are welcome. If you're adding a new modu
 
 You can validate logic and idempotency on a local laptop without a full server deployment.
 
-Install test dependencies once (pytest gives a quiet summary by default; unittest is used as a fallback):
+Install test dependencies once with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pip install -r requirements-dev.txt
+uv sync
 ```
 
-Use `./test` (recommended). It sets `PYTHONPYCACHEPREFIX=.pycache` so bytecode is not written under `tests/__pycache__/` — that avoids a common pitfall where `python -m unittest tests/*` tries to load `tests/__pycache__` as a test module.
+Or without uv: `pip install -r requirements-dev.txt`
+
+Use `./test` as the canonical test runner (wraps `uv run pytest` when uv is installed). It sets `PYTHONPATH` and `PYTHONPYCACHEPREFIX=.pycache` (so bytecode is not written under `tests/__pycache__/`), and falls back to unittest if neither uv nor pytest is available.
 
 ```bash
-# All unit tests (quiet)
+# All tests (quiet)
 ./test
+
+# Or invoke pytest directly via uv
+uv run pytest tests
+uv run pytest tests/test_apply.py -k caddy
 
 # Verbose / single file / filter by name
 ./test -v
 ./test tests/test_apply.py
 ./test -k caddy
 
-# unittest directly (use discover — not `tests/*` glob, which can pick up __pycache__/)
+# Fast loop: skip shell/subprocess integration tests
+./test -m "not integration"
+
+# Integration tests only (bash workflows, setup scripts)
+./test -m integration
+
+# Coverage report for Python helpers in scripts/
+./test --cov=scripts --cov-report=term-missing
+uv run pytest tests --cov=scripts --cov-report=term-missing
+
+# unittest fallback (no uv/pytest installed)
 python3 run_unittests.py
 python3 run_unittests.py -v
-
-# Deterministic apply run with fixed IP for local smoke checks
-bash apply.sh --server-ip 127.0.0.1
-
-# Optional: verify repeated apply is stable
-bash apply.sh --server-ip 127.0.0.1
 ```
 
-For release confidence, run these checks before shipping changes to setup/apply/module scripts.
+### Writing tests
+
+- Mirror source layout: `scripts/foo.py` → `tests/test_foo.py`
+- Existing suites use `unittest.TestCase`; keep that style when extending them
+- New isolated cases can be plain `def test_*()` functions with fixtures from [`tests/conftest.py`](tests/conftest.py)
+- Shared deploy trees: [`tests/helpers/project_tree.py`](tests/helpers/project_tree.py) (`build_minimal_project`, `write_deploy_config`)
+- Shell/subprocess workflow tests must be marked `@pytest.mark.integration` (or `pytestmark = pytest.mark.integration` at module level)
+
+CI runs `uv run pytest tests --cov=scripts` on every pull request and push to `main` (Python 3.10 and 3.12).
+
+For release confidence, run these checks before shipping changes to setup/apply/module scripts:
+
+```bash
+uv sync && ./test
+```
+
+Optional local smoke checks:
+
+```bash
+# Deterministic apply run with fixed IP
+bash apply.sh --server-ip 127.0.0.1
+
+# Verify repeated apply is stable
+bash apply.sh --server-ip 127.0.0.1
+```
 
 ## Releasing
 

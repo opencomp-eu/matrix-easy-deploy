@@ -3,7 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
 import yaml
+
+pytestmark = pytest.mark.integration
 
 
 class HookshotSetupNonInteractiveTests(unittest.TestCase):
