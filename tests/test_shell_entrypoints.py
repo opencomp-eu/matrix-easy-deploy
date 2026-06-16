@@ -202,7 +202,7 @@ class ShellEntrypointTests(unittest.TestCase):
                 "#!/bin/bash\n"
                 "if [[ \"${1:-}\" == \"sh\" ]]; then\n"
                 "  shift\n"
-                "  exec /bin/sh \"$@\"\n"
+                "  exec /bin/bash \"$@\"\n"
                 "fi\n"
                 "exec \"$@\"\n",
             )
@@ -218,21 +218,21 @@ class ShellEntrypointTests(unittest.TestCase):
                 "#!/bin/bash\n"
                 "exit 0\n"
                 "EOF\n"
-                "        chmod +x \"$FAKE_BIN/borg\"\n"
+                "        /bin/chmod +x \"$FAKE_BIN/borg\"\n"
                 "        ;;\n"
                 "      borgmatic)\n"
                 "        /bin/cat > \"$FAKE_BIN/borgmatic\" <<'EOF'\n"
                 "#!/bin/bash\n"
                 "exit 0\n"
                 "EOF\n"
-                "        chmod +x \"$FAKE_BIN/borgmatic\"\n"
+                "        /bin/chmod +x \"$FAKE_BIN/borgmatic\"\n"
                 "        ;;\n"
                 "      age)\n"
                 "        /bin/cat > \"$FAKE_BIN/age\" <<'EOF'\n"
                 "#!/bin/bash\n"
                 "exit 0\n"
                 "EOF\n"
-                "        chmod +x \"$FAKE_BIN/age\"\n"
+                "        /bin/chmod +x \"$FAKE_BIN/age\"\n"
                 "        ;;\n"
                 "    esac\n"
                 "  done\n"
@@ -267,12 +267,13 @@ class ShellEntrypointTests(unittest.TestCase):
                 "echo curl:$* >> \"$EVENTS\"\n"
                 "if [[ \"${1:-}\" == \"-fsSL\" && \"${2:-}\" == \"https://get.docker.com\" && \"${3:-}\" == \"-o\" ]]; then\n"
                 "  /bin/cat > \"${4}\" <<'EOF'\n"
-                "#!/bin/bash\n"
+                "#!/bin/sh\n"
                 "echo docker-script:$* >> \"$EVENTS\"\n"
-                "if [[ -n \"${STATE:-}\" ]]; then\n"
+                "if [ -n \"${STATE:-}\" ]; then\n"
                 "  /bin/touch \"$STATE/docker_compose\"\n"
                 "fi\n"
                 "EOF\n"
+                "  /bin/chmod +x \"${4}\"\n"
                 "  exit 0\n"
                 "fi\n"
                 "exit 1\n",
@@ -387,6 +388,7 @@ class ShellEntrypointTests(unittest.TestCase):
                 "#!/usr/bin/env bash\n"
                 "echo create-account:$* >> \"$EVENTS\"\n",
             )
+            base_url, _server = self._start_mock_synapse_server(events)
             (root / ".env").write_text(
                 "SERVER_NAME=example.com\n"
                 "MATRIX_DOMAIN=matrix.example.com\n"
@@ -401,11 +403,13 @@ class ShellEntrypointTests(unittest.TestCase):
                 [
                     "bash",
                     "scripts/med-admin.sh",
+                    "--base-url",
+                    base_url,
                     "bootstrap",
                     "--username",
                     "med-admin",
                     "--password",
-                    "averylongsecret",
+                    "averylongsecret123",
                     "--yes",
                 ],
                 cwd=root,
@@ -420,10 +424,13 @@ class ShellEntrypointTests(unittest.TestCase):
             self.assertIn("create-account:", line)
             self.assertIn("--username med-admin", line)
             self.assertIn("--admin", line)
-            self.assertIn("--base-url https://matrix.example.com", line)
+            self.assertIn(f"--base-url {base_url}", line)
             self.assertIn("--shared-secret sharedsecret", line)
-            self.assertIn("--password averylongsecret", line)
+            self.assertIn("--password averylongsecret123", line)
             self.assertIn("--yes", line)
+            env_text = (root / ".env").read_text()
+            self.assertIn("MED_ADMIN_USERNAME=med-admin", env_text)
+            self.assertIn("MED_ADMIN_PASSWORD=averylongsecret123", env_text)
 
     def test_med_admin_list_accounts_logs_in_and_queries_admin_api(self):
         with tempfile.TemporaryDirectory() as tmp:

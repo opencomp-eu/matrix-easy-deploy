@@ -161,6 +161,7 @@ def _write_full_only_templates(root: Path) -> None:
     (root / "modules/core/tuwunel/tuwunel.toml.template").write_text(
         "server_name = \"{{SERVER_NAME}}\"\n"
         "allow_registration = {{TUWUNEL_ALLOW_REGISTRATION}}\n"
+        "{{TUWUNEL_AUTO_JOIN_SECTION}}\n"
     )
     _write_bridge_modules(root)
 

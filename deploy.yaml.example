@@ -8,16 +8,20 @@ features:
   registration_enabled: false
   federation_enabled: true
   local_login_enabled: true
-  synapse:
-    auto_join:
-      rooms: []
-      # Example when enabling:
-      # rooms:
-      #   - '#welcome:example.com'
-      autocreate: true
-      autocreate_federated: false
-      room_preset: public_chat
-      # mxid_localpart: system   # required for private_chat / trusted_private_chat
+  auto_join:
+    rooms: []
+    # Example when enabling named welcome rooms (provisioned automatically by apply.sh):
+    # rooms:
+    #   - alias: welcome
+    #     name: Welcome
+    #     topic: Start here for server info and introductions
+    #     message: |
+    #       Welcome to Example Chat! We hope you enjoy your time here.
+    #     handover:
+    #       - community-admin
+    #     federated: false   # local-server public room; not open to remote homeservers
+    #   - '#announce:example.com'
+    synapse:
       rooms_for_guests: false
   element:
     enabled: true
@@ -49,10 +53,12 @@ features:
       show_settings: false
       features: {}
     ui_features:
-      registration: true
+      feedback: false
+      widgets: true
+      voip: true
+      registration: false
       password_reset: true
       create_public_rooms: true
-      create_public_spaces: true
     extra_config: {}
   calls:
     enabled: true
@@ -62,7 +68,7 @@ features:
     providers: []
 modules:
   hookshot:
-    enabled: true
+    enabled: false
     domain: hookshot.example.com
   whatsapp_bridge:
     enabled: false
@@ -77,7 +83,7 @@ backup:
     path: /var/backups/med-kit
   schedule:
     enabled: false
-    calendar: '*-*-* 03:00:00'
+    calendar: "*-*-* 03:00:00"
     persistent: true
   retention:
     keep_daily: 7

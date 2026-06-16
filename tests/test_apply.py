@@ -197,31 +197,75 @@ class ApplyTests(unittest.TestCase):
 
     def test_validate_config_rejects_invalid_auto_join_rooms(self):
         cfg = self.sample_config()
-        cfg["features"]["synapse"] = {"auto_join": {"rooms": "not-a-list"}}
+        cfg["features"]["auto_join"] = {"rooms": "not-a-list"}
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
-    def test_validate_config_rejects_invalid_auto_join_room_preset(self):
+    def test_validate_config_rejects_invalid_auto_join_room_object(self):
         cfg = self.sample_config()
-        cfg["features"]["synapse"] = {
-            "auto_join": {
-                "rooms": ["#welcome:example.com"],
-                "room_preset": "secret_lair",
-            },
+        cfg["features"]["auto_join"] = {
+            "rooms": [{"topic": "Missing alias"}],
         }
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
-    def test_validate_config_rejects_private_preset_without_mxid_localpart(self):
+    def test_validate_config_accepts_mixed_auto_join_room_entries(self):
         cfg = self.sample_config()
-        cfg["features"]["synapse"] = {
-            "auto_join": {
-                "rooms": ["#welcome:example.com"],
-                "room_preset": "private_chat",
-            },
+        cfg["features"]["auto_join"] = {
+            "rooms": [
+                "#welcome:example.com",
+                {
+                    "alias": "announce",
+                    "name": "Announcements",
+                    "topic": "Server news",
+                    "message": "Welcome!",
+                    "handover": ["alice"],
+                    "federated": False,
+                },
+            ],
         }
-        with self.assertRaises(ValueError):
-            apply.validate_config(cfg)
+        apply.validate_config(cfg)
+
+    def test_build_synapse_auto_join_section_normalizes_object_aliases(self):
+        section = apply.build_synapse_auto_join_section(
+            {
+                "rooms": [
+                    {"alias": "welcome", "name": "Welcome"},
+                    "#announce:example.com",
+                ],
+            },
+            server_name="example.com",
+        )
+        self.assertIn("'#welcome:example.com'", section)
+        self.assertIn("'#announce:example.com'", section)
+        self.assertIn("autocreate_auto_join_rooms: false", section)
+
+    def test_build_tuwunel_auto_join_section_emits_alias_list(self):
+        section = apply.build_tuwunel_auto_join_section(
+            {"rooms": [{"alias": "welcome"}]},
+            server_name="example.com",
+        )
+        self.assertIn("auto_join_rooms = [", section)
+        self.assertIn("'#welcome:example.com'", section)
+
+    def test_parse_auto_join_room_entry_returns_spec_fields(self):
+        spec = apply.parse_auto_join_room_entry(
+            {
+                "alias": "welcome",
+                "name": "Welcome",
+                "topic": "Intro",
+                "message": "Hello",
+                "handover": ["alice"],
+                "federated": True,
+            },
+            "example.com",
+        )
+        self.assertEqual(spec["alias"], "#welcome:example.com")
+        self.assertEqual(spec["name"], "Welcome")
+        self.assertEqual(spec["topic"], "Intro")
+        self.assertEqual(spec["message"], "Hello")
+        self.assertEqual(spec["handover"], ["alice"])
+        self.assertTrue(spec["federated"])
 
     def test_build_synapse_auto_join_section_empty(self):
         self.assertEqual(apply.build_synapse_auto_join_section({}), "")
@@ -231,42 +275,31 @@ class ApplyTests(unittest.TestCase):
         section = apply.build_synapse_auto_join_section(
             {
                 "rooms": ["#welcome:example.com", "#announce:example.com"],
-                "autocreate": False,
-                "autocreate_federated": False,
-                "room_preset": "private_chat",
-                "mxid_localpart": "system",
-                "rooms_for_guests": False,
-            }
+                "synapse": {"rooms_for_guests": False},
+            },
+            server_name="example.com",
         )
         self.assertIn("auto_join_rooms:", section)
         self.assertIn("'#welcome:example.com'", section)
         self.assertIn("'#announce:example.com'", section)
         self.assertIn("autocreate_auto_join_rooms: false", section)
-        self.assertIn("autocreate_auto_join_rooms_federated: false", section)
-        self.assertIn('autocreate_auto_join_room_preset: "private_chat"', section)
-        self.assertIn("auto_join_mxid_localpart: system", section)
         self.assertIn("auto_join_rooms_for_guests: false", section)
+        self.assertNotIn("autocreate_auto_join_rooms_federated", section)
 
-    def test_derive_values_synapse_auto_join_section(self):
+    def test_derive_values_auto_join_sections(self):
         cfg = self.sample_config()
-        cfg["features"]["synapse"] = {
-            "auto_join": {
-                "rooms": ["#welcome:example.com"],
-                "autocreate": True,
-            },
+        cfg["features"]["auto_join"] = {
+            "rooms": ["#welcome:example.com"],
         }
         derived = apply.derive_values(cfg, server_ip="1.2.3.4")
         self.assertIn("auto_join_rooms:", derived["SYNAPSE_AUTO_JOIN_SECTION"])
-        self.assertIn("autocreate_auto_join_rooms: true", derived["SYNAPSE_AUTO_JOIN_SECTION"])
+        self.assertIn("auto_join_rooms = [", derived["TUWUNEL_AUTO_JOIN_SECTION"])
+        self.assertIn("autocreate_auto_join_rooms: false", derived["SYNAPSE_AUTO_JOIN_SECTION"])
 
     def test_apply_configuration_renders_auto_join(self):
         cfg = self.sample_config()
-        cfg["features"]["synapse"] = {
-            "auto_join": {
-                "rooms": ["#welcome:example.com"],
-                "autocreate": True,
-                "autocreate_federated": False,
-            },
+        cfg["features"]["auto_join"] = {
+            "rooms": ["#welcome:example.com"],
         }
         self.write_config(cfg)
         template = (self.root / "modules/core/synapse/homeserver.yaml.template").read_text()
@@ -279,11 +312,71 @@ class ApplyTests(unittest.TestCase):
         synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
         self.assertIn("auto_join_rooms:", synapse)
         self.assertIn("'#welcome:example.com'", synapse)
-        self.assertIn("autocreate_auto_join_rooms: true", synapse)
-        self.assertIn("autocreate_auto_join_rooms_federated: false", synapse)
+        self.assertIn("autocreate_auto_join_rooms: false", synapse)
         self.assertNotIn("{{SYNAPSE_AUTO_JOIN_SECTION}}", synapse)
-        env_text = (self.root / ".env").read_text()
-        self.assertNotIn("SYNAPSE_AUTO_JOIN_SECTION=", env_text)
+
+    def test_apply_configuration_renders_auto_join_for_tuwunel(self):
+        cfg = self.sample_config()
+        cfg["matrix"]["server_implementation"] = "tuwunel"
+        cfg["features"]["auto_join"] = {
+            "rooms": ["#welcome:example.com"],
+        }
+        self.write_config(cfg)
+        tuw_template = (self.root / "modules/core/tuwunel/tuwunel.toml.template").read_text()
+        (self.root / "modules/core/tuwunel/tuwunel.toml.template").write_text(
+            tuw_template + "\n{{TUWUNEL_AUTO_JOIN_SECTION}}\n"
+        )
+        ctx = apply.ApplyContext(self.root)
+        apply.apply_configuration(ctx, server_ip="9.8.7.6", reconcile_modules=False)
+
+        tuwunel = (self.root / "modules/core/tuwunel/tuwunel.toml").read_text()
+        self.assertIn("'#welcome:example.com'", tuwunel)
+        self.assertNotIn("{{TUWUNEL_AUTO_JOIN_SECTION}}", tuwunel)
+
+    def test_reconcile_auto_join_rooms_invokes_med_admin(self):
+        cfg = self.sample_config()
+        cfg["features"]["auto_join"] = {"rooms": ["#welcome:example.com"]}
+        self.write_config(cfg)
+        ctx = apply.ApplyContext(self.root)
+        (self.root / "scripts").mkdir(exist_ok=True)
+        med_admin = self.root / "scripts/med-admin.sh"
+        med_admin.write_text("#!/usr/bin/env bash\nexit 0\n")
+        med_admin.chmod(0o755)
+
+        with (
+            patch("scripts.apply.wait_for_homeserver") as mock_wait,
+            patch("scripts.apply.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = type("R", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})()
+            apply.reconcile_auto_join_rooms(ctx, cfg)
+
+        mock_wait.assert_called_once_with(ctx, after_restart=False)
+
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("setup-auto-join-rooms", cmd)
+        self.assertIn("--yes", cmd)
+
+    def test_wait_for_homeserver_returns_when_versions_responds(self):
+        ctx = apply.ApplyContext(self.root)
+        ctx.env_file.write_text("MATRIX_DOMAIN=matrix.example.com\n")
+        with patch("scripts.apply.urllib.request.urlopen") as mock_urlopen:
+            mock_resp = mock_urlopen.return_value.__enter__.return_value
+            mock_resp.status = 200
+            apply.wait_for_homeserver(ctx, after_restart=False)
+        mock_urlopen.assert_called_once()
+
+    def test_write_env_file_preserves_med_admin_credentials(self):
+        ctx = apply.ApplyContext(self.root)
+        ctx.env_file.write_text(
+            "MED_ADMIN_USERNAME=med-admin\n"
+            "MED_ADMIN_PASSWORD=secret123456789\n"
+            "OLD_KEY=keep-me\n"
+        )
+        apply.write_env_file(ctx, {"MATRIX_DOMAIN": "matrix.example.com", "SERVER_NAME": "example.com"})
+        env_text = ctx.env_file.read_text()
+        self.assertIn("MED_ADMIN_USERNAME=med-admin", env_text)
+        self.assertIn("MED_ADMIN_PASSWORD=secret123456789", env_text)
+        self.assertNotIn("OLD_KEY=keep-me", env_text)
 
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)

@@ -17,6 +17,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+
+def _ensure_repo_on_path() -> Path:
+    repo_dir = Path(__file__).resolve().parent.parent
+    if str(repo_dir) not in sys.path:
+        sys.path.insert(0, str(repo_dir))
+    return repo_dir
+
 def _load_tuwunel_admin_module():
     script_dir = Path(__file__).resolve().parent
     if str(script_dir) not in sys.path:
@@ -207,10 +216,15 @@ class Context:
         self.ensure_base_url()
         self.ensure_auth_username()
         self.prompt_for_auth_password()
+        token = self._login_for_token(self.auth_username, self.auth_password)
+        self.access_token = token
+        return token
+
+    def _login_for_token(self, username: str, password: str) -> str:
         payload = {
             "type": "m.login.password",
-            "user": self.auth_username,
-            "password": self.auth_password,
+            "user": username,
+            "password": password,
         }
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -219,7 +233,6 @@ class Context:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        data = {}
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode("utf-8") or "{}")
@@ -243,8 +256,28 @@ class Context:
         token = data.get("access_token", "")
         if not token:
             die("Could not obtain an admin access token (missing access_token in response).")
-        self.access_token = token
         return token
+
+    def verify_password_login(self, username: str, password: str) -> bool:
+        self.ensure_base_url()
+        payload = {
+            "type": "m.login.password",
+            "user": username,
+            "password": password,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/_matrix/client/v3/login",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8") or "{}")
+        except Exception:
+            return False
+        return bool(data.get("access_token"))
 
     def _request_json(
         self, *, method: str, endpoint: str, payload: dict[str, Any] | None, api_prefix: str
@@ -289,36 +322,65 @@ class Context:
     ) -> dict[str, Any]:
         return self._request_json(method=method, endpoint=endpoint, payload=payload, api_prefix="_matrix/client/v3")
 
+    def client_api_status(
+        self, method: str, endpoint: str, payload: dict[str, Any] | None = None
+    ) -> tuple[int, dict[str, Any]]:
+        self.ensure_base_url()
+        token = self.get_admin_token()
+        data_bytes = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(
+            f"{self.base_url}/_matrix/client/v3/{endpoint}",
+            data=data_bytes,
+            method=method,
+            headers={
+                "Authorization": f"Bearer {token}",
+                **({"Content-Type": "application/json"} if payload is not None else {}),
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode("utf-8")
+                return resp.status, json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            parsed: dict[str, Any] = {}
+            try:
+                parsed = json.loads(raw) if raw else {}
+            except Exception:
+                pass
+            return e.code, parsed
+        except Exception as e:
+            die(f"API request failed: {e}")
+        return 0, {}
 
-def cmd_bootstrap(ctx: Context, args: argparse.Namespace) -> None:
-    ctx.read_deploy_env()
-    ctx.ensure_bootstrap_config()
 
-    if args.generate_password and args.password:
-        die("Use either --password or --generate-password, not both.")
+def is_bootstrapped(ctx: Context) -> bool:
+    env = load_env_file(ctx.env_path)
+    username = env.get("MED_ADMIN_USERNAME", "").strip()
+    password = env.get("MED_ADMIN_PASSWORD", "").strip()
+    return bool(username and password)
 
-    password = args.password or generate_password()
 
+def _reset_existing_user_password(ctx: Context, username: str, password: str) -> bool:
+    ctx.ensure_server_name()
     if ctx.is_tuwunel():
         tuwunel_admin = _load_tuwunel_admin_module()
         admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path, project_root=ctx.repo_dir)
-        info(f"Bootstrapping admin account '{args.username}' via Tuwunel registration API…")
         try:
-            admin.create_user(args.username, password, grant_admin=True)
-        except tuwunel_admin.TuwunelAdminError as exc:
-            die(str(exc))
-        upsert_env_value(ctx.env_path, "MED_ADMIN_USERNAME", args.username)
-        upsert_env_value(ctx.env_path, "MED_ADMIN_PASSWORD", password)
-        success(f"Admin account '{args.username}' ready for admin operations.")
-        success("Credentials stored in .env for automatic use by admin commands.")
-        return
+            admin.reset_password(username, password)
+        except tuwunel_admin.TuwunelAdminError:
+            return False
+        return ctx.verify_password_login(username, password)
+
+    temp_localpart = f"med-bootstrap-{secrets.token_hex(4)}"
+    temp_password = generate_password(24)
     create_cmd = [
         "bash",
         str(ctx.script_dir / "create-account.sh"),
         "--username",
-        args.username,
+        temp_localpart,
         "--password",
-        password,
+        temp_password,
         "--admin",
         "--yes",
     ]
@@ -327,16 +389,115 @@ def cmd_bootstrap(ctx: Context, args: argparse.Namespace) -> None:
     if ctx.shared_secret:
         create_cmd += ["--shared-secret", ctx.shared_secret]
 
-    info(f"Bootstrapping admin account '{args.username}' via shared-secret registration…")
     result = subprocess.run(create_cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        msg = result.stderr.strip() or result.stdout.strip() or "create-account failed."
-        die(msg)
+        return False
 
-    upsert_env_value(ctx.env_path, "MED_ADMIN_USERNAME", args.username)
+    saved_token = ctx.access_token
+    saved_username = ctx.auth_username
+    saved_password = ctx.auth_password
+    try:
+        ctx.access_token = ""
+        ctx.auth_username = temp_localpart
+        ctx.auth_password = temp_password
+        ctx._login_for_token(temp_localpart, temp_password)
+        target_id = to_user_id(username, ctx.server_name)
+        temp_id = to_user_id(temp_localpart, ctx.server_name)
+        ctx.admin_api(
+            "POST",
+            f"v1/reset_password/{urllib.parse.quote(target_id, safe='')}",
+            {"new_password": password, "logout_devices": True},
+        )
+        ctx.admin_api(
+            "POST",
+            f"v1/deactivate/{urllib.parse.quote(temp_id, safe='')}",
+            {"erase": True},
+        )
+    except SystemExit:
+        return False
+    finally:
+        ctx.access_token = saved_token
+        ctx.auth_username = saved_username
+        ctx.auth_password = saved_password
+
+    return ctx.verify_password_login(username, password)
+
+
+def run_bootstrap(ctx: Context, *, username: str = "med-admin", password: str | None = None) -> None:
+    ctx.read_deploy_env()
+    ctx.ensure_bootstrap_config()
+    password = password or generate_password()
+
+    if ctx.is_tuwunel():
+        tuwunel_admin = _load_tuwunel_admin_module()
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path, project_root=ctx.repo_dir)
+        info(f"Creating admin account '{username}' via Tuwunel registration API…")
+        try:
+            admin.create_user(username, password, grant_admin=True)
+        except tuwunel_admin.TuwunelAdminError as exc:
+            die(str(exc))
+    else:
+        create_cmd = [
+            "bash",
+            str(ctx.script_dir / "create-account.sh"),
+            "--username",
+            username,
+            "--password",
+            password,
+            "--admin",
+            "--yes",
+        ]
+        if ctx.base_url:
+            create_cmd += ["--base-url", ctx.base_url]
+        if ctx.shared_secret:
+            create_cmd += ["--shared-secret", ctx.shared_secret]
+
+        info(f"Creating admin account '{username}' via shared-secret registration…")
+        result = subprocess.run(create_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            msg = result.stderr.strip() or result.stdout.strip() or "create-account failed."
+            die(msg)
+
+    ctx.ensure_base_url()
+    if not ctx.verify_password_login(username, password):
+        info(
+            f"Password login failed for '{username}' "
+            "(account may already exist); attempting password reset…"
+        )
+        if not _reset_existing_user_password(ctx, username, password):
+            die(
+                f"Account '{username}' is not usable with the generated password "
+                "(it may already exist with a different password, or local password login may be disabled). "
+                f"Run 'bash scripts/med-admin.sh bootstrap --username {username} --password <known-password>' "
+                "or pass --access-token."
+            )
+
+    upsert_env_value(ctx.env_path, "MED_ADMIN_USERNAME", username)
     upsert_env_value(ctx.env_path, "MED_ADMIN_PASSWORD", password)
-    success(f"Admin account '{args.username}' ready for admin operations.")
+    ctx.med_admin_username = username
+    ctx.med_admin_password = password
+    ctx.auth_username = username
+    ctx.auth_password = password
+    success(f"Admin account '{username}' ready for admin operations.")
     success("Credentials stored in .env for automatic use by admin commands.")
+
+
+def ensure_bootstrapped(ctx: Context) -> None:
+    if is_bootstrapped(ctx):
+        return
+    info("med-admin is not bootstrapped yet; creating operator account automatically…")
+    run_bootstrap(ctx)
+
+
+def cmd_bootstrap(ctx: Context, args: argparse.Namespace) -> None:
+    ctx.read_deploy_env()
+    ctx.ensure_bootstrap_config()
+
+    if args.generate_password and args.password:
+        die("Use either --password or --generate-password, not both.")
+
+    password = args.password or (generate_password() if args.generate_password else None)
+    run_bootstrap(ctx, username=args.username, password=password)
 
 
 def _parse_int(name: str, raw: str) -> int | None:
@@ -506,6 +667,212 @@ def _parse_invites(raw_invites: list[str], server_name: str) -> list[str]:
     return users
 
 
+def _encode_room_alias(alias: str) -> str:
+    return urllib.parse.quote(alias, safe="")
+
+
+def _resolve_room_id(ctx: Context, alias: str) -> str | None:
+    status, data = ctx.client_api_status("GET", f"directory/room/{_encode_room_alias(alias)}")
+    if status == 404:
+        return None
+    if status >= 400:
+        code = data.get("errcode", "")
+        msg = data.get("error", "")
+        die(f"Could not resolve alias {alias} (HTTP {status}, {code}: {msg}).")
+    room_id = data.get("room_id")
+    return room_id if isinstance(room_id, str) and room_id else None
+
+
+def _room_has_messages(ctx: Context, room_id: str) -> bool:
+    encoded_room = urllib.parse.quote(room_id, safe="")
+    status, data = ctx.client_api_status("GET", f"rooms/{encoded_room}/messages?dir=b&limit=20")
+    if status >= 400:
+        return False
+    for event in data.get("chunk", []):
+        if event.get("type") == "m.room.message":
+            return True
+    return False
+
+
+def _send_text_message(ctx: Context, room_id: str, body: str) -> str:
+    encoded_room = urllib.parse.quote(room_id, safe="")
+    txn_id = secrets.token_hex(16)
+    response = ctx.client_api(
+        "PUT",
+        f"rooms/{encoded_room}/send/m.room.message/{txn_id}",
+        {"msgtype": "m.text", "body": body},
+    )
+    return response.get("event_id", "")
+
+
+def _set_room_name(ctx: Context, room_id: str, name: str) -> None:
+    encoded_room = urllib.parse.quote(room_id, safe="")
+    ctx.client_api("PUT", f"rooms/{encoded_room}/state/m.room.name", {"name": name})
+
+
+def _set_room_topic(ctx: Context, room_id: str, topic: str) -> None:
+    encoded_room = urllib.parse.quote(room_id, safe="")
+    ctx.client_api("PUT", f"rooms/{encoded_room}/state/m.room.topic", {"topic": topic})
+
+
+def _ensure_in_room(ctx: Context, room_id_or_alias: str) -> None:
+    encoded = urllib.parse.quote(room_id_or_alias, safe="")
+    status, data = ctx.client_api_status("POST", f"join/{encoded}", {})
+    if status < 400:
+        return
+    errcode = data.get("errcode", "")
+    if errcode in {"M_FORBIDDEN", "M_UNKNOWN"} and "already" in str(data.get("error", "")).lower():
+        return
+    if status == 403 and errcode == "M_FORBIDDEN":
+        # Already joined or cannot join; handover/name updates may still work.
+        return
+
+
+def _apply_handover(ctx: Context, room_id: str, handover: list[str], server_name: str) -> None:
+    if not handover:
+        return
+    user_ids = [to_user_id(entry, server_name) for entry in handover]
+    encoded_room = urllib.parse.quote(room_id, safe="")
+
+    for user_id in user_ids:
+        ctx.client_api_status("POST", f"rooms/{encoded_room}/invite", {"user_id": user_id})
+
+    status, power_levels = ctx.client_api_status("GET", f"rooms/{encoded_room}/state/m.room.power_levels")
+    if status >= 400:
+        die(f"Could not read power levels for {room_id} (HTTP {status}).")
+    users = power_levels.get("users")
+    if not isinstance(users, dict):
+        users = {}
+    for user_id in user_ids:
+        users[user_id] = 100
+    power_levels["users"] = users
+    ctx.client_api("PUT", f"rooms/{encoded_room}/state/m.room.power_levels", power_levels)
+
+
+def _create_room_from_spec(ctx: Context, spec: dict[str, Any]) -> str:
+    payload: dict[str, Any] = {
+        "visibility": "public",
+        "preset": "public_chat",
+        "creation_content": {"m.federate": bool(spec.get("federated", False))},
+    }
+    alias_localpart = spec["alias"].lstrip("#").split(":", 1)[0]
+    payload["room_alias_name"] = alias_localpart
+    if spec.get("name"):
+        payload["name"] = spec["name"]
+    if spec.get("topic"):
+        payload["topic"] = spec["topic"]
+    handover = spec.get("handover") or []
+    if handover:
+        ctx.ensure_server_name()
+        ctx.ensure_auth_username()
+        creator_id = to_user_id(ctx.auth_username, ctx.server_name)
+        invite_ids = [to_user_id(entry, ctx.server_name) for entry in handover]
+        payload["invite"] = invite_ids
+        power_users = {creator_id: 100}
+        for user_id in invite_ids:
+            power_users[user_id] = 100
+        payload["power_level_content_override"] = {"users": power_users}
+    response = ctx.client_api("POST", "createRoom", payload)
+    room_id = response.get("room_id", "")
+    if not room_id:
+        die(f"createRoom did not return a room_id for {spec['alias']}.")
+    return room_id
+
+
+def _load_auto_join_config(deploy_yaml: Path) -> dict[str, Any]:
+    if not deploy_yaml.exists():
+        die(f"Config file not found: {deploy_yaml}")
+    data = yaml.safe_load(deploy_yaml.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        die(f"{deploy_yaml} must contain a YAML object at the root.")
+    features = data.get("features", {})
+    if not isinstance(features, dict):
+        die(f"{deploy_yaml} is missing a features section.")
+    auto_join = features.get("auto_join", {})
+    if not isinstance(auto_join, dict):
+        die(f"{deploy_yaml} is missing features.auto_join.")
+    return auto_join
+
+
+def _provision_auto_join_room(
+    ctx: Context,
+    spec: dict[str, Any],
+    *,
+    force_message: bool,
+) -> None:
+    alias = spec["alias"]
+    room_id = _resolve_room_id(ctx, alias)
+    if room_id:
+        info(f"Room already exists for {alias} ({room_id}).")
+        _ensure_in_room(ctx, room_id)
+        if spec.get("name"):
+            _set_room_name(ctx, room_id, spec["name"])
+        if spec.get("topic"):
+            _set_room_topic(ctx, room_id, spec["topic"])
+        ctx.ensure_server_name()
+        _apply_handover(ctx, room_id, spec.get("handover") or [], ctx.server_name)
+    else:
+        info(f"Creating room {alias}…")
+        room_id = _create_room_from_spec(ctx, spec)
+        success(f"Created {alias} ({room_id}).")
+
+    if spec.get("message"):
+        if force_message or not _room_has_messages(ctx, room_id):
+            _send_text_message(ctx, room_id, spec["message"])
+            success(f"Posted welcome message to {alias}.")
+        else:
+            info(f"Skipping message for {alias} (room already has messages).")
+
+
+def cmd_setup_auto_join_rooms(ctx: Context, args: argparse.Namespace) -> None:
+    _ensure_repo_on_path()
+    from scripts import apply
+
+    ctx.read_deploy_env()
+    ctx.ensure_base_url()
+    ctx.ensure_server_name()
+
+    deploy_yaml = Path(args.deploy_yaml) if args.deploy_yaml else ctx.repo_dir / "deploy.yaml"
+    auto_join = _load_auto_join_config(deploy_yaml)
+    apply.validate_auto_join_config(auto_join)
+
+    rooms = auto_join.get("rooms") or []
+    if not rooms:
+        info("No auto-join rooms configured; nothing to do.")
+        return
+
+    specs = [apply.parse_auto_join_room_entry(entry, ctx.server_name) for entry in rooms]
+
+    if not args.yes:
+        print()
+        print(f"{BOLD}Setup auto-join rooms{RESET}")
+        for spec in specs:
+            print(f"  {CYAN}{spec['alias']}{RESET}")
+            if spec.get("name"):
+                print(f"    name:      {spec['name']}")
+            if spec.get("topic"):
+                print(f"    topic:     {spec['topic']}")
+            if spec.get("handover"):
+                print(f"    handover:  {', '.join(spec['handover'])}")
+            if spec.get("message"):
+                preview = spec["message"].replace("\n", " ")[:60]
+                suffix = "…" if len(spec["message"]) > 60 else ""
+                print(f"    message:   {preview}{suffix}")
+            federated = spec.get("federated", False)
+            print(f"    federated: {federated}")
+        if not ask_yn("Provision these rooms now?", "y"):
+            die("Aborted.")
+
+    for spec in specs:
+        _provision_auto_join_room(
+            ctx,
+            spec,
+            force_message=args.force_message,
+        )
+
+    success("Auto-join room setup complete.")
+
+
 def cmd_create_room(ctx: Context, args: argparse.Namespace) -> None:
     ctx.read_deploy_env()
     ctx.ensure_base_url()
@@ -575,7 +942,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  bash scripts/med-admin.sh list-admins [--filter alice] [--limit 100] [--from 0]\n"
             "  bash scripts/med-admin.sh get-account USERNAME_OR_MXID\n"
             "  bash scripts/med-admin.sh reset-password USERNAME_OR_MXID [--password 'new-long-secret'] [--yes]\n"
-            "  bash scripts/med-admin.sh create-room [--name 'Care Team'] [--alias care-team] [--topic 'Clinical coordination'] [--public|--private] [--invite USER_OR_MXID]... [--direct] [--yes]"
+            "  bash scripts/med-admin.sh create-room [--name 'Care Team'] [--alias care-team] [--topic 'Clinical coordination'] [--public|--private] [--invite USER_OR_MXID]... [--direct] [--yes]\n"
+            "  bash scripts/med-admin.sh setup-auto-join-rooms [--deploy-yaml deploy.yaml] [--force-message] [--yes]"
         ),
     )
     parser.add_argument("--base-url", default="", help="Override Synapse base URL.")
@@ -619,6 +987,14 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--invite", action="append", default=[])
     c.add_argument("--direct", action="store_true")
 
+    s = sub.add_parser("setup-auto-join-rooms")
+    s.add_argument("--deploy-yaml", default="")
+    s.add_argument(
+        "--force-message",
+        action="store_true",
+        help="Post the configured welcome message even when the room already has messages.",
+    )
+
     return parser
 
 
@@ -638,6 +1014,7 @@ def _reorder_argv_for_argparse(argv: list[str]) -> list[str]:
         "get-account",
         "reset-password",
         "create-room",
+        "setup-auto-join-rooms",
     }
 
     global_args: list[str] = []
@@ -668,6 +1045,16 @@ def _reorder_argv_for_argparse(argv: list[str]) -> list[str]:
     return global_args + command_args
 
 
+def should_auto_bootstrap(args: argparse.Namespace) -> bool:
+    if args.command == "bootstrap":
+        return False
+    if args.access_token:
+        return False
+    if args.admin_username or args.admin_password:
+        return False
+    return True
+
+
 def main(argv: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(_reorder_argv_for_argparse(argv))
@@ -685,6 +1072,10 @@ def main(argv: list[str]) -> int:
     if not hasattr(args, "yes"):
         setattr(args, "yes", False)
 
+    if should_auto_bootstrap(args):
+        ensure_bootstrapped(ctx)
+        ctx.read_deploy_env()
+
     if args.command == "bootstrap":
         if args.shared_secret:
             ctx.shared_secret = args.shared_secret
@@ -700,6 +1091,8 @@ def main(argv: list[str]) -> int:
     elif args.command == "create-room":
         args.visibility = "public" if args.public else "private" if args.private else ""
         cmd_create_room(ctx, args)
+    elif args.command == "setup-auto-join-rooms":
+        cmd_setup_auto_join_rooms(ctx, args)
     else:
         die(f"Unknown command: {args.command}")
 

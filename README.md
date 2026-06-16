@@ -456,16 +456,47 @@ bash apply.sh --rotate-secrets
 
 > `--rotate-secrets` is destructive for existing deployments unless you plan migration/restart carefully.
 
-### Synapse auto-join rooms
+### Auto-join rooms (Synapse and Tuwunel)
 
-`features.synapse.auto_join` controls which rooms new users are joined to on registration, and whether those rooms are auto-created on first signup. Settings map to [Synapse auto-join configuration](https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html#auto_join_rooms) in the generated `homeserver.yaml`.
+`features.auto_join` defines which rooms new users are joined to on registration. The same configuration works for both Synapse and Tuwunel. `bash apply.sh` writes the alias list into the generated homeserver config and **automatically provisions** the rooms (name, topic, welcome message, handover) via med-admin — no separate setup step required.
 
-- `rooms`: list of room or space aliases (for example `#welcome:example.com`). When empty, no auto-join block is written.
-- `autocreate`: create listed rooms when the first user registers (default `true`).
-- `autocreate_federated`: whether auto-created rooms are federated (default `true`).
-- `room_preset`: `public_chat`, `private_chat`, or `trusted_private_chat` (default `public_chat`).
-- `mxid_localpart`: localpart of the user that creates or invites to auto-join rooms; **required** for `private_chat` and `trusted_private_chat`.
-- `rooms_for_guests`: auto-join guest accounts too (default `true`).
+- `rooms`: list of room aliases. Each entry may be a plain alias string (for example `#welcome:example.com`) or an object with:
+  - `alias` (required for objects): local alias name or full alias
+  - `name`, `topic`, `message`: room display name, topic, and a one-time welcome message
+  - `handover`: list of local usernames or MXIDs to invite and grant room admin (power level 100) so they can manage the room going forward
+  - `federated`: when `false` (default), the room is **public on your server** but not open to remote Matrix homeservers; set `true` only if you intentionally want the room federated
+- `synapse.rooms_for_guests`: Synapse-only — auto-join guest accounts too (default `true` when set)
+
+Rooms are created as **locally public** spaces: any user on your server can join, but they are **not** world-wide public unless you set `federated: true`.
+
+Example:
+
+```yaml
+features:
+  auto_join:
+    rooms:
+      - alias: welcome
+        name: Welcome
+        topic: Start here for server info and introductions
+        message: |
+          Welcome to Example Chat! We hope you enjoy your time here.
+        handover:
+          - community-admin
+        federated: false
+      - '#announce:example.com'
+    synapse:
+      rooms_for_guests: false
+```
+
+When `rooms` is non-empty, `bash apply.sh` restarts services (by default), waits for the homeserver to respond, then provisions the rooms automatically via med-admin. Use `bash apply.sh --skip-auto-join-provision` to render config without provisioning (for example in CI).
+
+To re-provision manually or post the welcome message again, use:
+
+```bash
+bash scripts/med-admin.sh setup-auto-join-rooms --yes
+```
+
+Add `--force-message` to post the configured welcome message even when the room already has messages.
 
 ### Element Web customization
 
@@ -805,31 +836,17 @@ bash scripts/create-account.sh --username alice --password 'replace-with-a-long-
 
 **Admin account operations with `med-admin`**
 
-`med-admin.sh` is a command-line tool for bootstrapping and managing a dedicated operator admin account. After initial bootstrap, all admin commands work seamlessly without requiring credentials to be passed.
+`med-admin.sh` manages a dedicated operator admin account (`med-admin` by default). On first use, it **bootstraps itself automatically** — creating the account, storing credentials in `.env`, and proceeding with the requested command. If local password login is disabled (SSO-only), bootstrap fails with a clear error; pass `--access-token` instead.
 
-**Bootstrap a `med-admin` account** (one-time setup, automatic)
-
-Create and store the dedicated admin account. The tool generates its own secure password:
-
-```bash
-bash scripts/med-admin.sh bootstrap
-```
-
-Optionally, you can specify a custom password:
+You can still bootstrap explicitly (for example to choose a custom password):
 
 ```bash
 bash scripts/med-admin.sh bootstrap --password 'replace-with-a-long-random-password'
 ```
 
-This command:
-1. Generates a secure password (or uses your custom one)
-2. Creates the `med-admin` admin account via shared-secret registration
-3. Stores both username and password in `.env` automatically
-4. All subsequent admin commands use these stored credentials
+After bootstrap, all admin commands use the stored credentials without extra flags.
 
 **List all local accounts**
-
-After bootstrap, commands work without additional credentials:
 
 ```bash
 bash scripts/med-admin.sh list-accounts
@@ -880,6 +897,16 @@ bash scripts/med-admin.sh create-room \
   --yes
 ```
 
+**Provision auto-join rooms from deploy.yaml**
+
+Normally `bash apply.sh` provisions rooms automatically. To run manually (or re-apply after config changes):
+
+```bash
+bash scripts/med-admin.sh setup-auto-join-rooms --yes
+```
+
+Reads `features.auto_join.rooms` from `deploy.yaml`. Use `--deploy-yaml path/to/deploy.yaml` for a non-default config file. Use `--force-message` to post the welcome message even when the room already has messages.
+
 Notes:
 - `--name`, `--alias`, `--topic`, `--invite`, and `--direct` are optional.
 - Visibility defaults to private when omitted (`--public` or `--private` can be passed explicitly).
@@ -887,7 +914,7 @@ Notes:
 
 **How it works**
 
-- `bootstrap` generates a secure password automatically and stores both username and password in `.env`
+- On first use, med-admin bootstraps automatically and stores credentials in `.env`. Run `bootstrap` explicitly to set a custom password.
 - All subsequent admin commands automatically use the stored `med-admin` credentials
 - No need to pass credentials with each command
 - If you need to use a different admin account, override with `--access-token` or `--admin-username`/`--admin-password`

@@ -190,6 +190,7 @@ def test_reorder_argv_for_argparse_dies_on_missing_flag_value(capsys: pytest.Cap
 def test_cmd_bootstrap_synapse_delegates_to_create_account(ctx: med_admin.Context) -> None:
     create_script = ctx.script_dir / "create-account.sh"
     create_script.write_text("#!/bin/sh\nexit 0\n")
+    ctx.base_url = "https://matrix.example.com"
     args = argparse.Namespace(
         username="med-admin",
         password="averylongsecret123",
@@ -197,7 +198,10 @@ def test_cmd_bootstrap_synapse_delegates_to_create_account(ctx: med_admin.Contex
         shared_secret="",
     )
 
-    with patch("scripts.med_admin.subprocess.run") as mock_run:
+    with (
+        patch("scripts.med_admin.subprocess.run") as mock_run,
+        patch.object(ctx, "verify_password_login", return_value=True),
+    ):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         med_admin.cmd_bootstrap(ctx, args)
 
@@ -215,6 +219,7 @@ def test_cmd_bootstrap_tuwunel_uses_registration_api(ctx: med_admin.Context) -> 
         "MATRIX_DOMAIN=matrix.example.com\n"
         "REGISTRATION_SHARED_SECRET=token\n"
     )
+    ctx.base_url = "https://matrix.example.com"
     args = argparse.Namespace(
         username="med-admin",
         password="averylongsecret123",
@@ -223,7 +228,10 @@ def test_cmd_bootstrap_tuwunel_uses_registration_api(ctx: med_admin.Context) -> 
     )
     mock_admin = MagicMock()
 
-    with patch("scripts.med_admin._load_tuwunel_admin_module") as mock_load:
+    with (
+        patch("scripts.med_admin._load_tuwunel_admin_module") as mock_load,
+        patch.object(ctx, "verify_password_login", return_value=True),
+    ):
         mock_load.return_value.load_tuwunel_admin.return_value = mock_admin
         med_admin.cmd_bootstrap(ctx, args)
 
@@ -401,6 +409,224 @@ def test_main_reorders_global_flags_before_subcommand(repo_root: Path) -> None:
     ]
 
     with patch("scripts.med_admin.cmd_list_accounts") as mock_cmd:
+        rc = med_admin.main(argv)
+
+    assert rc == 0
+    mock_cmd.assert_called_once()
+
+
+def test_resolve_room_id_returns_none_on_404(ctx: med_admin.Context) -> None:
+    ctx.base_url = "https://matrix.example.com"
+    ctx.access_token = "tok-123"
+
+    with patch.object(ctx, "client_api_status", return_value=(404, {})):
+        assert med_admin._resolve_room_id(ctx, "#welcome:example.com") is None
+
+
+def test_run_bootstrap_resets_password_when_account_already_exists(ctx: med_admin.Context) -> None:
+    ctx.base_url = "https://matrix.example.com"
+    ctx.server_name = "example.com"
+    ctx.shared_secret = "shared-secret"
+    create_script = ctx.script_dir / "create-account.sh"
+    create_script.write_text("#!/bin/sh\nexit 0\n")
+
+    with (
+        patch("scripts.med_admin.subprocess.run") as mock_run,
+        patch.object(ctx, "verify_password_login", side_effect=[False, True]),
+        patch("scripts.med_admin._reset_existing_user_password", return_value=True) as mock_reset,
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        med_admin.run_bootstrap(ctx, username="med-admin", password="averylongsecret123")
+
+    mock_reset.assert_called_once_with(ctx, "med-admin", "averylongsecret123")
+    assert "MED_ADMIN_USERNAME=med-admin" in ctx.env_path.read_text()
+
+
+def test_create_room_from_spec_includes_creator_in_power_levels(ctx: med_admin.Context) -> None:
+    ctx.base_url = "https://matrix.example.com"
+    ctx.access_token = "tok-123"
+    ctx.server_name = "example.com"
+    ctx.auth_username = "med-admin"
+    spec = {
+        "alias": "#welcome:example.com",
+        "name": "Welcome",
+        "topic": "",
+        "handover": ["alice"],
+        "federated": False,
+    }
+
+    with patch.object(ctx, "client_api", return_value={"room_id": "!room:example.com"}) as mock_api:
+        med_admin._create_room_from_spec(ctx, spec)
+
+    payload = mock_api.call_args.args[2]
+    users = payload["power_level_content_override"]["users"]
+    assert users["@med-admin:example.com"] == 100
+    assert users["@alice:example.com"] == 100
+
+
+def test_provision_auto_join_room_creates_and_messages(ctx: med_admin.Context) -> None:
+    ctx.base_url = "https://matrix.example.com"
+    ctx.access_token = "tok-123"
+    spec = {
+        "alias": "#welcome:example.com",
+        "name": "Welcome",
+        "topic": "Intro",
+        "message": "Hello there",
+        "handover": [],
+        "federated": False,
+    }
+
+    with (
+        patch.object(med_admin, "_resolve_room_id", return_value=None),
+        patch.object(med_admin, "_create_room_from_spec", return_value="!room:example.com") as mock_create,
+        patch.object(med_admin, "_room_has_messages", return_value=False),
+        patch.object(med_admin, "_send_text_message", return_value="$evt") as mock_send,
+    ):
+        med_admin._provision_auto_join_room(
+            ctx,
+            spec,
+            force_message=False,
+        )
+
+    mock_create.assert_called_once_with(ctx, spec)
+    mock_send.assert_called_once_with(ctx, "!room:example.com", "Hello there")
+
+
+def test_provision_auto_join_room_updates_existing_without_resending_message(ctx: med_admin.Context) -> None:
+    ctx.base_url = "https://matrix.example.com"
+    ctx.access_token = "tok-123"
+    ctx.server_name = "example.com"
+    spec = {
+        "alias": "#welcome:example.com",
+        "name": "Welcome",
+        "topic": "",
+        "message": "Hello there",
+        "handover": ["alice"],
+        "federated": False,
+    }
+
+    with (
+        patch.object(med_admin, "_resolve_room_id", return_value="!room:example.com"),
+        patch.object(med_admin, "_ensure_in_room"),
+        patch.object(med_admin, "_set_room_name") as mock_name,
+        patch.object(med_admin, "_apply_handover") as mock_handover,
+        patch.object(med_admin, "_room_has_messages", return_value=True),
+        patch.object(med_admin, "_send_text_message") as mock_send,
+    ):
+        med_admin._provision_auto_join_room(
+            ctx,
+            spec,
+            force_message=False,
+        )
+
+    mock_name.assert_called_once_with(ctx, "!room:example.com", "Welcome")
+    mock_handover.assert_called_once()
+    mock_send.assert_not_called()
+
+
+def test_cmd_setup_auto_join_rooms_reads_deploy_yaml(ctx: med_admin.Context, repo_root: Path) -> None:
+    deploy_yaml = repo_root / "deploy.yaml"
+    deploy_yaml.write_text(
+        "matrix:\n"
+        "  domain: matrix.example.com\n"
+        "  server_name: example.com\n"
+        "  admin_username: admin\n"
+        "features:\n"
+        "  auto_join:\n"
+        "    rooms:\n"
+        "      - alias: welcome\n"
+        "        name: Welcome\n"
+        "        message: Hi\n"
+        "        handover:\n"
+        "          - alice\n"
+    )
+    ctx.base_url = "https://matrix.example.com"
+    ctx.access_token = "tok-123"
+    args = argparse.Namespace(deploy_yaml=str(deploy_yaml), yes=True, force_message=False)
+
+    with patch.object(med_admin, "_provision_auto_join_room") as mock_provision:
+        med_admin.cmd_setup_auto_join_rooms(ctx, args)
+
+    assert mock_provision.call_count == 1
+    spec = mock_provision.call_args.args[1]
+    assert spec["alias"] == "#welcome:example.com"
+    assert spec["name"] == "Welcome"
+    assert spec["message"] == "Hi"
+
+
+def test_is_bootstrapped_false_when_credentials_missing(ctx: med_admin.Context) -> None:
+    assert med_admin.is_bootstrapped(ctx) is False
+
+
+def test_is_bootstrapped_true_when_credentials_present(ctx: med_admin.Context) -> None:
+    ctx.env_path.write_text("MED_ADMIN_USERNAME=med-admin\nMED_ADMIN_PASSWORD=secret123456\n")
+    assert med_admin.is_bootstrapped(ctx) is True
+
+
+def test_should_auto_bootstrap_skips_bootstrap_command() -> None:
+    args = argparse.Namespace(
+        command="bootstrap",
+        access_token="",
+        admin_username="",
+        admin_password="",
+    )
+    assert med_admin.should_auto_bootstrap(args) is False
+
+
+def test_should_auto_bootstrap_skips_when_access_token_provided() -> None:
+    args = argparse.Namespace(
+        command="list-accounts",
+        access_token="tok",
+        admin_username="",
+        admin_password="",
+    )
+    assert med_admin.should_auto_bootstrap(args) is False
+
+
+def test_ensure_bootstrapped_invokes_run_bootstrap(ctx: med_admin.Context) -> None:
+    with patch("scripts.med_admin.run_bootstrap") as mock_run:
+        med_admin.ensure_bootstrapped(ctx)
+    mock_run.assert_called_once_with(ctx)
+
+
+def test_ensure_bootstrapped_skips_when_already_bootstrapped(ctx: med_admin.Context) -> None:
+    ctx.env_path.write_text("MED_ADMIN_USERNAME=med-admin\nMED_ADMIN_PASSWORD=secret123456\n")
+    with patch("scripts.med_admin.run_bootstrap") as mock_run:
+        med_admin.ensure_bootstrapped(ctx)
+    mock_run.assert_not_called()
+
+
+def test_main_auto_bootstraps_before_command(repo_root: Path) -> None:
+    argv = [
+        "list-accounts",
+        "--base-url",
+        "https://matrix.example.com",
+        "--limit",
+        "5",
+    ]
+
+    with (
+        patch("scripts.med_admin.ensure_bootstrapped") as mock_bootstrap,
+        patch("scripts.med_admin.cmd_list_accounts") as mock_cmd,
+    ):
+        rc = med_admin.main(argv)
+
+    assert rc == 0
+    mock_bootstrap.assert_called_once()
+    mock_cmd.assert_called_once()
+
+
+def test_main_routes_setup_auto_join_rooms_command() -> None:
+    argv = [
+        "setup-auto-join-rooms",
+        "--yes",
+        "--base-url",
+        "https://matrix.example.com",
+        "--access-token",
+        "tok-123",
+    ]
+
+    with patch("scripts.med_admin.cmd_setup_auto_join_rooms") as mock_cmd:
         rc = med_admin.main(argv)
 
     assert rc == 0
