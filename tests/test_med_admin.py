@@ -190,6 +190,7 @@ def test_reorder_argv_for_argparse_dies_on_missing_flag_value(capsys: pytest.Cap
 def test_cmd_bootstrap_synapse_delegates_to_create_account(ctx: med_admin.Context) -> None:
     create_script = ctx.script_dir / "create-account.sh"
     create_script.write_text("#!/bin/sh\nexit 0\n")
+    ctx.base_url = "https://matrix.example.com"
     args = argparse.Namespace(
         username="med-admin",
         password="averylongsecret123",
@@ -197,7 +198,10 @@ def test_cmd_bootstrap_synapse_delegates_to_create_account(ctx: med_admin.Contex
         shared_secret="",
     )
 
-    with patch("scripts.med_admin.subprocess.run") as mock_run:
+    with (
+        patch("scripts.med_admin.subprocess.run") as mock_run,
+        patch.object(ctx, "verify_password_login", return_value=True),
+    ):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         med_admin.cmd_bootstrap(ctx, args)
 
@@ -215,6 +219,7 @@ def test_cmd_bootstrap_tuwunel_uses_registration_api(ctx: med_admin.Context) -> 
         "MATRIX_DOMAIN=matrix.example.com\n"
         "REGISTRATION_SHARED_SECRET=token\n"
     )
+    ctx.base_url = "https://matrix.example.com"
     args = argparse.Namespace(
         username="med-admin",
         password="averylongsecret123",
@@ -223,7 +228,10 @@ def test_cmd_bootstrap_tuwunel_uses_registration_api(ctx: med_admin.Context) -> 
     )
     mock_admin = MagicMock()
 
-    with patch("scripts.med_admin._load_tuwunel_admin_module") as mock_load:
+    with (
+        patch("scripts.med_admin._load_tuwunel_admin_module") as mock_load,
+        patch.object(ctx, "verify_password_login", return_value=True),
+    ):
         mock_load.return_value.load_tuwunel_admin.return_value = mock_admin
         med_admin.cmd_bootstrap(ctx, args)
 
@@ -503,6 +511,68 @@ def test_cmd_setup_auto_join_rooms_reads_deploy_yaml(ctx: med_admin.Context, rep
     assert spec["alias"] == "#welcome:example.com"
     assert spec["name"] == "Welcome"
     assert spec["message"] == "Hi"
+
+
+def test_is_bootstrapped_false_when_credentials_missing(ctx: med_admin.Context) -> None:
+    assert med_admin.is_bootstrapped(ctx) is False
+
+
+def test_is_bootstrapped_true_when_credentials_present(ctx: med_admin.Context) -> None:
+    ctx.env_path.write_text("MED_ADMIN_USERNAME=med-admin\nMED_ADMIN_PASSWORD=secret123456\n")
+    assert med_admin.is_bootstrapped(ctx) is True
+
+
+def test_should_auto_bootstrap_skips_bootstrap_command() -> None:
+    args = argparse.Namespace(
+        command="bootstrap",
+        access_token="",
+        admin_username="",
+        admin_password="",
+    )
+    assert med_admin.should_auto_bootstrap(args) is False
+
+
+def test_should_auto_bootstrap_skips_when_access_token_provided() -> None:
+    args = argparse.Namespace(
+        command="list-accounts",
+        access_token="tok",
+        admin_username="",
+        admin_password="",
+    )
+    assert med_admin.should_auto_bootstrap(args) is False
+
+
+def test_ensure_bootstrapped_invokes_run_bootstrap(ctx: med_admin.Context) -> None:
+    with patch("scripts.med_admin.run_bootstrap") as mock_run:
+        med_admin.ensure_bootstrapped(ctx)
+    mock_run.assert_called_once_with(ctx)
+
+
+def test_ensure_bootstrapped_skips_when_already_bootstrapped(ctx: med_admin.Context) -> None:
+    ctx.env_path.write_text("MED_ADMIN_USERNAME=med-admin\nMED_ADMIN_PASSWORD=secret123456\n")
+    with patch("scripts.med_admin.run_bootstrap") as mock_run:
+        med_admin.ensure_bootstrapped(ctx)
+    mock_run.assert_not_called()
+
+
+def test_main_auto_bootstraps_before_command(repo_root: Path) -> None:
+    argv = [
+        "list-accounts",
+        "--base-url",
+        "https://matrix.example.com",
+        "--limit",
+        "5",
+    ]
+
+    with (
+        patch("scripts.med_admin.ensure_bootstrapped") as mock_bootstrap,
+        patch("scripts.med_admin.cmd_list_accounts") as mock_cmd,
+    ):
+        rc = med_admin.main(argv)
+
+    assert rc == 0
+    mock_bootstrap.assert_called_once()
+    mock_cmd.assert_called_once()
 
 
 def test_main_routes_setup_auto_join_rooms_command() -> None:

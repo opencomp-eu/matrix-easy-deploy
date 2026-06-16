@@ -488,7 +488,7 @@ features:
       rooms_for_guests: false
 ```
 
-When `rooms` is non-empty, `bash apply.sh` restarts services (by default) and runs `med-admin setup-auto-join-rooms` automatically. Requires a bootstrapped `med-admin` account (`bash scripts/med-admin.sh bootstrap --yes`). Use `bash apply.sh --skip-auto-join-provision` to render config without provisioning (for example in CI).
+When `rooms` is non-empty, `bash apply.sh` restarts services (by default) and provisions the rooms automatically via med-admin (which bootstraps itself on first use if needed). Use `bash apply.sh --skip-auto-join-provision` to render config without provisioning (for example in CI).
 
 To re-provision manually or post the welcome message again, use:
 
@@ -836,31 +836,17 @@ bash scripts/create-account.sh --username alice --password 'replace-with-a-long-
 
 **Admin account operations with `med-admin`**
 
-`med-admin.sh` is a command-line tool for bootstrapping and managing a dedicated operator admin account. After initial bootstrap, all admin commands work seamlessly without requiring credentials to be passed.
+`med-admin.sh` manages a dedicated operator admin account (`med-admin` by default). On first use, it **bootstraps itself automatically** — creating the account, storing credentials in `.env`, and proceeding with the requested command. If local password login is disabled (SSO-only), bootstrap fails with a clear error; pass `--access-token` instead.
 
-**Bootstrap a `med-admin` account** (one-time setup, automatic)
-
-Create and store the dedicated admin account. The tool generates its own secure password:
-
-```bash
-bash scripts/med-admin.sh bootstrap
-```
-
-Optionally, you can specify a custom password:
+You can still bootstrap explicitly (for example to choose a custom password):
 
 ```bash
 bash scripts/med-admin.sh bootstrap --password 'replace-with-a-long-random-password'
 ```
 
-This command:
-1. Generates a secure password (or uses your custom one)
-2. Creates the `med-admin` admin account via shared-secret registration
-3. Stores both username and password in `.env` automatically
-4. All subsequent admin commands use these stored credentials
+After bootstrap, all admin commands use the stored credentials without extra flags.
 
 **List all local accounts**
-
-After bootstrap, commands work without additional credentials:
 
 ```bash
 bash scripts/med-admin.sh list-accounts
@@ -928,7 +914,7 @@ Notes:
 
 **How it works**
 
-- `bootstrap` generates a secure password automatically and stores both username and password in `.env`
+- On first use, med-admin bootstraps automatically and stores credentials in `.env`. Run `bootstrap` explicitly to set a custom password.
 - All subsequent admin commands automatically use the stored `med-admin` credentials
 - No need to pass credentials with each command
 - If you need to use a different admin account, override with `--access-token` or `--admin-username`/`--admin-password`

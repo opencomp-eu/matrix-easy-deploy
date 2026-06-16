@@ -216,10 +216,15 @@ class Context:
         self.ensure_base_url()
         self.ensure_auth_username()
         self.prompt_for_auth_password()
+        token = self._login_for_token(self.auth_username, self.auth_password)
+        self.access_token = token
+        return token
+
+    def _login_for_token(self, username: str, password: str) -> str:
         payload = {
             "type": "m.login.password",
-            "user": self.auth_username,
-            "password": self.auth_password,
+            "user": username,
+            "password": password,
         }
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -228,7 +233,6 @@ class Context:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        data = {}
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode("utf-8") or "{}")
@@ -252,8 +256,28 @@ class Context:
         token = data.get("access_token", "")
         if not token:
             die("Could not obtain an admin access token (missing access_token in response).")
-        self.access_token = token
         return token
+
+    def verify_password_login(self, username: str, password: str) -> bool:
+        self.ensure_base_url()
+        payload = {
+            "type": "m.login.password",
+            "user": username,
+            "password": password,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/_matrix/client/v3/login",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8") or "{}")
+        except Exception:
+            return False
+        return bool(data.get("access_token"))
 
     def _request_json(
         self, *, method: str, endpoint: str, payload: dict[str, Any] | None, api_prefix: str
@@ -330,6 +354,74 @@ class Context:
         return 0, {}
 
 
+def is_bootstrapped(ctx: Context) -> bool:
+    env = load_env_file(ctx.env_path)
+    username = env.get("MED_ADMIN_USERNAME", "").strip()
+    password = env.get("MED_ADMIN_PASSWORD", "").strip()
+    return bool(username and password)
+
+
+def run_bootstrap(ctx: Context, *, username: str = "med-admin", password: str | None = None) -> None:
+    ctx.read_deploy_env()
+    ctx.ensure_bootstrap_config()
+    password = password or generate_password()
+
+    if ctx.is_tuwunel():
+        tuwunel_admin = _load_tuwunel_admin_module()
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path, project_root=ctx.repo_dir)
+        info(f"Creating admin account '{username}' via Tuwunel registration API…")
+        try:
+            admin.create_user(username, password, grant_admin=True)
+        except tuwunel_admin.TuwunelAdminError as exc:
+            die(str(exc))
+    else:
+        create_cmd = [
+            "bash",
+            str(ctx.script_dir / "create-account.sh"),
+            "--username",
+            username,
+            "--password",
+            password,
+            "--admin",
+            "--yes",
+        ]
+        if ctx.base_url:
+            create_cmd += ["--base-url", ctx.base_url]
+        if ctx.shared_secret:
+            create_cmd += ["--shared-secret", ctx.shared_secret]
+
+        info(f"Creating admin account '{username}' via shared-secret registration…")
+        result = subprocess.run(create_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            msg = result.stderr.strip() or result.stdout.strip() or "create-account failed."
+            die(msg)
+
+    ctx.ensure_base_url()
+    if not ctx.verify_password_login(username, password):
+        die(
+            f"Account '{username}' is not usable with the generated password "
+            "(it may already exist with a different password, or local password login may be disabled). "
+            f"Run 'bash scripts/med-admin.sh bootstrap --username {username} --password <known-password>' "
+            "or pass --access-token."
+        )
+
+    upsert_env_value(ctx.env_path, "MED_ADMIN_USERNAME", username)
+    upsert_env_value(ctx.env_path, "MED_ADMIN_PASSWORD", password)
+    ctx.med_admin_username = username
+    ctx.med_admin_password = password
+    ctx.auth_username = username
+    ctx.auth_password = password
+    success(f"Admin account '{username}' ready for admin operations.")
+    success("Credentials stored in .env for automatic use by admin commands.")
+
+
+def ensure_bootstrapped(ctx: Context) -> None:
+    if is_bootstrapped(ctx):
+        return
+    info("med-admin is not bootstrapped yet; creating operator account automatically…")
+    run_bootstrap(ctx)
+
+
 def cmd_bootstrap(ctx: Context, args: argparse.Namespace) -> None:
     ctx.read_deploy_env()
     ctx.ensure_bootstrap_config()
@@ -337,46 +429,8 @@ def cmd_bootstrap(ctx: Context, args: argparse.Namespace) -> None:
     if args.generate_password and args.password:
         die("Use either --password or --generate-password, not both.")
 
-    password = args.password or generate_password()
-
-    if ctx.is_tuwunel():
-        tuwunel_admin = _load_tuwunel_admin_module()
-        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path, project_root=ctx.repo_dir)
-        info(f"Bootstrapping admin account '{args.username}' via Tuwunel registration API…")
-        try:
-            admin.create_user(args.username, password, grant_admin=True)
-        except tuwunel_admin.TuwunelAdminError as exc:
-            die(str(exc))
-        upsert_env_value(ctx.env_path, "MED_ADMIN_USERNAME", args.username)
-        upsert_env_value(ctx.env_path, "MED_ADMIN_PASSWORD", password)
-        success(f"Admin account '{args.username}' ready for admin operations.")
-        success("Credentials stored in .env for automatic use by admin commands.")
-        return
-    create_cmd = [
-        "bash",
-        str(ctx.script_dir / "create-account.sh"),
-        "--username",
-        args.username,
-        "--password",
-        password,
-        "--admin",
-        "--yes",
-    ]
-    if ctx.base_url:
-        create_cmd += ["--base-url", ctx.base_url]
-    if ctx.shared_secret:
-        create_cmd += ["--shared-secret", ctx.shared_secret]
-
-    info(f"Bootstrapping admin account '{args.username}' via shared-secret registration…")
-    result = subprocess.run(create_cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        msg = result.stderr.strip() or result.stdout.strip() or "create-account failed."
-        die(msg)
-
-    upsert_env_value(ctx.env_path, "MED_ADMIN_USERNAME", args.username)
-    upsert_env_value(ctx.env_path, "MED_ADMIN_PASSWORD", password)
-    success(f"Admin account '{args.username}' ready for admin operations.")
-    success("Credentials stored in .env for automatic use by admin commands.")
+    password = args.password or (generate_password() if args.generate_password else None)
+    run_bootstrap(ctx, username=args.username, password=password)
 
 
 def _parse_int(name: str, raw: str) -> int | None:
@@ -919,6 +973,16 @@ def _reorder_argv_for_argparse(argv: list[str]) -> list[str]:
     return global_args + command_args
 
 
+def should_auto_bootstrap(args: argparse.Namespace) -> bool:
+    if args.command == "bootstrap":
+        return False
+    if args.access_token:
+        return False
+    if args.admin_username or args.admin_password:
+        return False
+    return True
+
+
 def main(argv: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(_reorder_argv_for_argparse(argv))
@@ -935,6 +999,10 @@ def main(argv: list[str]) -> int:
     # align per-command --yes support from legacy script
     if not hasattr(args, "yes"):
         setattr(args, "yes", False)
+
+    if should_auto_bootstrap(args):
+        ensure_bootstrapped(ctx)
+        ctx.read_deploy_env()
 
     if args.command == "bootstrap":
         if args.shared_secret:

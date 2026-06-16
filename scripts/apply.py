@@ -1476,8 +1476,8 @@ def reconcile_auto_join_rooms(ctx: ApplyContext, config: dict) -> None:
     if result.returncode != 0:
         msg = result.stderr.strip() or result.stdout.strip() or "med-admin setup-auto-join-rooms failed"
         raise RuntimeError(
-            "Auto-join room provisioning failed. Ensure the homeserver is running and "
-            "med-admin is bootstrapped (bash scripts/med-admin.sh bootstrap --yes). "
+            "Auto-join room provisioning failed. Ensure the homeserver is running "
+            "and local password login is enabled (or pass med-admin --access-token). "
             f"Details: {msg}"
         )
     print("Auto-join rooms: provisioning complete.")
