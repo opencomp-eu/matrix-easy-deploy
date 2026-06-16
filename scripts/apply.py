@@ -330,6 +330,54 @@ def validate_element_config(element: dict) -> None:
 
 
 AUTO_JOIN_ROOM_PRESETS = frozenset({"public_chat", "private_chat", "trusted_private_chat"})
+AUTO_JOIN_ROOM_OBJECT_KEYS = frozenset({"alias", "name", "topic", "message"})
+
+
+def normalize_auto_join_room_alias(raw: str, server_name: str) -> str:
+    cleaned = raw.strip()
+    if cleaned.startswith("#") and ":" in cleaned:
+        return cleaned
+    localpart = cleaned.lstrip("#").split(":", 1)[0]
+    if not localpart:
+        raise ValueError(f"Invalid room alias: {raw!r}")
+    return f"#{localpart}:{server_name}"
+
+
+def validate_auto_join_room_entry(entry: object, path: str) -> None:
+    if isinstance(entry, str):
+        if not entry.strip():
+            raise ValueError(f"{path} must be a non-empty string")
+        return
+    if isinstance(entry, dict):
+        _require_str(entry.get("alias"), f"{path}.alias")
+        for key in ("name", "topic", "message"):
+            if key in entry and entry[key] is not None and not isinstance(entry[key], str):
+                raise ValueError(f"{path}.{key} must be a string")
+        unknown = set(entry) - AUTO_JOIN_ROOM_OBJECT_KEYS
+        if unknown:
+            raise ValueError(f"{path} has unknown keys: {', '.join(sorted(unknown))}")
+        return
+    raise ValueError(f"{path} must be a string alias or an object with alias")
+
+
+def parse_auto_join_room_entry(entry: str | dict, server_name: str) -> dict[str, str]:
+    if isinstance(entry, str):
+        return {
+            "alias": normalize_auto_join_room_alias(entry, server_name),
+            "name": "",
+            "topic": "",
+            "message": "",
+        }
+    return {
+        "alias": normalize_auto_join_room_alias(entry["alias"], server_name),
+        "name": entry.get("name") or "",
+        "topic": entry.get("topic") or "",
+        "message": entry.get("message") or "",
+    }
+
+
+def auto_join_room_aliases(rooms: list, server_name: str) -> list[str]:
+    return [parse_auto_join_room_entry(entry, server_name)["alias"] for entry in rooms]
 
 
 def get_synapse_auto_join_config(features: dict) -> dict:
@@ -340,7 +388,11 @@ def get_synapse_auto_join_config(features: dict) -> dict:
 
 def validate_auto_join_config(auto_join: dict) -> None:
     if "rooms" in auto_join:
-        _require_str_list(auto_join.get("rooms"), "features.synapse.auto_join.rooms")
+        rooms = auto_join.get("rooms")
+        if not isinstance(rooms, list):
+            raise ValueError("features.synapse.auto_join.rooms must be a list")
+        for index, entry in enumerate(rooms):
+            validate_auto_join_room_entry(entry, f"features.synapse.auto_join.rooms[{index}]")
 
     for key in ("autocreate", "autocreate_federated", "rooms_for_guests"):
         if key in auto_join:
@@ -366,16 +418,24 @@ def validate_auto_join_config(auto_join: dict) -> None:
             )
 
 
-def build_synapse_auto_join_section(auto_join: dict) -> str:
+def build_synapse_auto_join_section(auto_join: dict, server_name: str = "") -> str:
     rooms = auto_join.get("rooms") or []
     if not rooms:
         return ""
+
+    if not server_name:
+        aliases = [
+            entry if isinstance(entry, str) else entry.get("alias", "")
+            for entry in rooms
+        ]
+    else:
+        aliases = auto_join_room_aliases(rooms, server_name)
 
     lines = [
         "# Auto-join rooms for new registrations",
         "auto_join_rooms:",
     ]
-    for alias in rooms:
+    for alias in aliases:
         lines.append(f"  - {yaml.safe_dump(alias).strip()}")
 
     autocreate = auto_join.get("autocreate", True)
@@ -589,7 +649,10 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     local_login_enabled = bool(features.get("local_login_enabled", True))
     derived["LOCAL_LOGIN_ENABLED"] = "true" if local_login_enabled else "false"
 
-    derived["SYNAPSE_AUTO_JOIN_SECTION"] = build_synapse_auto_join_section(get_synapse_auto_join_config(features))
+    derived["SYNAPSE_AUTO_JOIN_SECTION"] = build_synapse_auto_join_section(
+        get_synapse_auto_join_config(features),
+        server_name=server_name,
+    )
 
     element = features.get("element", {}) if isinstance(features.get("element", {}), dict) else {}
     element_enabled = bool(element.get("enabled", True))

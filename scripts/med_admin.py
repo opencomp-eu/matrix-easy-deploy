@@ -17,6 +17,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+
+def _ensure_repo_on_path() -> Path:
+    repo_dir = Path(__file__).resolve().parent.parent
+    if str(repo_dir) not in sys.path:
+        sys.path.insert(0, str(repo_dir))
+    return repo_dir
+
 def _load_tuwunel_admin_module():
     script_dir = Path(__file__).resolve().parent
     if str(script_dir) not in sys.path:
@@ -289,6 +298,37 @@ class Context:
     ) -> dict[str, Any]:
         return self._request_json(method=method, endpoint=endpoint, payload=payload, api_prefix="_matrix/client/v3")
 
+    def client_api_status(
+        self, method: str, endpoint: str, payload: dict[str, Any] | None = None
+    ) -> tuple[int, dict[str, Any]]:
+        self.ensure_base_url()
+        token = self.get_admin_token()
+        data_bytes = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(
+            f"{self.base_url}/_matrix/client/v3/{endpoint}",
+            data=data_bytes,
+            method=method,
+            headers={
+                "Authorization": f"Bearer {token}",
+                **({"Content-Type": "application/json"} if payload is not None else {}),
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode("utf-8")
+                return resp.status, json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            parsed: dict[str, Any] = {}
+            try:
+                parsed = json.loads(raw) if raw else {}
+            except Exception:
+                pass
+            return e.code, parsed
+        except Exception as e:
+            die(f"API request failed: {e}")
+        return 0, {}
+
 
 def cmd_bootstrap(ctx: Context, args: argparse.Namespace) -> None:
     ctx.read_deploy_env()
@@ -506,6 +546,176 @@ def _parse_invites(raw_invites: list[str], server_name: str) -> list[str]:
     return users
 
 
+def _encode_room_alias(alias: str) -> str:
+    return urllib.parse.quote(alias, safe="")
+
+
+def _resolve_room_id(ctx: Context, alias: str) -> str | None:
+    status, data = ctx.client_api_status("GET", f"directory/room/{_encode_room_alias(alias)}")
+    if status == 404:
+        return None
+    if status >= 400:
+        code = data.get("errcode", "")
+        msg = data.get("error", "")
+        die(f"Could not resolve alias {alias} (HTTP {status}, {code}: {msg}).")
+    room_id = data.get("room_id")
+    return room_id if isinstance(room_id, str) and room_id else None
+
+
+def _room_has_messages(ctx: Context, room_id: str) -> bool:
+    encoded_room = urllib.parse.quote(room_id, safe="")
+    status, data = ctx.client_api_status("GET", f"rooms/{encoded_room}/messages?dir=b&limit=20")
+    if status >= 400:
+        return False
+    for event in data.get("chunk", []):
+        if event.get("type") == "m.room.message":
+            return True
+    return False
+
+
+def _send_text_message(ctx: Context, room_id: str, body: str) -> str:
+    encoded_room = urllib.parse.quote(room_id, safe="")
+    txn_id = secrets.token_hex(16)
+    response = ctx.client_api(
+        "PUT",
+        f"rooms/{encoded_room}/send/m.room.message/{txn_id}",
+        {"msgtype": "m.text", "body": body},
+    )
+    return response.get("event_id", "")
+
+
+def _set_room_name(ctx: Context, room_id: str, name: str) -> None:
+    encoded_room = urllib.parse.quote(room_id, safe="")
+    ctx.client_api("PUT", f"rooms/{encoded_room}/state/m.room.name", {"name": name})
+
+
+def _set_room_topic(ctx: Context, room_id: str, topic: str) -> None:
+    encoded_room = urllib.parse.quote(room_id, safe="")
+    ctx.client_api("PUT", f"rooms/{encoded_room}/state/m.room.topic", {"topic": topic})
+
+
+def _ensure_in_room(ctx: Context, room_id_or_alias: str) -> None:
+    if ctx.is_tuwunel():
+        return
+    ctx.require_synapse_admin_api("setup-auto-join-rooms")
+    encoded = urllib.parse.quote(room_id_or_alias, safe="")
+    ctx.admin_api("POST", f"v1/join/{encoded}", {})
+
+
+def _create_room_from_spec(ctx: Context, spec: dict[str, str], room_preset: str) -> str:
+    visibility = "public" if room_preset == "public_chat" else "private"
+    payload: dict[str, Any] = {
+        "visibility": visibility,
+        "preset": room_preset,
+    }
+    alias_localpart = spec["alias"].lstrip("#").split(":", 1)[0]
+    payload["room_alias_name"] = alias_localpart
+    if spec["name"]:
+        payload["name"] = spec["name"]
+    if spec["topic"]:
+        payload["topic"] = spec["topic"]
+    response = ctx.client_api("POST", "createRoom", payload)
+    room_id = response.get("room_id", "")
+    if not room_id:
+        die(f"createRoom did not return a room_id for {spec['alias']}.")
+    return room_id
+
+
+def _load_auto_join_config(deploy_yaml: Path) -> dict[str, Any]:
+    if not deploy_yaml.exists():
+        die(f"Config file not found: {deploy_yaml}")
+    data = yaml.safe_load(deploy_yaml.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        die(f"{deploy_yaml} must contain a YAML object at the root.")
+    features = data.get("features", {})
+    if not isinstance(features, dict):
+        die(f"{deploy_yaml} is missing a features section.")
+    synapse = features.get("synapse", {})
+    if not isinstance(synapse, dict):
+        die(f"{deploy_yaml} is missing features.synapse.")
+    auto_join = synapse.get("auto_join", {})
+    if not isinstance(auto_join, dict):
+        die(f"{deploy_yaml} is missing features.synapse.auto_join.")
+    return auto_join
+
+
+def _provision_auto_join_room(
+    ctx: Context,
+    spec: dict[str, str],
+    *,
+    room_preset: str,
+    force_message: bool,
+) -> None:
+    alias = spec["alias"]
+    room_id = _resolve_room_id(ctx, alias)
+    if room_id:
+        info(f"Room already exists for {alias} ({room_id}).")
+        _ensure_in_room(ctx, room_id)
+        if spec["name"]:
+            _set_room_name(ctx, room_id, spec["name"])
+        if spec["topic"]:
+            _set_room_topic(ctx, room_id, spec["topic"])
+    else:
+        info(f"Creating room {alias}…")
+        room_id = _create_room_from_spec(ctx, spec, room_preset)
+        success(f"Created {alias} ({room_id}).")
+
+    if spec["message"]:
+        if force_message or not _room_has_messages(ctx, room_id):
+            _send_text_message(ctx, room_id, spec["message"])
+            success(f"Posted welcome message to {alias}.")
+        else:
+            info(f"Skipping message for {alias} (room already has messages).")
+
+
+def cmd_setup_auto_join_rooms(ctx: Context, args: argparse.Namespace) -> None:
+    _ensure_repo_on_path()
+    from scripts import apply
+
+    ctx.read_deploy_env()
+    ctx.ensure_base_url()
+    ctx.ensure_server_name()
+
+    deploy_yaml = Path(args.deploy_yaml) if args.deploy_yaml else ctx.repo_dir / "deploy.yaml"
+    auto_join = _load_auto_join_config(deploy_yaml)
+    apply.validate_auto_join_config(auto_join)
+
+    rooms = auto_join.get("rooms") or []
+    if not rooms:
+        info("No auto-join rooms configured; nothing to do.")
+        return
+
+    room_preset = auto_join.get("room_preset") or "public_chat"
+    specs = [apply.parse_auto_join_room_entry(entry, ctx.server_name) for entry in rooms]
+
+    if not args.yes:
+        print()
+        print(f"{BOLD}Setup auto-join rooms{RESET}")
+        for spec in specs:
+            print(f"  {CYAN}{spec['alias']}{RESET}")
+            if spec["name"]:
+                print(f"    name:    {spec['name']}")
+            if spec["topic"]:
+                print(f"    topic:   {spec['topic']}")
+            if spec["message"]:
+                preview = spec["message"].replace("\n", " ")[:60]
+                suffix = "…" if len(spec["message"]) > 60 else ""
+                print(f"    message: {preview}{suffix}")
+        print(f"  preset: {room_preset}")
+        if not ask_yn("Provision these rooms now?", "y"):
+            die("Aborted.")
+
+    for spec in specs:
+        _provision_auto_join_room(
+            ctx,
+            spec,
+            room_preset=room_preset,
+            force_message=args.force_message,
+        )
+
+    success("Auto-join room setup complete.")
+
+
 def cmd_create_room(ctx: Context, args: argparse.Namespace) -> None:
     ctx.read_deploy_env()
     ctx.ensure_base_url()
@@ -575,7 +785,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  bash scripts/med-admin.sh list-admins [--filter alice] [--limit 100] [--from 0]\n"
             "  bash scripts/med-admin.sh get-account USERNAME_OR_MXID\n"
             "  bash scripts/med-admin.sh reset-password USERNAME_OR_MXID [--password 'new-long-secret'] [--yes]\n"
-            "  bash scripts/med-admin.sh create-room [--name 'Care Team'] [--alias care-team] [--topic 'Clinical coordination'] [--public|--private] [--invite USER_OR_MXID]... [--direct] [--yes]"
+            "  bash scripts/med-admin.sh create-room [--name 'Care Team'] [--alias care-team] [--topic 'Clinical coordination'] [--public|--private] [--invite USER_OR_MXID]... [--direct] [--yes]\n"
+            "  bash scripts/med-admin.sh setup-auto-join-rooms [--deploy-yaml deploy.yaml] [--force-message] [--yes]"
         ),
     )
     parser.add_argument("--base-url", default="", help="Override Synapse base URL.")
@@ -619,6 +830,14 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--invite", action="append", default=[])
     c.add_argument("--direct", action="store_true")
 
+    s = sub.add_parser("setup-auto-join-rooms")
+    s.add_argument("--deploy-yaml", default="")
+    s.add_argument(
+        "--force-message",
+        action="store_true",
+        help="Post the configured welcome message even when the room already has messages.",
+    )
+
     return parser
 
 
@@ -638,6 +857,7 @@ def _reorder_argv_for_argparse(argv: list[str]) -> list[str]:
         "get-account",
         "reset-password",
         "create-room",
+        "setup-auto-join-rooms",
     }
 
     global_args: list[str] = []
@@ -700,6 +920,8 @@ def main(argv: list[str]) -> int:
     elif args.command == "create-room":
         args.visibility = "public" if args.public else "private" if args.private else ""
         cmd_create_room(ctx, args)
+    elif args.command == "setup-auto-join-rooms":
+        cmd_setup_auto_join_rooms(ctx, args)
     else:
         die(f"Unknown command: {args.command}")
 

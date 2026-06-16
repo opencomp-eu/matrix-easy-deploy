@@ -405,3 +405,113 @@ def test_main_reorders_global_flags_before_subcommand(repo_root: Path) -> None:
 
     assert rc == 0
     mock_cmd.assert_called_once()
+
+
+def test_resolve_room_id_returns_none_on_404(ctx: med_admin.Context) -> None:
+    ctx.base_url = "https://matrix.example.com"
+    ctx.access_token = "tok-123"
+
+    with patch.object(ctx, "client_api_status", return_value=(404, {})):
+        assert med_admin._resolve_room_id(ctx, "#welcome:example.com") is None
+
+
+def test_provision_auto_join_room_creates_and_messages(ctx: med_admin.Context) -> None:
+    ctx.base_url = "https://matrix.example.com"
+    ctx.access_token = "tok-123"
+    spec = {
+        "alias": "#welcome:example.com",
+        "name": "Welcome",
+        "topic": "Intro",
+        "message": "Hello there",
+    }
+
+    with (
+        patch.object(med_admin, "_resolve_room_id", return_value=None),
+        patch.object(med_admin, "_create_room_from_spec", return_value="!room:example.com") as mock_create,
+        patch.object(med_admin, "_room_has_messages", return_value=False),
+        patch.object(med_admin, "_send_text_message", return_value="$evt") as mock_send,
+    ):
+        med_admin._provision_auto_join_room(
+            ctx,
+            spec,
+            room_preset="public_chat",
+            force_message=False,
+        )
+
+    mock_create.assert_called_once_with(ctx, spec, "public_chat")
+    mock_send.assert_called_once_with(ctx, "!room:example.com", "Hello there")
+
+
+def test_provision_auto_join_room_updates_existing_without_resending_message(ctx: med_admin.Context) -> None:
+    ctx.base_url = "https://matrix.example.com"
+    ctx.access_token = "tok-123"
+    spec = {
+        "alias": "#welcome:example.com",
+        "name": "Welcome",
+        "topic": "",
+        "message": "Hello there",
+    }
+
+    with (
+        patch.object(med_admin, "_resolve_room_id", return_value="!room:example.com"),
+        patch.object(med_admin, "_ensure_in_room"),
+        patch.object(med_admin, "_set_room_name") as mock_name,
+        patch.object(med_admin, "_room_has_messages", return_value=True),
+        patch.object(med_admin, "_send_text_message") as mock_send,
+    ):
+        med_admin._provision_auto_join_room(
+            ctx,
+            spec,
+            room_preset="public_chat",
+            force_message=False,
+        )
+
+    mock_name.assert_called_once_with(ctx, "!room:example.com", "Welcome")
+    mock_send.assert_not_called()
+
+
+def test_cmd_setup_auto_join_rooms_reads_deploy_yaml(ctx: med_admin.Context, repo_root: Path) -> None:
+    deploy_yaml = repo_root / "deploy.yaml"
+    deploy_yaml.write_text(
+        "matrix:\n"
+        "  domain: matrix.example.com\n"
+        "  server_name: example.com\n"
+        "  admin_username: admin\n"
+        "features:\n"
+        "  synapse:\n"
+        "    auto_join:\n"
+        "      room_preset: public_chat\n"
+        "      rooms:\n"
+        "        - alias: welcome\n"
+        "          name: Welcome\n"
+        "          message: Hi\n"
+    )
+    ctx.base_url = "https://matrix.example.com"
+    ctx.access_token = "tok-123"
+    args = argparse.Namespace(deploy_yaml=str(deploy_yaml), yes=True, force_message=False)
+
+    with patch.object(med_admin, "_provision_auto_join_room") as mock_provision:
+        med_admin.cmd_setup_auto_join_rooms(ctx, args)
+
+    assert mock_provision.call_count == 1
+    spec = mock_provision.call_args.args[1]
+    assert spec["alias"] == "#welcome:example.com"
+    assert spec["name"] == "Welcome"
+    assert spec["message"] == "Hi"
+
+
+def test_main_routes_setup_auto_join_rooms_command() -> None:
+    argv = [
+        "setup-auto-join-rooms",
+        "--yes",
+        "--base-url",
+        "https://matrix.example.com",
+        "--access-token",
+        "tok-123",
+    ]
+
+    with patch("scripts.med_admin.cmd_setup_auto_join_rooms") as mock_cmd:
+        rc = med_admin.main(argv)
+
+    assert rc == 0
+    mock_cmd.assert_called_once()

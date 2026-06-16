@@ -460,12 +460,47 @@ bash apply.sh --rotate-secrets
 
 `features.synapse.auto_join` controls which rooms new users are joined to on registration, and whether those rooms are auto-created on first signup. Settings map to [Synapse auto-join configuration](https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html#auto_join_rooms) in the generated `homeserver.yaml`.
 
-- `rooms`: list of room or space aliases (for example `#welcome:example.com`). When empty, no auto-join block is written.
-- `autocreate`: create listed rooms when the first user registers (default `true`).
+- `rooms`: list of room aliases. Each entry may be a plain alias string (for example `#welcome:example.com`) or an object with `alias` plus optional `name`, `topic`, and `message`. When empty, no auto-join block is written.
+- `autocreate`: create listed rooms when the first user registers (default `true`). Synapse auto-created rooms have **no display name** — they appear as the raw alias (for example `#welcome:example.com`). For a friendly onboarding experience, set `autocreate: false` and provision rooms with `med-admin` instead (see below).
 - `autocreate_federated`: whether auto-created rooms are federated (default `true`).
-- `room_preset`: `public_chat`, `private_chat`, or `trusted_private_chat` (default `public_chat`).
-- `mxid_localpart`: localpart of the user that creates or invites to auto-join rooms; **required** for `private_chat` and `trusted_private_chat`.
+- `room_preset`: `public_chat`, `private_chat`, or `trusted_private_chat` (default `public_chat`). Also used when provisioning rooms via `med-admin`.
+- `mxid_localpart`: localpart of the user that creates or invites to auto-join rooms; **required** for `private_chat` and `trusted_private_chat`. Use `med-admin` (or another admin account that is a member of the rooms).
 - `rooms_for_guests`: auto-join guest accounts too (default `true`).
+
+**Named rooms and welcome messages**
+
+Synapse has no config option to set a room name or post a welcome message when it auto-creates rooms. To give new users a "Welcome" room with a greeting already inside:
+
+1. Configure rich room entries in `deploy.yaml` (object form with `name`, `topic`, `message`).
+2. Run `bash apply.sh` so Synapse knows which aliases to auto-join.
+3. Run once (and again when room config changes):
+
+```bash
+bash scripts/med-admin.sh setup-auto-join-rooms --yes
+```
+
+This creates any missing rooms with the configured name and topic, renames existing auto-join rooms that were previously auto-created without names, and posts the `message` once per room (skipped if the room already has messages; use `--force-message` to post anyway).
+
+Example:
+
+```yaml
+features:
+  synapse:
+    auto_join:
+      autocreate: false
+      room_preset: public_chat
+      rooms:
+        - alias: welcome
+          name: Welcome
+          topic: Start here for server info and introductions
+          message: |
+            Welcome to Example Chat! We hope you enjoy your time here.
+        - '#announce:example.com'
+```
+
+The `message` is a single room message posted at setup time — not a per-registration bot. Requires a bootstrapped `med-admin` account and a running homeserver.
+
+If rooms already exist as unnamed `#welcome:yourdomain.com` entries from earlier `autocreate: true` usage, re-run `setup-auto-join-rooms` after updating `deploy.yaml`; it joins the admin account into each room and applies the configured name, topic, and message.
 
 ### Element Web customization
 
@@ -879,6 +914,16 @@ bash scripts/med-admin.sh create-room \
   --invite @bob:example.com \
   --yes
 ```
+
+**Provision auto-join rooms from deploy.yaml**
+
+Create or update the named welcome rooms configured under `features.synapse.auto_join.rooms`:
+
+```bash
+bash scripts/med-admin.sh setup-auto-join-rooms --yes
+```
+
+Use `--deploy-yaml path/to/deploy.yaml` to point at a non-default config file. Use `--force-message` to post the configured welcome message even when the room already has messages.
 
 Notes:
 - `--name`, `--alias`, `--topic`, `--invite`, and `--direct` are optional.

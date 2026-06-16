@@ -201,6 +201,61 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
+    def test_validate_config_rejects_invalid_auto_join_room_object(self):
+        cfg = self.sample_config()
+        cfg["features"]["synapse"] = {
+            "auto_join": {
+                "rooms": [{"topic": "Missing alias"}],
+            },
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_accepts_mixed_auto_join_room_entries(self):
+        cfg = self.sample_config()
+        cfg["features"]["synapse"] = {
+            "auto_join": {
+                "rooms": [
+                    "#welcome:example.com",
+                    {
+                        "alias": "announce",
+                        "name": "Announcements",
+                        "topic": "Server news",
+                        "message": "Welcome!",
+                    },
+                ],
+            },
+        }
+        apply.validate_config(cfg)
+
+    def test_build_synapse_auto_join_section_normalizes_object_aliases(self):
+        section = apply.build_synapse_auto_join_section(
+            {
+                "rooms": [
+                    {"alias": "welcome", "name": "Welcome"},
+                    "#announce:example.com",
+                ],
+            },
+            server_name="example.com",
+        )
+        self.assertIn("'#welcome:example.com'", section)
+        self.assertIn("'#announce:example.com'", section)
+
+    def test_parse_auto_join_room_entry_returns_spec_fields(self):
+        spec = apply.parse_auto_join_room_entry(
+            {
+                "alias": "welcome",
+                "name": "Welcome",
+                "topic": "Intro",
+                "message": "Hello",
+            },
+            "example.com",
+        )
+        self.assertEqual(spec["alias"], "#welcome:example.com")
+        self.assertEqual(spec["name"], "Welcome")
+        self.assertEqual(spec["topic"], "Intro")
+        self.assertEqual(spec["message"], "Hello")
+
     def test_validate_config_rejects_invalid_auto_join_room_preset(self):
         cfg = self.sample_config()
         cfg["features"]["synapse"] = {

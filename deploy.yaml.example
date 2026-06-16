@@ -11,10 +11,15 @@ features:
   synapse:
     auto_join:
       rooms: []
-      # Example when enabling:
+      # Example when enabling named welcome rooms (recommended: autocreate: false):
       # rooms:
-      #   - '#welcome:example.com'
-      autocreate: true
+      #   - alias: welcome
+      #     name: Welcome
+      #     topic: Start here for server info and introductions
+      #     message: |
+      #       Welcome to Example Chat! We hope you enjoy your time here.
+      #   - '#announce:example.com'   # string aliases still work
+      autocreate: false
       autocreate_federated: false
       room_preset: public_chat
       # mxid_localpart: system   # required for private_chat / trusted_private_chat
