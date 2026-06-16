@@ -423,6 +423,28 @@ def test_resolve_room_id_returns_none_on_404(ctx: med_admin.Context) -> None:
         assert med_admin._resolve_room_id(ctx, "#welcome:example.com") is None
 
 
+def test_create_room_from_spec_includes_creator_in_power_levels(ctx: med_admin.Context) -> None:
+    ctx.base_url = "https://matrix.example.com"
+    ctx.access_token = "tok-123"
+    ctx.server_name = "example.com"
+    ctx.auth_username = "med-admin"
+    spec = {
+        "alias": "#welcome:example.com",
+        "name": "Welcome",
+        "topic": "",
+        "handover": ["alice"],
+        "federated": False,
+    }
+
+    with patch.object(ctx, "client_api", return_value={"room_id": "!room:example.com"}) as mock_api:
+        med_admin._create_room_from_spec(ctx, spec)
+
+    payload = mock_api.call_args.args[2]
+    users = payload["power_level_content_override"]["users"]
+    assert users["@med-admin:example.com"] == 100
+    assert users["@alice:example.com"] == 100
+
+
 def test_provision_auto_join_room_creates_and_messages(ctx: med_admin.Context) -> None:
     ctx.base_url = "https://matrix.example.com"
     ctx.access_token = "tok-123"

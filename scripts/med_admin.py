@@ -697,9 +697,14 @@ def _create_room_from_spec(ctx: Context, spec: dict[str, Any]) -> str:
     handover = spec.get("handover") or []
     if handover:
         ctx.ensure_server_name()
+        ctx.ensure_auth_username()
+        creator_id = to_user_id(ctx.auth_username, ctx.server_name)
         invite_ids = [to_user_id(entry, ctx.server_name) for entry in handover]
         payload["invite"] = invite_ids
-        payload["power_level_content_override"] = {"users": {uid: 100 for uid in invite_ids}}
+        power_users = {creator_id: 100}
+        for user_id in invite_ids:
+            power_users[user_id] = 100
+        payload["power_level_content_override"] = {"users": power_users}
     response = ctx.client_api("POST", "createRoom", payload)
     room_id = response.get("room_id", "")
     if not room_id:
