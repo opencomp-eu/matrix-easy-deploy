@@ -361,6 +361,68 @@ def is_bootstrapped(ctx: Context) -> bool:
     return bool(username and password)
 
 
+def _reset_existing_user_password(ctx: Context, username: str, password: str) -> bool:
+    ctx.ensure_server_name()
+    if ctx.is_tuwunel():
+        tuwunel_admin = _load_tuwunel_admin_module()
+        admin = tuwunel_admin.load_tuwunel_admin(ctx.env_path, project_root=ctx.repo_dir)
+        try:
+            admin.reset_password(username, password)
+        except tuwunel_admin.TuwunelAdminError:
+            return False
+        return ctx.verify_password_login(username, password)
+
+    temp_localpart = f"med-bootstrap-{secrets.token_hex(4)}"
+    temp_password = generate_password(24)
+    create_cmd = [
+        "bash",
+        str(ctx.script_dir / "create-account.sh"),
+        "--username",
+        temp_localpart,
+        "--password",
+        temp_password,
+        "--admin",
+        "--yes",
+    ]
+    if ctx.base_url:
+        create_cmd += ["--base-url", ctx.base_url]
+    if ctx.shared_secret:
+        create_cmd += ["--shared-secret", ctx.shared_secret]
+
+    result = subprocess.run(create_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        return False
+
+    saved_token = ctx.access_token
+    saved_username = ctx.auth_username
+    saved_password = ctx.auth_password
+    try:
+        ctx.access_token = ""
+        ctx.auth_username = temp_localpart
+        ctx.auth_password = temp_password
+        ctx._login_for_token(temp_localpart, temp_password)
+        target_id = to_user_id(username, ctx.server_name)
+        temp_id = to_user_id(temp_localpart, ctx.server_name)
+        ctx.admin_api(
+            "POST",
+            f"v1/reset_password/{urllib.parse.quote(target_id, safe='')}",
+            {"new_password": password, "logout_devices": True},
+        )
+        ctx.admin_api(
+            "POST",
+            f"v1/deactivate/{urllib.parse.quote(temp_id, safe='')}",
+            {"erase": True},
+        )
+    except SystemExit:
+        return False
+    finally:
+        ctx.access_token = saved_token
+        ctx.auth_username = saved_username
+        ctx.auth_password = saved_password
+
+    return ctx.verify_password_login(username, password)
+
+
 def run_bootstrap(ctx: Context, *, username: str = "med-admin", password: str | None = None) -> None:
     ctx.read_deploy_env()
     ctx.ensure_bootstrap_config()
@@ -398,12 +460,17 @@ def run_bootstrap(ctx: Context, *, username: str = "med-admin", password: str | 
 
     ctx.ensure_base_url()
     if not ctx.verify_password_login(username, password):
-        die(
-            f"Account '{username}' is not usable with the generated password "
-            "(it may already exist with a different password, or local password login may be disabled). "
-            f"Run 'bash scripts/med-admin.sh bootstrap --username {username} --password <known-password>' "
-            "or pass --access-token."
+        info(
+            f"Password login failed for '{username}' "
+            "(account may already exist); attempting password reset…"
         )
+        if not _reset_existing_user_password(ctx, username, password):
+            die(
+                f"Account '{username}' is not usable with the generated password "
+                "(it may already exist with a different password, or local password login may be disabled). "
+                f"Run 'bash scripts/med-admin.sh bootstrap --username {username} --password <known-password>' "
+                "or pass --access-token."
+            )
 
     upsert_env_value(ctx.env_path, "MED_ADMIN_USERNAME", username)
     upsert_env_value(ctx.env_path, "MED_ADMIN_PASSWORD", password)

@@ -423,6 +423,25 @@ def test_resolve_room_id_returns_none_on_404(ctx: med_admin.Context) -> None:
         assert med_admin._resolve_room_id(ctx, "#welcome:example.com") is None
 
 
+def test_run_bootstrap_resets_password_when_account_already_exists(ctx: med_admin.Context) -> None:
+    ctx.base_url = "https://matrix.example.com"
+    ctx.server_name = "example.com"
+    ctx.shared_secret = "shared-secret"
+    create_script = ctx.script_dir / "create-account.sh"
+    create_script.write_text("#!/bin/sh\nexit 0\n")
+
+    with (
+        patch("scripts.med_admin.subprocess.run") as mock_run,
+        patch.object(ctx, "verify_password_login", side_effect=[False, True]),
+        patch("scripts.med_admin._reset_existing_user_password", return_value=True) as mock_reset,
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        med_admin.run_bootstrap(ctx, username="med-admin", password="averylongsecret123")
+
+    mock_reset.assert_called_once_with(ctx, "med-admin", "averylongsecret123")
+    assert "MED_ADMIN_USERNAME=med-admin" in ctx.env_path.read_text()
+
+
 def test_create_room_from_spec_includes_creator_in_power_levels(ctx: med_admin.Context) -> None:
     ctx.base_url = "https://matrix.example.com"
     ctx.access_token = "tok-123"

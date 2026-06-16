@@ -45,6 +45,14 @@ DEFAULT_SECRET_KEYS = [
     "SL_DB_PASSWORD",
 ]
 
+# Operator-managed keys written by tooling outside apply's env_vars; never drop on re-apply.
+PRESERVED_ENV_KEYS = frozenset(
+    {
+        "MED_ADMIN_USERNAME",
+        "MED_ADMIN_PASSWORD",
+    }
+)
+
 SCALAR_INTEGRATIONS_UI_URL = "https://scalar.vector.im/"
 SCALAR_INTEGRATIONS_REST_URL = "https://scalar.vector.im/api"
 SCALAR_INTEGRATIONS_WIDGETS_URLS = [
@@ -964,6 +972,12 @@ def write_json(path: Path, data: dict) -> None:
 
 
 def write_env_file(ctx: ApplyContext, env_vars: dict) -> None:
+    existing = load_env_map(ctx.env_file)
+    merged = dict(env_vars)
+    for key in PRESERVED_ENV_KEYS:
+        if existing.get(key) and key not in merged:
+            merged[key] = existing[key]
+
     timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         "# matrix-easy-deploy environment",
@@ -971,8 +985,8 @@ def write_env_file(ctx: ApplyContext, env_vars: dict) -> None:
         "# Keep this file private - it contains secrets.",
         "",
     ]
-    for key in sorted(env_vars.keys()):
-        value = str(env_vars[key])
+    for key in sorted(merged.keys()):
+        value = str(merged[key])
         # .env is shell-sourced by helper scripts; multiline values break parsing.
         # Keep multiline placeholders available for template rendering, but do not
         # persist them in the environment file.

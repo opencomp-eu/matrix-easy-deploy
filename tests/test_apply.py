@@ -365,6 +365,19 @@ class ApplyTests(unittest.TestCase):
             apply.wait_for_homeserver(ctx, after_restart=False)
         mock_urlopen.assert_called_once()
 
+    def test_write_env_file_preserves_med_admin_credentials(self):
+        ctx = apply.ApplyContext(self.root)
+        ctx.env_file.write_text(
+            "MED_ADMIN_USERNAME=med-admin\n"
+            "MED_ADMIN_PASSWORD=secret123456789\n"
+            "OLD_KEY=keep-me\n"
+        )
+        apply.write_env_file(ctx, {"MATRIX_DOMAIN": "matrix.example.com", "SERVER_NAME": "example.com"})
+        env_text = ctx.env_file.read_text()
+        self.assertIn("MED_ADMIN_USERNAME=med-admin", env_text)
+        self.assertIn("MED_ADMIN_PASSWORD=secret123456789", env_text)
+        self.assertNotIn("OLD_KEY=keep-me", env_text)
+
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
         first = apply.create_or_update_secrets(ctx, {})
