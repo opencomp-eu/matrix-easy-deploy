@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -329,8 +330,7 @@ def validate_element_config(element: dict) -> None:
         raise ValueError("features.element.extra_config must be an object")
 
 
-AUTO_JOIN_ROOM_PRESETS = frozenset({"public_chat", "private_chat", "trusted_private_chat"})
-AUTO_JOIN_ROOM_OBJECT_KEYS = frozenset({"alias", "name", "topic", "message"})
+AUTO_JOIN_ROOM_OBJECT_KEYS = frozenset({"alias", "name", "topic", "message", "handover", "federated"})
 
 
 def normalize_auto_join_room_alias(raw: str, server_name: str) -> str:
@@ -353,6 +353,10 @@ def validate_auto_join_room_entry(entry: object, path: str) -> None:
         for key in ("name", "topic", "message"):
             if key in entry and entry[key] is not None and not isinstance(entry[key], str):
                 raise ValueError(f"{path}.{key} must be a string")
+        if "handover" in entry and entry["handover"] is not None:
+            _require_str_list(entry.get("handover"), f"{path}.handover")
+        if "federated" in entry and entry["federated"] is not None:
+            _require_bool(entry.get("federated"), f"{path}.federated")
         unknown = set(entry) - AUTO_JOIN_ROOM_OBJECT_KEYS
         if unknown:
             raise ValueError(f"{path} has unknown keys: {', '.join(sorted(unknown))}")
@@ -360,19 +364,29 @@ def validate_auto_join_room_entry(entry: object, path: str) -> None:
     raise ValueError(f"{path} must be a string alias or an object with alias")
 
 
-def parse_auto_join_room_entry(entry: str | dict, server_name: str) -> dict[str, str]:
+def parse_auto_join_room_entry(entry: str | dict, server_name: str) -> dict[str, Any]:
     if isinstance(entry, str):
         return {
             "alias": normalize_auto_join_room_alias(entry, server_name),
             "name": "",
             "topic": "",
             "message": "",
+            "handover": [],
+            "federated": False,
         }
+    handover = entry.get("handover") or []
+    if not isinstance(handover, list):
+        handover = []
+    federated = entry.get("federated", False)
+    if federated is None:
+        federated = False
     return {
         "alias": normalize_auto_join_room_alias(entry["alias"], server_name),
         "name": entry.get("name") or "",
         "topic": entry.get("topic") or "",
         "message": entry.get("message") or "",
+        "handover": [str(u) for u in handover],
+        "federated": bool(federated),
     }
 
 
@@ -380,42 +394,34 @@ def auto_join_room_aliases(rooms: list, server_name: str) -> list[str]:
     return [parse_auto_join_room_entry(entry, server_name)["alias"] for entry in rooms]
 
 
-def get_synapse_auto_join_config(features: dict) -> dict:
-    synapse = features.get("synapse", {}) if isinstance(features.get("synapse", {}), dict) else {}
-    auto_join = synapse.get("auto_join", {}) if isinstance(synapse.get("auto_join", {}), dict) else {}
+def get_auto_join_config(features: dict) -> dict:
+    auto_join = features.get("auto_join", {}) if isinstance(features.get("auto_join", {}), dict) else {}
     return auto_join
+
+
+def get_auto_join_synapse_options(auto_join: dict) -> dict:
+    synapse = auto_join.get("synapse", {}) if isinstance(auto_join.get("synapse", {}), dict) else {}
+    return synapse
 
 
 def validate_auto_join_config(auto_join: dict) -> None:
     if "rooms" in auto_join:
         rooms = auto_join.get("rooms")
         if not isinstance(rooms, list):
-            raise ValueError("features.synapse.auto_join.rooms must be a list")
+            raise ValueError("features.auto_join.rooms must be a list")
         for index, entry in enumerate(rooms):
-            validate_auto_join_room_entry(entry, f"features.synapse.auto_join.rooms[{index}]")
+            validate_auto_join_room_entry(entry, f"features.auto_join.rooms[{index}]")
 
-    for key in ("autocreate", "autocreate_federated", "rooms_for_guests"):
-        if key in auto_join:
-            _require_bool(auto_join.get(key), f"features.synapse.auto_join.{key}")
+    synapse = get_auto_join_synapse_options(auto_join)
+    if synapse:
+        if "rooms_for_guests" in synapse:
+            _require_bool(synapse.get("rooms_for_guests"), "features.auto_join.synapse.rooms_for_guests")
+    elif "synapse" in auto_join and auto_join["synapse"] is not None:
+        raise ValueError("features.auto_join.synapse must be an object")
 
-    room_preset = auto_join.get("room_preset")
-    if room_preset is not None:
-        if not isinstance(room_preset, str) or room_preset not in AUTO_JOIN_ROOM_PRESETS:
-            raise ValueError(
-                "features.synapse.auto_join.room_preset must be one of: "
-                "public_chat, private_chat, trusted_private_chat"
-            )
-
-    if "mxid_localpart" in auto_join and auto_join.get("mxid_localpart") is not None:
-        _require_str(auto_join.get("mxid_localpart"), "features.synapse.auto_join.mxid_localpart")
-
-    if room_preset in ("private_chat", "trusted_private_chat"):
-        localpart = auto_join.get("mxid_localpart")
-        if not isinstance(localpart, str) or not localpart.strip():
-            raise ValueError(
-                "features.synapse.auto_join.mxid_localpart is required when "
-                "features.synapse.auto_join.room_preset is private_chat or trusted_private_chat"
-            )
+    unknown = set(auto_join) - {"rooms", "synapse"}
+    if unknown:
+        raise ValueError(f"features.auto_join has unknown keys: {', '.join(sorted(unknown))}")
 
 
 def build_synapse_auto_join_section(auto_join: dict, server_name: str = "") -> str:
@@ -431,32 +437,44 @@ def build_synapse_auto_join_section(auto_join: dict, server_name: str = "") -> s
     else:
         aliases = auto_join_room_aliases(rooms, server_name)
 
+    synapse_opts = get_auto_join_synapse_options(auto_join)
+
     lines = [
-        "# Auto-join rooms for new registrations",
+        "# Auto-join rooms for new registrations (rooms are provisioned via med-admin)",
         "auto_join_rooms:",
     ]
     for alias in aliases:
         lines.append(f"  - {yaml.safe_dump(alias).strip()}")
 
-    autocreate = auto_join.get("autocreate", True)
-    lines.append(f"autocreate_auto_join_rooms: {'true' if autocreate else 'false'}")
+    lines.append("autocreate_auto_join_rooms: false")
 
-    if "autocreate_federated" in auto_join:
-        federated = auto_join["autocreate_federated"]
-        lines.append(f"autocreate_auto_join_rooms_federated: {'true' if federated else 'false'}")
-
-    if "room_preset" in auto_join:
-        lines.append(f'autocreate_auto_join_room_preset: "{auto_join["room_preset"]}"')
-
-    mxid_localpart = auto_join.get("mxid_localpart")
-    if mxid_localpart is not None:
-        lines.append(f"auto_join_mxid_localpart: {yaml.safe_dump(mxid_localpart).strip()}")
-
-    if "rooms_for_guests" in auto_join:
-        guests = auto_join["rooms_for_guests"]
+    if "rooms_for_guests" in synapse_opts:
+        guests = synapse_opts["rooms_for_guests"]
         lines.append(f"auto_join_rooms_for_guests: {'true' if guests else 'false'}")
 
     return "\n".join(lines)
+
+
+def build_tuwunel_auto_join_section(auto_join: dict, server_name: str = "") -> str:
+    rooms = auto_join.get("rooms") or []
+    if not rooms:
+        return ""
+
+    if not server_name:
+        aliases = [
+            entry if isinstance(entry, str) else entry.get("alias", "")
+            for entry in rooms
+        ]
+    else:
+        aliases = auto_join_room_aliases(rooms, server_name)
+
+    quoted = ", ".join(yaml.safe_dump(alias).strip() for alias in aliases)
+    return "\n".join(
+        [
+            "# Auto-join rooms for new registrations (rooms are provisioned via med-admin)",
+            f"auto_join_rooms = [{quoted}]",
+        ]
+    )
 
 
 def validate_config(config: dict) -> None:
@@ -489,7 +507,7 @@ def validate_config(config: dict) -> None:
             if key in features and not isinstance(features[key], bool):
                 raise ValueError(f"features.{key} must be true/false")
 
-        for section in ("element", "calls", "sso", "synapse"):
+        for section in ("element", "calls", "sso", "auto_join"):
             if section in features and not isinstance(features.get(section), dict):
                 raise ValueError(f"features.{section} must be an object")
 
@@ -497,7 +515,7 @@ def validate_config(config: dict) -> None:
         if element:
             validate_element_config(element)
 
-        auto_join = get_synapse_auto_join_config(features)
+        auto_join = get_auto_join_config(features)
         if auto_join:
             validate_auto_join_config(auto_join)
 
@@ -650,7 +668,11 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     derived["LOCAL_LOGIN_ENABLED"] = "true" if local_login_enabled else "false"
 
     derived["SYNAPSE_AUTO_JOIN_SECTION"] = build_synapse_auto_join_section(
-        get_synapse_auto_join_config(features),
+        get_auto_join_config(features),
+        server_name=server_name,
+    )
+    derived["TUWUNEL_AUTO_JOIN_SECTION"] = build_tuwunel_auto_join_section(
+        get_auto_join_config(features),
         server_name=server_name,
     )
 
@@ -1426,6 +1448,41 @@ def apply_configuration(
         print(schedule_status)
 
 
+def reconcile_auto_join_rooms(ctx: ApplyContext, config: dict) -> None:
+    auto_join = get_auto_join_config(config.get("features", {}) if isinstance(config.get("features"), dict) else {})
+    if not auto_join.get("rooms"):
+        return
+
+    med_admin = ctx.project_root / "scripts" / "med-admin.sh"
+    if not med_admin.exists():
+        raise RuntimeError(f"Missing med-admin script: {med_admin}")
+
+    print("Auto-join rooms: provisioning via med-admin…")
+    result = subprocess.run(
+        [
+            "bash",
+            str(med_admin),
+            "setup-auto-join-rooms",
+            "--yes",
+            "--deploy-yaml",
+            str(ctx.config_file),
+        ],
+        cwd=str(ctx.project_root),
+        capture_output=True,
+        text=True,
+    )
+    if result.stdout.strip():
+        print(result.stdout.rstrip())
+    if result.returncode != 0:
+        msg = result.stderr.strip() or result.stdout.strip() or "med-admin setup-auto-join-rooms failed"
+        raise RuntimeError(
+            "Auto-join room provisioning failed. Ensure the homeserver is running and "
+            "med-admin is bootstrapped (bash scripts/med-admin.sh bootstrap --yes). "
+            f"Details: {msg}"
+        )
+    print("Auto-join rooms: provisioning complete.")
+
+
 def run_runtime_reconcile(ctx: ApplyContext) -> None:
     # Reconcile running services to match current desired state.
     subprocess.run(["bash", str(ctx.project_root / "stop.sh")], check=True)
@@ -1468,6 +1525,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Do not run module setup scripts for enabled modules missing required generated config",
     )
+    parser.add_argument(
+        "--skip-auto-join-provision",
+        action="store_true",
+        help="Do not run med-admin setup-auto-join-rooms after apply",
+    )
     return parser.parse_args(argv)
 
 
@@ -1484,6 +1546,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.reconcile_runtime:
         run_runtime_reconcile(ctx)
+    if not args.skip_auto_join_provision:
+        config = load_config(ctx)
+        reconcile_auto_join_rooms(ctx, config)
     print("Configuration applied successfully.")
     print("Generated .env file and rendered templates.")
     if args.reconcile_runtime:

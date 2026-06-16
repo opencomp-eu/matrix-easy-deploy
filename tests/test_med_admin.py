@@ -423,6 +423,8 @@ def test_provision_auto_join_room_creates_and_messages(ctx: med_admin.Context) -
         "name": "Welcome",
         "topic": "Intro",
         "message": "Hello there",
+        "handover": [],
+        "federated": False,
     }
 
     with (
@@ -434,39 +436,42 @@ def test_provision_auto_join_room_creates_and_messages(ctx: med_admin.Context) -
         med_admin._provision_auto_join_room(
             ctx,
             spec,
-            room_preset="public_chat",
             force_message=False,
         )
 
-    mock_create.assert_called_once_with(ctx, spec, "public_chat")
+    mock_create.assert_called_once_with(ctx, spec)
     mock_send.assert_called_once_with(ctx, "!room:example.com", "Hello there")
 
 
 def test_provision_auto_join_room_updates_existing_without_resending_message(ctx: med_admin.Context) -> None:
     ctx.base_url = "https://matrix.example.com"
     ctx.access_token = "tok-123"
+    ctx.server_name = "example.com"
     spec = {
         "alias": "#welcome:example.com",
         "name": "Welcome",
         "topic": "",
         "message": "Hello there",
+        "handover": ["alice"],
+        "federated": False,
     }
 
     with (
         patch.object(med_admin, "_resolve_room_id", return_value="!room:example.com"),
         patch.object(med_admin, "_ensure_in_room"),
         patch.object(med_admin, "_set_room_name") as mock_name,
+        patch.object(med_admin, "_apply_handover") as mock_handover,
         patch.object(med_admin, "_room_has_messages", return_value=True),
         patch.object(med_admin, "_send_text_message") as mock_send,
     ):
         med_admin._provision_auto_join_room(
             ctx,
             spec,
-            room_preset="public_chat",
             force_message=False,
         )
 
     mock_name.assert_called_once_with(ctx, "!room:example.com", "Welcome")
+    mock_handover.assert_called_once()
     mock_send.assert_not_called()
 
 
@@ -478,13 +483,13 @@ def test_cmd_setup_auto_join_rooms_reads_deploy_yaml(ctx: med_admin.Context, rep
         "  server_name: example.com\n"
         "  admin_username: admin\n"
         "features:\n"
-        "  synapse:\n"
-        "    auto_join:\n"
-        "      room_preset: public_chat\n"
-        "      rooms:\n"
-        "        - alias: welcome\n"
-        "          name: Welcome\n"
-        "          message: Hi\n"
+        "  auto_join:\n"
+        "    rooms:\n"
+        "      - alias: welcome\n"
+        "        name: Welcome\n"
+        "        message: Hi\n"
+        "        handover:\n"
+        "          - alice\n"
     )
     ctx.base_url = "https://matrix.example.com"
     ctx.access_token = "tok-123"

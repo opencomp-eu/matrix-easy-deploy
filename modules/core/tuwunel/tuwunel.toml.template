@@ -20,3 +20,5 @@ appservice_dir = "/data/appservices"
 
 [global.well_known]
 client = "https://{{MATRIX_DOMAIN}}"
+
+{{TUWUNEL_AUTO_JOIN_SECTION}}

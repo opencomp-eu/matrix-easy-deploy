@@ -595,25 +595,57 @@ def _set_room_topic(ctx: Context, room_id: str, topic: str) -> None:
 
 
 def _ensure_in_room(ctx: Context, room_id_or_alias: str) -> None:
-    if ctx.is_tuwunel():
-        return
-    ctx.require_synapse_admin_api("setup-auto-join-rooms")
     encoded = urllib.parse.quote(room_id_or_alias, safe="")
-    ctx.admin_api("POST", f"v1/join/{encoded}", {})
+    status, data = ctx.client_api_status("POST", f"join/{encoded}", {})
+    if status < 400:
+        return
+    errcode = data.get("errcode", "")
+    if errcode in {"M_FORBIDDEN", "M_UNKNOWN"} and "already" in str(data.get("error", "")).lower():
+        return
+    if status == 403 and errcode == "M_FORBIDDEN":
+        # Already joined or cannot join; handover/name updates may still work.
+        return
 
 
-def _create_room_from_spec(ctx: Context, spec: dict[str, str], room_preset: str) -> str:
-    visibility = "public" if room_preset == "public_chat" else "private"
+def _apply_handover(ctx: Context, room_id: str, handover: list[str], server_name: str) -> None:
+    if not handover:
+        return
+    user_ids = [to_user_id(entry, server_name) for entry in handover]
+    encoded_room = urllib.parse.quote(room_id, safe="")
+
+    for user_id in user_ids:
+        ctx.client_api_status("POST", f"rooms/{encoded_room}/invite", {"user_id": user_id})
+
+    status, power_levels = ctx.client_api_status("GET", f"rooms/{encoded_room}/state/m.room.power_levels")
+    if status >= 400:
+        die(f"Could not read power levels for {room_id} (HTTP {status}).")
+    users = power_levels.get("users")
+    if not isinstance(users, dict):
+        users = {}
+    for user_id in user_ids:
+        users[user_id] = 100
+    power_levels["users"] = users
+    ctx.client_api("PUT", f"rooms/{encoded_room}/state/m.room.power_levels", power_levels)
+
+
+def _create_room_from_spec(ctx: Context, spec: dict[str, Any]) -> str:
     payload: dict[str, Any] = {
-        "visibility": visibility,
-        "preset": room_preset,
+        "visibility": "public",
+        "preset": "public_chat",
+        "creation_content": {"m.federate": bool(spec.get("federated", False))},
     }
     alias_localpart = spec["alias"].lstrip("#").split(":", 1)[0]
     payload["room_alias_name"] = alias_localpart
-    if spec["name"]:
+    if spec.get("name"):
         payload["name"] = spec["name"]
-    if spec["topic"]:
+    if spec.get("topic"):
         payload["topic"] = spec["topic"]
+    handover = spec.get("handover") or []
+    if handover:
+        ctx.ensure_server_name()
+        invite_ids = [to_user_id(entry, ctx.server_name) for entry in handover]
+        payload["invite"] = invite_ids
+        payload["power_level_content_override"] = {"users": {uid: 100 for uid in invite_ids}}
     response = ctx.client_api("POST", "createRoom", payload)
     room_id = response.get("room_id", "")
     if not room_id:
@@ -630,20 +662,16 @@ def _load_auto_join_config(deploy_yaml: Path) -> dict[str, Any]:
     features = data.get("features", {})
     if not isinstance(features, dict):
         die(f"{deploy_yaml} is missing a features section.")
-    synapse = features.get("synapse", {})
-    if not isinstance(synapse, dict):
-        die(f"{deploy_yaml} is missing features.synapse.")
-    auto_join = synapse.get("auto_join", {})
+    auto_join = features.get("auto_join", {})
     if not isinstance(auto_join, dict):
-        die(f"{deploy_yaml} is missing features.synapse.auto_join.")
+        die(f"{deploy_yaml} is missing features.auto_join.")
     return auto_join
 
 
 def _provision_auto_join_room(
     ctx: Context,
-    spec: dict[str, str],
+    spec: dict[str, Any],
     *,
-    room_preset: str,
     force_message: bool,
 ) -> None:
     alias = spec["alias"]
@@ -651,16 +679,18 @@ def _provision_auto_join_room(
     if room_id:
         info(f"Room already exists for {alias} ({room_id}).")
         _ensure_in_room(ctx, room_id)
-        if spec["name"]:
+        if spec.get("name"):
             _set_room_name(ctx, room_id, spec["name"])
-        if spec["topic"]:
+        if spec.get("topic"):
             _set_room_topic(ctx, room_id, spec["topic"])
+        ctx.ensure_server_name()
+        _apply_handover(ctx, room_id, spec.get("handover") or [], ctx.server_name)
     else:
         info(f"Creating room {alias}…")
-        room_id = _create_room_from_spec(ctx, spec, room_preset)
+        room_id = _create_room_from_spec(ctx, spec)
         success(f"Created {alias} ({room_id}).")
 
-    if spec["message"]:
+    if spec.get("message"):
         if force_message or not _room_has_messages(ctx, room_id):
             _send_text_message(ctx, room_id, spec["message"])
             success(f"Posted welcome message to {alias}.")
@@ -685,7 +715,6 @@ def cmd_setup_auto_join_rooms(ctx: Context, args: argparse.Namespace) -> None:
         info("No auto-join rooms configured; nothing to do.")
         return
 
-    room_preset = auto_join.get("room_preset") or "public_chat"
     specs = [apply.parse_auto_join_room_entry(entry, ctx.server_name) for entry in rooms]
 
     if not args.yes:
@@ -693,15 +722,18 @@ def cmd_setup_auto_join_rooms(ctx: Context, args: argparse.Namespace) -> None:
         print(f"{BOLD}Setup auto-join rooms{RESET}")
         for spec in specs:
             print(f"  {CYAN}{spec['alias']}{RESET}")
-            if spec["name"]:
-                print(f"    name:    {spec['name']}")
-            if spec["topic"]:
-                print(f"    topic:   {spec['topic']}")
-            if spec["message"]:
+            if spec.get("name"):
+                print(f"    name:      {spec['name']}")
+            if spec.get("topic"):
+                print(f"    topic:     {spec['topic']}")
+            if spec.get("handover"):
+                print(f"    handover:  {', '.join(spec['handover'])}")
+            if spec.get("message"):
                 preview = spec["message"].replace("\n", " ")[:60]
                 suffix = "…" if len(spec["message"]) > 60 else ""
-                print(f"    message: {preview}{suffix}")
-        print(f"  preset: {room_preset}")
+                print(f"    message:   {preview}{suffix}")
+            federated = spec.get("federated", False)
+            print(f"    federated: {federated}")
         if not ask_yn("Provision these rooms now?", "y"):
             die("Aborted.")
 
@@ -709,7 +741,6 @@ def cmd_setup_auto_join_rooms(ctx: Context, args: argparse.Namespace) -> None:
         _provision_auto_join_room(
             ctx,
             spec,
-            room_preset=room_preset,
             force_message=args.force_message,
         )
 

@@ -456,51 +456,47 @@ bash apply.sh --rotate-secrets
 
 > `--rotate-secrets` is destructive for existing deployments unless you plan migration/restart carefully.
 
-### Synapse auto-join rooms
+### Auto-join rooms (Synapse and Tuwunel)
 
-`features.synapse.auto_join` controls which rooms new users are joined to on registration, and whether those rooms are auto-created on first signup. Settings map to [Synapse auto-join configuration](https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html#auto_join_rooms) in the generated `homeserver.yaml`.
+`features.auto_join` defines which rooms new users are joined to on registration. The same configuration works for both Synapse and Tuwunel. `bash apply.sh` writes the alias list into the generated homeserver config and **automatically provisions** the rooms (name, topic, welcome message, handover) via med-admin — no separate setup step required.
 
-- `rooms`: list of room aliases. Each entry may be a plain alias string (for example `#welcome:example.com`) or an object with `alias` plus optional `name`, `topic`, and `message`. When empty, no auto-join block is written.
-- `autocreate`: create listed rooms when the first user registers (default `true`). Synapse auto-created rooms have **no display name** — they appear as the raw alias (for example `#welcome:example.com`). For a friendly onboarding experience, set `autocreate: false` and provision rooms with `med-admin` instead (see below).
-- `autocreate_federated`: whether auto-created rooms are federated (default `true`).
-- `room_preset`: `public_chat`, `private_chat`, or `trusted_private_chat` (default `public_chat`). Also used when provisioning rooms via `med-admin`.
-- `mxid_localpart`: localpart of the user that creates or invites to auto-join rooms; **required** for `private_chat` and `trusted_private_chat`. Use `med-admin` (or another admin account that is a member of the rooms).
-- `rooms_for_guests`: auto-join guest accounts too (default `true`).
+- `rooms`: list of room aliases. Each entry may be a plain alias string (for example `#welcome:example.com`) or an object with:
+  - `alias` (required for objects): local alias name or full alias
+  - `name`, `topic`, `message`: room display name, topic, and a one-time welcome message
+  - `handover`: list of local usernames or MXIDs to invite and grant room admin (power level 100) so they can manage the room going forward
+  - `federated`: when `false` (default), the room is **public on your server** but not open to remote Matrix homeservers; set `true` only if you intentionally want the room federated
+- `synapse.rooms_for_guests`: Synapse-only — auto-join guest accounts too (default `true` when set)
 
-**Named rooms and welcome messages**
-
-Synapse has no config option to set a room name or post a welcome message when it auto-creates rooms. To give new users a "Welcome" room with a greeting already inside:
-
-1. Configure rich room entries in `deploy.yaml` (object form with `name`, `topic`, `message`).
-2. Run `bash apply.sh` so Synapse knows which aliases to auto-join.
-3. Run once (and again when room config changes):
-
-```bash
-bash scripts/med-admin.sh setup-auto-join-rooms --yes
-```
-
-This creates any missing rooms with the configured name and topic, renames existing auto-join rooms that were previously auto-created without names, and posts the `message` once per room (skipped if the room already has messages; use `--force-message` to post anyway).
+Rooms are created as **locally public** spaces: any user on your server can join, but they are **not** world-wide public unless you set `federated: true`.
 
 Example:
 
 ```yaml
 features:
-  synapse:
-    auto_join:
-      autocreate: false
-      room_preset: public_chat
-      rooms:
-        - alias: welcome
-          name: Welcome
-          topic: Start here for server info and introductions
-          message: |
-            Welcome to Example Chat! We hope you enjoy your time here.
-        - '#announce:example.com'
+  auto_join:
+    rooms:
+      - alias: welcome
+        name: Welcome
+        topic: Start here for server info and introductions
+        message: |
+          Welcome to Example Chat! We hope you enjoy your time here.
+        handover:
+          - community-admin
+        federated: false
+      - '#announce:example.com'
+    synapse:
+      rooms_for_guests: false
 ```
 
-The `message` is a single room message posted at setup time — not a per-registration bot. Requires a bootstrapped `med-admin` account and a running homeserver.
+When `rooms` is non-empty, `bash apply.sh` restarts services (by default) and runs `med-admin setup-auto-join-rooms` automatically. Requires a bootstrapped `med-admin` account (`bash scripts/med-admin.sh bootstrap --yes`). Use `bash apply.sh --skip-auto-join-provision` to render config without provisioning (for example in CI).
 
-If rooms already exist as unnamed `#welcome:yourdomain.com` entries from earlier `autocreate: true` usage, re-run `setup-auto-join-rooms` after updating `deploy.yaml`; it joins the admin account into each room and applies the configured name, topic, and message.
+To re-provision manually or post the welcome message again, use:
+
+```bash
+bash scripts/med-admin.sh setup-auto-join-rooms --yes
+```
+
+Add `--force-message` to post the configured welcome message even when the room already has messages.
 
 ### Element Web customization
 
@@ -917,13 +913,13 @@ bash scripts/med-admin.sh create-room \
 
 **Provision auto-join rooms from deploy.yaml**
 
-Create or update the named welcome rooms configured under `features.synapse.auto_join.rooms`:
+Normally `bash apply.sh` provisions rooms automatically. To run manually (or re-apply after config changes):
 
 ```bash
 bash scripts/med-admin.sh setup-auto-join-rooms --yes
 ```
 
-Use `--deploy-yaml path/to/deploy.yaml` to point at a non-default config file. Use `--force-message` to post the configured welcome message even when the room already has messages.
+Reads `features.auto_join.rooms` from `deploy.yaml`. Use `--deploy-yaml path/to/deploy.yaml` for a non-default config file. Use `--force-message` to post the welcome message even when the room already has messages.
 
 Notes:
 - `--name`, `--alias`, `--topic`, `--invite`, and `--direct` are optional.
