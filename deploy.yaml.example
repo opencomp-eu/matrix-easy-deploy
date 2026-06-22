@@ -1,6 +1,7 @@
 matrix:
   domain: matrix.example.com
   server_name: example.com
+  # Server operator account: Element login, med-admin tooling, and bridge permissions.
   admin_username: admin
   # Homeserver software: synapse (default) or tuwunel
   server_implementation: synapse
@@ -72,10 +73,8 @@ modules:
     domain: hookshot.example.com
   whatsapp_bridge:
     enabled: false
-    admin_username: admin
   slack_bridge:
     enabled: false
-    admin_username: admin
 backup:
   enabled: false
   repository:

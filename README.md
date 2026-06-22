@@ -196,7 +196,7 @@ bash matrix-wizard.sh --full-setup
 unset ADMIN_PASSWORD
 ```
 
-Avoid storing `ADMIN_PASSWORD` in `.env` or `deploy.yaml`.
+The wizard stores the admin password in `.env` as `MED_ADMIN_PASSWORD` so med-admin tooling can run non-interactively. Never put passwords in `deploy.yaml`.
 
 ### Non-interactive setup from an existing `deploy.yaml`
 
@@ -227,6 +227,11 @@ bash scripts/create-account.sh \
   --username "${ADMIN_USERNAME}" \
   --password 'replace-with-a-long-random-password' \
   --admin --yes
+
+# 4. Store credentials for med-admin automation (same account as step 3)
+bash scripts/med-admin.sh bootstrap \
+  --username "${ADMIN_USERNAME}" \
+  --password 'replace-with-a-long-random-password'
 ```
 
 Notes:
@@ -234,7 +239,8 @@ Notes:
 - `bash apply.sh` now runs stop/start by default so generated config and running containers stay aligned.
 - Use `bash apply.sh --no-reconcile-runtime` when you want render-only behavior.
 - `scripts/create-account.sh` is safe to re-run; if the user already exists it will warn and skip.
-- Keep the admin password out of `deploy.yaml` and `.env`. Pass it at execution time or inject it through your automation/secret manager.
+- Keep the admin password out of `deploy.yaml`. Step 4 stores it in `.env` for med-admin; pass it at execution time or inject it through your automation/secret manager.
+- `bash matrix-wizard.sh --full-setup` performs steps 3–4 automatically.
 - Enabled modules are bootstrapped non-interactively during `bash apply.sh` when their required generated config is missing.
 - Bridge/module enable-disable transitions are reconciled by `bash apply.sh` by default; use `--no-reconcile-runtime` to skip the stop/start step.
 
@@ -703,7 +709,7 @@ bash scripts/create-account.sh --username alice --password 'replace-with-a-long-
 To create an admin account, add the admin flag:
 
 ```bash
-bash scripts/create-account.sh --username med-admin --password 'replace-with-a-long-random-password' --admin --yes
+bash scripts/create-account.sh --username "${ADMIN_USERNAME}" --password 'replace-with-a-long-random-password' --admin --yes
 ```
 
 You can disable SSO in the wizard if you only want local Matrix passwords.
@@ -836,12 +842,18 @@ bash scripts/create-account.sh --username alice --password 'replace-with-a-long-
 
 **Admin account operations with `med-admin`**
 
-`med-admin.sh` manages a dedicated operator admin account (`med-admin` by default). On first use, it **bootstraps itself automatically** — creating the account, storing credentials in `.env`, and proceeding with the requested command. If local password login is disabled (SSO-only), bootstrap fails with a clear error; pass `--access-token` instead.
+There is one server operator account: whatever you set as `matrix.admin_username` in `deploy.yaml` (default `admin`). It is used for Element login, med-admin CLI commands, and bridge permissions.
 
-You can still bootstrap explicitly (for example to choose a custom password):
+During `bash matrix-wizard.sh --full-setup`, the wizard creates this account and stores its credentials in `.env` (`MED_ADMIN_USERNAME` / `MED_ADMIN_PASSWORD`) for automation.
+
+If credentials are not stored yet, the first med-admin command bootstraps the configured admin automatically — creating the account if needed, storing credentials in `.env`, and proceeding. If local password login is disabled (SSO-only), bootstrap fails with a clear error; pass `--access-token` instead.
+
+You can bootstrap explicitly (for example after non-interactive setup):
 
 ```bash
-bash scripts/med-admin.sh bootstrap --password 'replace-with-a-long-random-password'
+bash scripts/med-admin.sh bootstrap \
+  --username "${ADMIN_USERNAME}" \
+  --password 'replace-with-a-long-random-password'
 ```
 
 After bootstrap, all admin commands use the stored credentials without extra flags.
@@ -914,10 +926,10 @@ Notes:
 
 **How it works**
 
-- On first use, med-admin bootstraps automatically and stores credentials in `.env`. Run `bootstrap` explicitly to set a custom password.
-- All subsequent admin commands automatically use the stored `med-admin` credentials
-- No need to pass credentials with each command
-- If you need to use a different admin account, override with `--access-token` or `--admin-username`/`--admin-password`
+- One admin account (`matrix.admin_username`) for login, tooling, and bridges.
+- The wizard stores credentials in `.env` during setup; otherwise run `bootstrap` explicitly.
+- All subsequent admin commands use the stored credentials automatically.
+- Override with `--access-token` or `--admin-username`/`--admin-password` when needed.
 
 **Important: SSO-only deployments**
 

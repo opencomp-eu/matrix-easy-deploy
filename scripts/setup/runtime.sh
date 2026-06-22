@@ -148,5 +148,18 @@ setup_admin() {
         --admin \
         --yes
 
+    info "Storing admin credentials for med-admin tooling…"
+    SCRIPT_DIR="${SCRIPT_DIR}" \
+    MED_ADMIN_USERNAME="${ADMIN_USERNAME}" \
+    MED_ADMIN_PASSWORD="${_admin_password}" \
+    PYTHONPATH="${SCRIPT_DIR}" python3 -c "
+import os
+from pathlib import Path
+from scripts.med_admin import upsert_env_value
+env_path = Path(os.environ['SCRIPT_DIR']) / '.env'
+upsert_env_value(env_path, 'MED_ADMIN_USERNAME', os.environ['MED_ADMIN_USERNAME'])
+upsert_env_value(env_path, 'MED_ADMIN_PASSWORD', os.environ['MED_ADMIN_PASSWORD'])
+"
+
     unset _admin_password
 }

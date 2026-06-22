@@ -406,8 +406,6 @@ class ShellEntrypointTests(unittest.TestCase):
                     "--base-url",
                     base_url,
                     "bootstrap",
-                    "--username",
-                    "med-admin",
                     "--password",
                     "averylongsecret123",
                     "--yes",
@@ -422,14 +420,14 @@ class ShellEntrypointTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             line = events.read_text().strip()
             self.assertIn("create-account:", line)
-            self.assertIn("--username med-admin", line)
+            self.assertIn("--username admin", line)
             self.assertIn("--admin", line)
             self.assertIn(f"--base-url {base_url}", line)
             self.assertIn("--shared-secret sharedsecret", line)
             self.assertIn("--password averylongsecret123", line)
             self.assertIn("--yes", line)
             env_text = (root / ".env").read_text()
-            self.assertIn("MED_ADMIN_USERNAME=med-admin", env_text)
+            self.assertIn("MED_ADMIN_USERNAME=admin", env_text)
             self.assertIn("MED_ADMIN_PASSWORD=averylongsecret123", env_text)
 
     def test_med_admin_list_accounts_logs_in_and_queries_admin_api(self):

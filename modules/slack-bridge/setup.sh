@@ -93,11 +93,11 @@ gather_config() {
     echo -e "  Press Enter to accept a ${CYAN}[default]${RESET}.\n"
 
     ask SL_ADMIN_USERNAME \
-        "Matrix admin username for full bridge access (without @/server part)" \
+        "Bridge operator username (defaults to server admin; without @/server part)" \
         "${MODULE_SL_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}"
     while [[ -z "$SL_ADMIN_USERNAME" ]]; do
         warn "Admin username is required."
-        ask SL_ADMIN_USERNAME "Matrix admin username" "${ADMIN_USERNAME:-admin}"
+        ask SL_ADMIN_USERNAME "Bridge operator username" "${ADMIN_USERNAME:-admin}"
     done
 
     ask SL_DB_NAME \

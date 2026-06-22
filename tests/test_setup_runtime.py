@@ -31,6 +31,7 @@ class SetupRuntimeTests(unittest.TestCase):
 
             scripts_dir = tmp_path / "scripts"
             scripts_dir.mkdir(parents=True)
+            (tmp_path / ".env").write_text("ADMIN_USERNAME=admin\n")
             create_account = scripts_dir / "create-account.sh"
             create_account.write_text(
                 "#!/usr/bin/env bash\n"
@@ -96,6 +97,9 @@ class SetupRuntimeTests(unittest.TestCase):
             result = self._run_script(script, env)
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             self.assertEqual(capture_file.read_text(), "env-super-secret-pass")
+            env_text = (tmp_path / ".env").read_text()
+            self.assertIn("MED_ADMIN_USERNAME=admin", env_text)
+            self.assertIn("MED_ADMIN_PASSWORD=env-super-secret-pass", env_text)
 
     def test_setup_admin_prompts_for_password_when_env_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -105,6 +109,7 @@ class SetupRuntimeTests(unittest.TestCase):
 
             scripts_dir = tmp_path / "scripts"
             scripts_dir.mkdir(parents=True)
+            (tmp_path / ".env").write_text("ADMIN_USERNAME=admin\n")
             create_account = scripts_dir / "create-account.sh"
             create_account.write_text(
                 "#!/usr/bin/env bash\n"
@@ -179,6 +184,9 @@ class SetupRuntimeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             self.assertEqual(capture_file.read_text(), "long-enough-password")
             self.assertEqual(ask_count_file.read_text(), "3")
+            env_text = (tmp_path / ".env").read_text()
+            self.assertIn("MED_ADMIN_USERNAME=admin", env_text)
+            self.assertIn("MED_ADMIN_PASSWORD=long-enough-password", env_text)
 
     def test_start_services_stops_existing_stack_before_resetting_core_volume(self):
         with tempfile.TemporaryDirectory() as tmp:

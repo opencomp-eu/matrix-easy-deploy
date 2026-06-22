@@ -192,7 +192,7 @@ def test_cmd_bootstrap_synapse_delegates_to_create_account(ctx: med_admin.Contex
     create_script.write_text("#!/bin/sh\nexit 0\n")
     ctx.base_url = "https://matrix.example.com"
     args = argparse.Namespace(
-        username="med-admin",
+        username="",
         password="averylongsecret123",
         generate_password=False,
         shared_secret="",
@@ -209,8 +209,10 @@ def test_cmd_bootstrap_synapse_delegates_to_create_account(ctx: med_admin.Contex
     assert cmd[0] == "bash"
     assert str(create_script) in cmd
     assert "--username" in cmd
+    username_index = cmd.index("--username")
+    assert cmd[username_index + 1] == "admin"
     assert "--admin" in cmd
-    assert "MED_ADMIN_USERNAME=med-admin" in ctx.env_path.read_text()
+    assert "MED_ADMIN_USERNAME=admin" in ctx.env_path.read_text()
 
 
 def test_cmd_bootstrap_tuwunel_uses_registration_api(ctx: med_admin.Context) -> None:
@@ -221,7 +223,7 @@ def test_cmd_bootstrap_tuwunel_uses_registration_api(ctx: med_admin.Context) -> 
     )
     ctx.base_url = "https://matrix.example.com"
     args = argparse.Namespace(
-        username="med-admin",
+        username="",
         password="averylongsecret123",
         generate_password=False,
         shared_secret="",
@@ -235,8 +237,8 @@ def test_cmd_bootstrap_tuwunel_uses_registration_api(ctx: med_admin.Context) -> 
         mock_load.return_value.load_tuwunel_admin.return_value = mock_admin
         med_admin.cmd_bootstrap(ctx, args)
 
-    mock_admin.create_user.assert_called_once_with("med-admin", "averylongsecret123", grant_admin=True)
-    assert "MED_ADMIN_USERNAME=med-admin" in ctx.env_path.read_text()
+    mock_admin.create_user.assert_called_once_with("admin", "averylongsecret123", grant_admin=True)
+    assert "MED_ADMIN_USERNAME=admin" in ctx.env_path.read_text()
 
 
 def test_cmd_bootstrap_rejects_password_and_generate_password(ctx: med_admin.Context, capsys: pytest.CaptureFixture[str]) -> None:
@@ -436,10 +438,10 @@ def test_run_bootstrap_resets_password_when_account_already_exists(ctx: med_admi
         patch("scripts.med_admin._reset_existing_user_password", return_value=True) as mock_reset,
     ):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        med_admin.run_bootstrap(ctx, username="med-admin", password="averylongsecret123")
+        med_admin.run_bootstrap(ctx, username="admin", password="averylongsecret123")
 
-    mock_reset.assert_called_once_with(ctx, "med-admin", "averylongsecret123")
-    assert "MED_ADMIN_USERNAME=med-admin" in ctx.env_path.read_text()
+    mock_reset.assert_called_once_with(ctx, "admin", "averylongsecret123")
+    assert "MED_ADMIN_USERNAME=admin" in ctx.env_path.read_text()
 
 
 def test_create_room_from_spec_includes_creator_in_power_levels(ctx: med_admin.Context) -> None:
@@ -559,8 +561,29 @@ def test_is_bootstrapped_false_when_credentials_missing(ctx: med_admin.Context) 
 
 
 def test_is_bootstrapped_true_when_credentials_present(ctx: med_admin.Context) -> None:
-    ctx.env_path.write_text("MED_ADMIN_USERNAME=med-admin\nMED_ADMIN_PASSWORD=secret123456\n")
+    ctx.env_path.write_text(
+        "ADMIN_USERNAME=admin\n"
+        "MED_ADMIN_USERNAME=admin\n"
+        "MED_ADMIN_PASSWORD=secret123456\n"
+    )
     assert med_admin.is_bootstrapped(ctx) is True
+
+
+def test_is_bootstrapped_false_when_username_mismatches_admin_username(ctx: med_admin.Context) -> None:
+    ctx.env_path.write_text(
+        "ADMIN_USERNAME=admin\n"
+        "MED_ADMIN_USERNAME=med-admin\n"
+        "MED_ADMIN_PASSWORD=secret123456\n"
+    )
+    assert med_admin.is_bootstrapped(ctx) is False
+
+
+def test_resolve_bootstrap_username_uses_admin_username_from_env(ctx: med_admin.Context) -> None:
+    assert med_admin.resolve_bootstrap_username(ctx, "") == "admin"
+
+
+def test_resolve_bootstrap_username_honors_explicit_override(ctx: med_admin.Context) -> None:
+    assert med_admin.resolve_bootstrap_username(ctx, "operator") == "operator"
 
 
 def test_should_auto_bootstrap_skips_bootstrap_command() -> None:
@@ -590,7 +613,11 @@ def test_ensure_bootstrapped_invokes_run_bootstrap(ctx: med_admin.Context) -> No
 
 
 def test_ensure_bootstrapped_skips_when_already_bootstrapped(ctx: med_admin.Context) -> None:
-    ctx.env_path.write_text("MED_ADMIN_USERNAME=med-admin\nMED_ADMIN_PASSWORD=secret123456\n")
+    ctx.env_path.write_text(
+        "ADMIN_USERNAME=admin\n"
+        "MED_ADMIN_USERNAME=admin\n"
+        "MED_ADMIN_PASSWORD=secret123456\n"
+    )
     with patch("scripts.med_admin.run_bootstrap") as mock_run:
         med_admin.ensure_bootstrapped(ctx)
     mock_run.assert_not_called()

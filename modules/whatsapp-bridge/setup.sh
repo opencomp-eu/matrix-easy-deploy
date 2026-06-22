@@ -96,11 +96,11 @@ gather_config() {
 
     # Admin user on the homeserver
     ask WA_ADMIN_USERNAME \
-        "Matrix admin username for full bridge access (without @/server part)" \
+        "Bridge operator username (defaults to server admin; without @/server part)" \
         "${MODULE_WA_ADMIN_USERNAME_DEFAULT:-${ADMIN_USERNAME:-admin}}"
     while [[ -z "$WA_ADMIN_USERNAME" ]]; do
         warn "Admin username is required."
-        ask WA_ADMIN_USERNAME "Matrix admin username" "${ADMIN_USERNAME:-admin}"
+        ask WA_ADMIN_USERNAME "Bridge operator username" "${ADMIN_USERNAME:-admin}"
     done
 
     # Database name for the bridge

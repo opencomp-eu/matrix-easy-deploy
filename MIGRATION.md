@@ -75,3 +75,14 @@ bash bootstrap-from-backup.sh ~/med-kit-backup.tar.gz --encrypt --yes
 ```
 
 Local Borg retention on the old host is unchanged; portable export is an additional copy step.
+
+## Unifying admin accounts (existing deployments)
+
+Older setups may have two admin accounts: the wizard account (`matrix.admin_username`, often `admin`) and a separate tooling account created by med-admin (often `med-admin`).
+
+To align with the current single-account model:
+
+1. Decide which account to keep (recommended: `matrix.admin_username` from `deploy.yaml`).
+2. Re-grant bridge permissions if bridge config points at the wrong MXID (re-run the bridge module setup or edit `permissions` in the bridge config).
+3. Run `bash scripts/med-admin.sh bootstrap --username <chosen> --password <password>` to store credentials in `.env`.
+4. Optionally deactivate the unused admin account via `med-admin list-admins` and manual cleanup.

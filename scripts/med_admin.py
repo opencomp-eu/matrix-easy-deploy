@@ -354,11 +354,36 @@ class Context:
         return 0, {}
 
 
+def resolve_bootstrap_username(ctx: Context, username: str = "") -> str:
+    if username.strip():
+        return username.strip()
+    env = load_env_file(ctx.env_path)
+    return env.get("ADMIN_USERNAME", "").strip() or "admin"
+
+
+def warn_bootstrap_username_mismatch(ctx: Context) -> None:
+    env = load_env_file(ctx.env_path)
+    med_user = env.get("MED_ADMIN_USERNAME", "").strip()
+    admin_user = env.get("ADMIN_USERNAME", "").strip()
+    if not med_user or not admin_user or med_user == admin_user:
+        return
+    warn(
+        f"MED_ADMIN_USERNAME ({med_user}) differs from ADMIN_USERNAME ({admin_user}). "
+        f"Run 'bash scripts/med-admin.sh bootstrap --username {admin_user} --password <password>' "
+        "to realign."
+    )
+
+
 def is_bootstrapped(ctx: Context) -> bool:
     env = load_env_file(ctx.env_path)
     username = env.get("MED_ADMIN_USERNAME", "").strip()
     password = env.get("MED_ADMIN_PASSWORD", "").strip()
-    return bool(username and password)
+    if not (username and password):
+        return False
+    admin_username = env.get("ADMIN_USERNAME", "").strip()
+    if admin_username and username != admin_username:
+        return False
+    return True
 
 
 def _reset_existing_user_password(ctx: Context, username: str, password: str) -> bool:
@@ -423,9 +448,10 @@ def _reset_existing_user_password(ctx: Context, username: str, password: str) ->
     return ctx.verify_password_login(username, password)
 
 
-def run_bootstrap(ctx: Context, *, username: str = "med-admin", password: str | None = None) -> None:
+def run_bootstrap(ctx: Context, *, username: str | None = None, password: str | None = None) -> None:
     ctx.read_deploy_env()
     ctx.ensure_bootstrap_config()
+    username = resolve_bootstrap_username(ctx, username or "")
     password = password or generate_password()
 
     if ctx.is_tuwunel():
@@ -485,7 +511,12 @@ def run_bootstrap(ctx: Context, *, username: str = "med-admin", password: str | 
 def ensure_bootstrapped(ctx: Context) -> None:
     if is_bootstrapped(ctx):
         return
-    info("med-admin is not bootstrapped yet; creating operator account automatically…")
+    warn_bootstrap_username_mismatch(ctx)
+    default_username = resolve_bootstrap_username(ctx)
+    info(
+        f"med-admin credentials not stored yet; ensuring server admin '{default_username}' "
+        "is ready for automation…"
+    )
     run_bootstrap(ctx)
 
 
@@ -497,7 +528,8 @@ def cmd_bootstrap(ctx: Context, args: argparse.Namespace) -> None:
         die("Use either --password or --generate-password, not both.")
 
     password = args.password or (generate_password() if args.generate_password else None)
-    run_bootstrap(ctx, username=args.username, password=password)
+    username = resolve_bootstrap_username(ctx, args.username)
+    run_bootstrap(ctx, username=username, password=password)
 
 
 def _parse_int(name: str, raw: str) -> int | None:
@@ -937,7 +969,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
         description=(
             "Usage:\n"
-            "  bash scripts/med-admin.sh bootstrap [--username med-admin] [--password 'long-secret'] [--yes]\n"
+            "  bash scripts/med-admin.sh bootstrap [--username ADMIN_USERNAME] [--password 'long-secret'] [--yes]\n"
             "  bash scripts/med-admin.sh list-accounts [--filter alice] [--limit 100] [--from 0]\n"
             "  bash scripts/med-admin.sh list-admins [--filter alice] [--limit 100] [--from 0]\n"
             "  bash scripts/med-admin.sh get-account USERNAME_OR_MXID\n"
@@ -955,7 +987,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     b = sub.add_parser("bootstrap")
-    b.add_argument("--username", default="med-admin")
+    b.add_argument(
+        "--username",
+        default="",
+        help="Admin username (defaults to ADMIN_USERNAME from .env).",
+    )
     b.add_argument("--password", default="")
     b.add_argument("--generate-password", action="store_true")
     b.add_argument("--shared-secret", default="")
