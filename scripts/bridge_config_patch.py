@@ -67,6 +67,7 @@ def patch_bridge_config(
     db_type: str,
     db_uri: str,
     admin_user: str,
+    enable_e2ee: bool = False,
 ) -> None:
     content = config_path.read_text()
 
@@ -81,6 +82,10 @@ def patch_bridge_config(
 
     content = patch_permissions(content, server_name, admin_user)
 
+    if enable_e2ee:
+        content = replace_field(content, "encryption.allow", "true", quote=False)
+        content = replace_field(content, "encryption.default", "true", quote=False)
+
     config_path.write_text(content)
 
 
@@ -93,6 +98,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--db-type", required=True)
     parser.add_argument("--db-uri", required=True)
     parser.add_argument("--admin-user", required=True)
+    parser.add_argument(
+        "--enable-e2ee",
+        action="store_true",
+        help="Enable end-to-bridge encryption (encryption.allow and encryption.default)",
+    )
     return parser.parse_args(argv)
 
 
@@ -106,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         db_type=args.db_type,
         db_uri=args.db_uri,
         admin_user=args.admin_user,
+        enable_e2ee=args.enable_e2ee,
     )
     print("config.yaml patched successfully.")
     return 0

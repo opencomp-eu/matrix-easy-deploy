@@ -1038,6 +1038,7 @@ bash scripts/hookshot-check.sh
 | **1:1 chats** | All personal WhatsApp conversations appear as Matrix rooms |
 | **Group chats** | WhatsApp groups bridged as Matrix rooms |
 | **Media** | Images, video, voice messages, documents — all bridged both ways |
+| **End-to-bridge encryption (E2EE)** | Enabled by default for new portal rooms |
 | **PostgreSQL** | Dedicated database created automatically during setup |
 
 ```bash
@@ -1064,6 +1065,8 @@ docker restart mautrix-whatsapp
 ```
 
 > **Note:** Your WhatsApp mobile app must stay active. If you factory-reset your phone or uninstall WhatsApp, re-run `login` in the bridge DM to re-link.
+
+If you installed the WhatsApp bridge before end-to-bridge encryption was enabled by default, run `bash matrix-wizard.sh --module whatsapp-bridge` once more to apply the setting. Existing portal rooms created before that may need manual encryption or re-linking to pick up E2EE.
 
 #### `slack-bridge` — Bridge Matrix to Slack
 

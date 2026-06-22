@@ -214,7 +214,8 @@ generate_config() {
         --as-address "http://${BRIDGE_CONTAINER}:${BRIDGE_PORT}" \
         --db-type "postgres" \
         --db-uri "$WA_DB_URI" \
-        --admin-user "$WA_ADMIN_USERNAME"
+        --admin-user "$WA_ADMIN_USERNAME" \
+        --enable-e2ee
 
     success "config.yaml patched."
 

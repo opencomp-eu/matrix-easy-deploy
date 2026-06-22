@@ -92,6 +92,43 @@ class BridgeConfigPatchTests(unittest.TestCase):
             self.assertIn("permissions:", content)
             self.assertIn('"@operator:example.com": admin', content)
 
+    def test_patch_enables_e2ee_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.yaml"
+            config_path.write_text(
+                "homeserver:\n"
+                "  domain: \"old.example.com\"\n"
+                "  address: \"http://old:8008\"\n"
+                "appservice:\n"
+                "  address: \"http://old:29318\"\n"
+                "  hostname: \"127.0.0.1\"\n"
+                "database:\n"
+                "  type: \"sqlite\"\n"
+                "  uri: \"sqlite:///tmp.db\"\n"
+                "encryption:\n"
+                "    allow: false\n"
+                "    default: false\n"
+                "permissions:\n"
+                "  \"old.example.com\": admin\n"
+            )
+
+            bridge_config_patch.patch_bridge_config(
+                config_path=config_path,
+                server_name="example.com",
+                hs_address="http://matrix_synapse:8008",
+                as_address="http://mautrix-whatsapp:29318",
+                db_type="postgres",
+                db_uri="postgres://user:pass@matrix_postgres/db",
+                admin_user="admin",
+                enable_e2ee=True,
+            )
+
+            content = config_path.read_text()
+            self.assertIn("allow: true", content)
+            self.assertIn("default: true", content)
+            self.assertIn('domain: "example.com"', content)
+            self.assertIn('"@admin:example.com": admin', content)
+
     def test_replace_field_is_scoped_to_target_section(self):
         content = (
             "homeserver:\n"
