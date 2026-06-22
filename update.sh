@@ -28,7 +28,7 @@ docker pull coturn/coturn:latest
 docker pull livekit/livekit-server:latest
 
 if [[ "${INSTALL_ELEMENT:-true}" == "true" ]]; then
-    docker pull vectorim/element-web:latest
+    docker pull ghcr.io/element-hq/element-web:latest
 fi
 
 if [[ "${HOOKSHOT_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/hookshot/hookshot/config.yml" ]]; then

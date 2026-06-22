@@ -79,7 +79,7 @@ services:
       start_period: 30s
 
   element:
-    image: vectorim/element-web:latest
+    image: ghcr.io/element-hq/element-web:latest
     container_name: matrix_element
     restart: unless-stopped
     profiles:
