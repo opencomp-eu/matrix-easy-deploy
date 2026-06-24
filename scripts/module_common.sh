@@ -144,9 +144,18 @@ module_generate_registration_if_needed() {
 
     local config_file="${bridge_data_dir}/${config_name}"
     local reg_file="${bridge_data_dir}/${registration_name}"
+    local project_root="${5:-}"
 
-    if [[ -f "$reg_file" && -f "$config_file" && "$reg_file" -nt "$config_file" ]]; then
-        info "${registration_name} is up to date - skipping regeneration."
+    if [[ -z "$project_root" ]]; then
+        project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    fi
+
+    if [[ -f "$reg_file" && -f "$config_file" ]] \
+        && ! python3 "${project_root}/scripts/bridge_appservice_tokens.py" \
+            --config-path "$config_file" \
+            --registration-path "$reg_file" \
+            --needs-regeneration; then
+        info "${registration_name} tokens match ${config_name} - skipping regeneration."
         return
     fi
 
@@ -160,6 +169,13 @@ module_generate_registration_if_needed() {
 
     if [[ ! -f "$reg_file" ]]; then
         die "${registration_name} was not generated. Check ${config_name} for errors."
+    fi
+
+    if ! python3 "${project_root}/scripts/bridge_appservice_tokens.py" \
+        --config-path "$config_file" \
+        --registration-path "$reg_file" \
+        --verify; then
+        die "Bridge appservice tokens are inconsistent after generating ${registration_name}."
     fi
     success "${registration_name} generated."
 }
@@ -241,4 +257,24 @@ module_restart_homeserver_if_changed() {
 # Backwards-compatible alias
 module_restart_synapse_if_changed() {
     module_restart_homeserver_if_changed "$@"
+}
+
+module_start_bridge_after_homeserver() {
+    local appservice_changed="$1"
+    local project_root="$2"
+    local module_dir="$3"
+    local bridge_label="$4"
+
+    shift 4
+    local -a compose_up_args=("$@")
+
+    module_restart_homeserver_if_changed "$appservice_changed" "$project_root"
+
+    local -a docker_compose
+    read -ra docker_compose <<< "$(docker_compose_cmd)"
+
+    echo
+    info "Starting ${bridge_label}…"
+    (cd "$module_dir" && "${docker_compose[@]}" up -d "${compose_up_args[@]}")
+    success "${bridge_label} started."
 }

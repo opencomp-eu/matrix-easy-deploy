@@ -225,7 +225,8 @@ generate_registration() {
         "$BRIDGE_DATA_DIR" \
         "$BRIDGE_IMAGE" \
         "config.yaml" \
-        "registration.yaml"
+        "registration.yaml" \
+        "$PROJECT_ROOT"
 }
 
 # =============================================================================
@@ -250,13 +251,12 @@ register_appservice() {
 # Step 8 — Start the bridge and restart Synapse
 # =============================================================================
 start_services() {
-    echo
-    info "Starting mautrix-slack…"
-    (cd "$MODULE_DIR" && "${DOCKER_COMPOSE[@]}" up -d --pull always)
-    success "mautrix-slack started."
-
-    echo
-    module_restart_synapse_if_changed "$APP_SERVICE_CHANGED" "$PROJECT_ROOT"
+    module_start_bridge_after_homeserver \
+        "$APP_SERVICE_CHANGED" \
+        "$PROJECT_ROOT" \
+        "$MODULE_DIR" \
+        "mautrix-slack" \
+        --pull always
 }
 
 # =============================================================================
