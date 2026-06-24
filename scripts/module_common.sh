@@ -136,6 +136,16 @@ ensure_postgres_role_and_database() {
         2>&1 | sed 's/^/    /'
 }
 
+module_patch_bridge_registration() {
+    local project_root="$1"
+    local config_file="$2"
+    local reg_file="$3"
+
+    python3 "${project_root}/scripts/bridge_registration_patch.py" \
+        --config-path "$config_file" \
+        --registration-path "$reg_file"
+}
+
 module_generate_registration_if_needed() {
     local bridge_data_dir="$1"
     local bridge_image="$2"
@@ -148,6 +158,16 @@ module_generate_registration_if_needed() {
 
     if [[ -z "$project_root" ]]; then
         project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    fi
+
+    if [[ -f "$reg_file" && -f "$config_file" ]] \
+        && python3 "${project_root}/scripts/bridge_appservice_tokens.py" \
+            --config-path "$config_file" \
+            --registration-path "$reg_file" \
+            --verify; then
+        info "${registration_name} is up to date — applying Synapse compatibility patch."
+        module_patch_bridge_registration "$project_root" "$config_file" "$reg_file"
+        return
     fi
 
     [[ -f "$reg_file" ]] && rm -f "$reg_file"
@@ -169,60 +189,8 @@ module_generate_registration_if_needed() {
         die "Bridge appservice tokens are inconsistent after generating ${registration_name}."
     fi
 
-    if [[ -f "${project_root}/scripts/bridge_registration_patch.py" ]]; then
-        info "Patching ${registration_name} for Synapse compatibility…"
-        python3 "${project_root}/scripts/bridge_registration_patch.py" \
-            --config-path "$config_file" \
-            --registration-path "$reg_file"
-    fi
-
+    module_patch_bridge_registration "$project_root" "$config_file" "$reg_file"
     success "${registration_name} generated."
-}
-
-module_verify_mautrix_bridge_deployment() {
-    local project_root="$1"
-    local config_path="$2"
-    local registration_path="$3"
-    local synapse_registration_path="$4"
-    local homeserver_config="$5"
-    local registration_container_path="$6"
-    local server_name="$7"
-    local bot_username="${8:-whatsappbot}"
-    local synapse_container="${HOMESERVER_CONTAINER:-matrix_synapse}"
-
-    python3 "${project_root}/scripts/bridge_appservice_tokens.py" \
-        --config-path "$config_path" \
-        --registration-path "$registration_path" \
-        --synapse-registration-path "$synapse_registration_path" \
-        --homeserver-yaml "$homeserver_config" \
-        --registration-container-path "$registration_container_path" \
-        --server-name "$server_name" \
-        --bot-username "$bot_username" \
-        --synapse-container "$synapse_container" \
-        --verify-deployment
-}
-
-module_repair_mautrix_bridge_tokens() {
-    local bridge_data_dir="$1"
-    local bridge_image="$2"
-    local project_root="$3"
-    local config_name="${4:-config.yaml}"
-    local registration_name="${5:-registration.yaml}"
-
-    local config_file="${bridge_data_dir}/${config_name}"
-    local reg_file="${bridge_data_dir}/${registration_name}"
-
-    warn "Rotating bridge appservice tokens and regenerating ${registration_name}…"
-    python3 "${project_root}/scripts/bridge_appservice_tokens.py" \
-        --config-path "$config_file" \
-        --registration-path "$reg_file" \
-        --rotate-config-tokens
-    module_generate_registration_if_needed \
-        "$bridge_data_dir" \
-        "$bridge_image" \
-        "$config_name" \
-        "$registration_name" \
-        "$project_root"
 }
 
 module_sync_appservice_registration() {
@@ -232,28 +200,13 @@ module_sync_appservice_registration() {
     local homeserver_config="$4"
     local registration_path="$5"
     local module_label="$6"
-    local bridge_config="${7:-}"
 
     local changed=0
     local impl="${SERVER_IMPLEMENTATION:-synapse}"
     local registration_filename
     registration_filename="$(basename "$registration_dest")"
-    local needs_copy=0
 
     if [[ ! -f "$registration_dest" ]] || ! cmp -s "$registration_src" "$registration_dest"; then
-        needs_copy=1
-    elif [[ -n "$bridge_config" ]] && python3 "${project_root}/scripts/bridge_appservice_tokens.py" \
-        --config-path "$bridge_config" \
-        --registration-path "$registration_src" \
-        --synapse-registration-path "$registration_dest" \
-        --homeserver-yaml "$homeserver_config" \
-        --registration-container-path "$registration_path" \
-        --synapse-out-of-sync; then
-        warn "Synapse registration copy is out of sync with the bridge config - refreshing."
-        needs_copy=1
-    fi
-
-    if [[ "$needs_copy" == "1" ]]; then
         info "Syncing registration to homeserver data directory..."
         mkdir -p "$(dirname "$registration_dest")"
         cp "$registration_src" "$registration_dest"
@@ -289,12 +242,7 @@ module_sync_appservice_registration() {
         changed=1
     fi
 
-    # Mautrix bridges only load Synapse-side registration at homeserver startup.
-    if [[ -n "$bridge_config" ]]; then
-        echo "1"
-    else
-        echo "$changed"
-    fi
+    echo "$changed"
 }
 
 module_restart_homeserver_if_changed() {

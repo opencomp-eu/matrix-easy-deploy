@@ -1068,13 +1068,13 @@ docker restart mautrix-whatsapp
 
 If you installed the WhatsApp bridge before end-to-bridge encryption was enabled by default, run `bash matrix-wizard.sh --module whatsapp-bridge` once more to apply the setting. Existing portal rooms created before that may need manual encryption or re-linking to pick up E2EE.
 
-If `mautrix-whatsapp` logs `The as_token was not accepted`, run the diagnostic script:
+If `mautrix-whatsapp` logs `The as_token was not accepted`, run:
 
 ```bash
 bash scripts/whatsapp_bridge_check.sh
 ```
 
-Then re-run `bash matrix-wizard.sh --module whatsapp-bridge`. The wizard now verifies that Synapse accepts the bridge token before starting the container, rotates tokens once if needed, and patches the registration file for Synapse compatibility.
+Then re-run `bash matrix-wizard.sh --module whatsapp-bridge`.
 
 #### `slack-bridge` — Bridge Matrix to Slack
 

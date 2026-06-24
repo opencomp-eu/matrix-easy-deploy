@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import re
 import secrets
 from pathlib import Path
 
@@ -27,7 +26,6 @@ def patch_registration(config_path: Path, registration_path: Path) -> bool:
     appservice = config.get("appservice", {}) if isinstance(config.get("appservice", {}), dict) else {}
     encryption = config.get("encryption", {}) if isinstance(config.get("encryption", {}), dict) else {}
 
-    domain = str(homeserver.get("domain", "") or "").strip()
     as_address = str(appservice.get("address", "") or "").strip()
     ephemeral_events = bool(appservice.get("ephemeral_events", False))
     encryption_enabled = bool(encryption.get("allow", False))
@@ -55,19 +53,6 @@ def patch_registration(config_path: Path, registration_path: Path) -> bool:
     if not sender_localpart or sender_localpart == bot_username:
         registration["sender_localpart"] = secrets.token_hex(8)
         changed = True
-
-    if domain:
-        escaped = re.escape(domain)
-        namespaces = registration.get("namespaces", {})
-        users = namespaces.get("users", []) if isinstance(namespaces, dict) else []
-        if isinstance(users, list):
-            for entry in users:
-                if not isinstance(entry, dict):
-                    continue
-                regex = str(entry.get("regex", "") or "")
-                if domain in regex and escaped not in regex:
-                    entry["regex"] = regex.replace(domain, escaped)
-                    changed = True
 
     if changed:
         write_yaml(registration_path, registration)

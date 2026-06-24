@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -37,42 +36,6 @@ def registration_tokens(registration_path: Path) -> tuple[str, str]:
     return as_token, hs_token
 
 
-def tokens_need_regeneration(config_path: Path, registration_path: Path) -> bool:
-    cfg_as, cfg_hs = config_tokens(config_path)
-    if not cfg_as or not cfg_hs:
-        return True
-    if cfg_as in PLACEHOLDER_TOKENS or cfg_hs in PLACEHOLDER_TOKENS:
-        return True
-    if not registration_path.exists():
-        return True
-
-    reg_as, reg_hs = registration_tokens(registration_path)
-    if not reg_as or not reg_hs:
-        return True
-    return cfg_as != reg_as or cfg_hs != reg_hs
-
-
-def synapse_registration_out_of_sync(
-    config_path: Path,
-    registration_src: Path,
-    registration_dest: Path,
-) -> bool:
-    if not registration_dest.exists():
-        return True
-    if tokens_need_regeneration(config_path, registration_src):
-        return True
-
-    cfg_as, cfg_hs = config_tokens(config_path)
-    dest_as, dest_hs = registration_tokens(registration_dest)
-    return cfg_as != dest_as or cfg_hs != dest_hs
-
-
-def homeserver_lists_registration(homeserver_config: Path, registration_container_path: str) -> bool:
-    if not homeserver_config.exists():
-        return False
-    return registration_container_path in homeserver_config.read_text(encoding="utf-8")
-
-
 def config_domain(config_path: Path) -> str:
     data = load_yaml(config_path)
     homeserver = data.get("homeserver", {})
@@ -91,14 +54,34 @@ def synapse_server_name(homeserver_yaml: Path) -> str:
     return ""
 
 
-def rotate_config_tokens(config_path: Path) -> None:
-    data = load_yaml(config_path)
-    appservice = data.setdefault("appservice", {})
-    if not isinstance(appservice, dict):
-        raise ValueError("config.yaml appservice section is missing or invalid")
-    appservice["as_token"] = secrets.token_urlsafe(43)
-    appservice["hs_token"] = secrets.token_urlsafe(43)
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
+def homeserver_lists_registration(homeserver_config: Path, registration_container_path: str) -> bool:
+    if not homeserver_config.exists():
+        return False
+    return registration_container_path in homeserver_config.read_text(encoding="utf-8")
+
+
+def verify_tokens(config_path: Path, registration_path: Path) -> list[str]:
+    errors: list[str] = []
+    cfg_as, cfg_hs = config_tokens(config_path)
+
+    if not cfg_as or cfg_as in PLACEHOLDER_TOKENS:
+        errors.append("config.yaml appservice.as_token is missing or still a placeholder")
+    if not cfg_hs or cfg_hs in PLACEHOLDER_TOKENS:
+        errors.append("config.yaml appservice.hs_token is missing or still a placeholder")
+    if not registration_path.exists():
+        errors.append(f"{registration_path.name} does not exist")
+        return errors
+
+    reg_as, reg_hs = registration_tokens(registration_path)
+    if not reg_as:
+        errors.append(f"{registration_path.name} as_token is missing")
+    if not reg_hs:
+        errors.append(f"{registration_path.name} hs_token is missing")
+    if cfg_as and reg_as and cfg_as != reg_as:
+        errors.append("config.yaml and registration.yaml as_token values do not match")
+    if cfg_hs and reg_hs and cfg_hs != reg_hs:
+        errors.append("config.yaml and registration.yaml hs_token values do not match")
+    return errors
 
 
 def test_synapse_accepts_token(
@@ -135,7 +118,7 @@ except Exception as exc:
         text=True,
         check=False,
     )
-    if result.returncode not in (0,):
+    if result.returncode != 0:
         detail = (result.stderr or result.stdout or "docker exec failed").strip()
         return False, detail
 
@@ -143,30 +126,6 @@ except Exception as exc:
     if status == "200":
         return True, "Synapse accepted the bridge as_token"
     return False, f"Synapse returned HTTP {status} for as_token (registration not loaded or token rejected)"
-
-
-def verify_tokens(config_path: Path, registration_path: Path) -> list[str]:
-    errors: list[str] = []
-    cfg_as, cfg_hs = config_tokens(config_path)
-
-    if not cfg_as or cfg_as in PLACEHOLDER_TOKENS:
-        errors.append("config.yaml appservice.as_token is missing or still a placeholder")
-    if not cfg_hs or cfg_hs in PLACEHOLDER_TOKENS:
-        errors.append("config.yaml appservice.hs_token is missing or still a placeholder")
-    if not registration_path.exists():
-        errors.append(f"{registration_path.name} does not exist")
-        return errors
-
-    reg_as, reg_hs = registration_tokens(registration_path)
-    if not reg_as:
-        errors.append(f"{registration_path.name} as_token is missing")
-    if not reg_hs:
-        errors.append(f"{registration_path.name} hs_token is missing")
-    if cfg_as and reg_as and cfg_as != reg_as:
-        errors.append("config.yaml and registration.yaml as_token values do not match")
-    if cfg_hs and reg_hs and cfg_hs != reg_hs:
-        errors.append("config.yaml and registration.yaml hs_token values do not match")
-    return errors
 
 
 def verify_deployment(
@@ -200,8 +159,8 @@ def verify_deployment(
 
     if not synapse_registration_path.exists():
         errors.append(f"Synapse registration copy missing: {synapse_registration_path}")
-    elif synapse_registration_out_of_sync(config_path, registration_path, synapse_registration_path):
-        errors.append("Synapse registration copy is out of sync with bridge files")
+    elif synapse_registration_path.read_bytes() != registration_path.read_bytes():
+        errors.append("Synapse registration copy is out of sync with bridge registration.yaml")
 
     as_token, _ = config_tokens(config_path)
     if as_token and not errors:
@@ -231,17 +190,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-name")
     parser.add_argument("--bot-username", default="whatsappbot")
     parser.add_argument("--synapse-container", default="matrix_synapse")
-    parser.add_argument("--rotate-config-tokens", action="store_true")
-    parser.add_argument(
-        "--needs-regeneration",
-        action="store_true",
-        help="Exit 0 when registration should be regenerated, 1 when tokens already match",
-    )
-    parser.add_argument(
-        "--synapse-out-of-sync",
-        action="store_true",
-        help="Exit 0 when the Synapse registration copy is missing or token-mismatched",
-    )
     parser.add_argument(
         "--verify",
         action="store_true",
@@ -259,31 +207,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config_path = Path(args.config_path)
     registration_path = Path(args.registration_path)
-
-    if args.rotate_config_tokens:
-        rotate_config_tokens(config_path)
-        print("Rotated appservice tokens in config.yaml.")
-        return 0
-
-    if args.needs_regeneration:
-        return 0 if tokens_need_regeneration(config_path, registration_path) else 1
-
-    if args.synapse_out_of_sync:
-        if not args.synapse_registration_path:
-            print("--synapse-registration-path is required with --synapse-out-of-sync", file=sys.stderr)
-            return 2
-        out_of_sync = synapse_registration_out_of_sync(
-            config_path,
-            registration_path,
-            Path(args.synapse_registration_path),
-        )
-        if args.homeserver_yaml and args.registration_container_path:
-            if not homeserver_lists_registration(
-                Path(args.homeserver_yaml),
-                args.registration_container_path,
-            ):
-                return 0
-        return 0 if out_of_sync else 1
 
     if args.verify:
         errors = verify_tokens(config_path, registration_path)
@@ -322,9 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         print("WhatsApp bridge appservice deployment looks healthy.")
         return 0
 
-    raise SystemExit(
-        "Specify --needs-regeneration, --synapse-out-of-sync, --verify, --verify-deployment, or --rotate-config-tokens"
-    )
+    raise SystemExit("Specify --verify or --verify-deployment")
 
 
 if __name__ == "__main__":
