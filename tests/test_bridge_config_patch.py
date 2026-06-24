@@ -107,7 +107,8 @@ class BridgeConfigPatchTests(unittest.TestCase):
                 "  uri: \"sqlite:///tmp.db\"\n"
                 "encryption:\n"
                 "    allow: false\n"
-                "    default: false\n"
+                "    default: true\n"
+                "    self_sign: false\n"
                 "permissions:\n"
                 "  \"old.example.com\": admin\n"
             )
@@ -125,7 +126,8 @@ class BridgeConfigPatchTests(unittest.TestCase):
 
             content = config_path.read_text()
             self.assertIn("allow: true", content)
-            self.assertIn("default: true", content)
+            self.assertIn("default: false", content)
+            self.assertIn("self_sign: true", content)
             self.assertIn('domain: "example.com"', content)
             self.assertIn('"@admin:example.com": admin', content)
 

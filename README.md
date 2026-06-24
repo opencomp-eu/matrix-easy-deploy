@@ -1038,7 +1038,7 @@ bash scripts/hookshot-check.sh
 | **1:1 chats** | All personal WhatsApp conversations appear as Matrix rooms |
 | **Group chats** | WhatsApp groups bridged as Matrix rooms |
 | **Media** | Images, video, voice messages, documents — all bridged both ways |
-| **End-to-bridge encryption (E2EE)** | Enabled by default for new portal rooms |
+| **End-to-bridge encryption (E2EE)** | Supported; new portal rooms are unencrypted by default (avoids Element device warnings) |
 | **PostgreSQL** | Dedicated database created automatically during setup |
 
 ```bash
@@ -1066,7 +1066,9 @@ docker restart mautrix-whatsapp
 
 > **Note:** Your WhatsApp mobile app must stay active. If you factory-reset your phone or uninstall WhatsApp, re-run `login` in the bridge DM to re-link.
 
-If you installed the WhatsApp bridge before end-to-bridge encryption was enabled by default, run `bash matrix-wizard.sh --module whatsapp-bridge` once more to apply the setting. Existing portal rooms created before that may need manual encryption or re-linking to pick up E2EE.
+If you installed the WhatsApp bridge before end-to-bridge encryption was enabled by default, run `bash matrix-wizard.sh --module whatsapp-bridge` once more to apply the setting.
+
+**Element warning:** *"The sender of the event does not match the owner of the device that sent it"* appears on encrypted bridged rooms. That is expected when `encryption.default` is `true` — mautrix encrypts ghost-user messages with the bridge bot's device. This setup keeps `encryption.default: false` so new portal rooms stay unencrypted and avoid the warning; E2EE still works if you enable encryption on a specific room. Rooms that were already created encrypted before this change will keep showing the warning until you leave them and let the bridge recreate unencrypted portals (or log in again). To force encryption on every new portal anyway, set `encryption.default: true` in `modules/whatsapp-bridge/whatsapp/config.yaml` and restart the bridge.
 
 If `mautrix-whatsapp` logs `The as_token was not accepted`, run:
 

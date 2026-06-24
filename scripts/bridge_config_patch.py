@@ -83,8 +83,13 @@ def patch_bridge_config(
     content = patch_permissions(content, server_name, admin_user)
 
     if enable_e2ee:
+        # allow: bridge can participate in encrypted rooms.
+        # default: false avoids auto-encrypting every portal; forcing encryption on all
+        # bridged rooms makes Element warn that ghost senders use the bridge bot device.
+        # self_sign: bridge cross-signs itself when encryption is used (recommended by mautrix).
         content = replace_field(content, "encryption.allow", "true", quote=False)
-        content = replace_field(content, "encryption.default", "true", quote=False)
+        content = replace_field(content, "encryption.default", "false", quote=False)
+        content = replace_field(content, "encryption.self_sign", "true", quote=False)
 
     config_path.write_text(content)
 
@@ -101,7 +106,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--enable-e2ee",
         action="store_true",
-        help="Enable end-to-bridge encryption (encryption.allow and encryption.default)",
+        help="Enable end-to-bridge encryption support (encryption.allow, self_sign; default off)",
     )
     return parser.parse_args(argv)
 
