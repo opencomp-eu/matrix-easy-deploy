@@ -271,7 +271,7 @@ module_start_bridge_after_homeserver() {
     module_restart_homeserver_if_changed "$appservice_changed" "$project_root"
 
     local -a docker_compose
-    read -ra docker_compose <<< "$(docker_compose_cmd)"
+    IFS=' ' read -ra docker_compose <<< "$(docker_compose_cmd)"
 
     echo
     info "Starting ${bridge_label}…"
