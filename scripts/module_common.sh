@@ -150,15 +150,6 @@ module_generate_registration_if_needed() {
         project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     fi
 
-    if [[ -f "$reg_file" && -f "$config_file" ]] \
-        && ! python3 "${project_root}/scripts/bridge_appservice_tokens.py" \
-            --config-path "$config_file" \
-            --registration-path "$reg_file" \
-            --needs-regeneration; then
-        info "${registration_name} tokens match ${config_name} - skipping regeneration."
-        return
-    fi
-
     [[ -f "$reg_file" ]] && rm -f "$reg_file"
 
     info "Running container to generate ${registration_name}..."
@@ -187,13 +178,28 @@ module_sync_appservice_registration() {
     local homeserver_config="$4"
     local registration_path="$5"
     local module_label="$6"
+    local bridge_config="${7:-}"
 
     local changed=0
     local impl="${SERVER_IMPLEMENTATION:-synapse}"
     local registration_filename
     registration_filename="$(basename "$registration_dest")"
+    local needs_copy=0
 
     if [[ ! -f "$registration_dest" ]] || ! cmp -s "$registration_src" "$registration_dest"; then
+        needs_copy=1
+    elif [[ -n "$bridge_config" ]] && python3 "${project_root}/scripts/bridge_appservice_tokens.py" \
+        --config-path "$bridge_config" \
+        --registration-path "$registration_src" \
+        --synapse-registration-path "$registration_dest" \
+        --homeserver-yaml "$homeserver_config" \
+        --registration-container-path "$registration_path" \
+        --synapse-out-of-sync; then
+        warn "Synapse registration copy is out of sync with the bridge config - refreshing."
+        needs_copy=1
+    fi
+
+    if [[ "$needs_copy" == "1" ]]; then
         info "Syncing registration to homeserver data directory..."
         mkdir -p "$(dirname "$registration_dest")"
         cp "$registration_src" "$registration_dest"
@@ -229,7 +235,12 @@ module_sync_appservice_registration() {
         changed=1
     fi
 
-    echo "$changed"
+    # Mautrix bridges only load Synapse-side registration at homeserver startup.
+    if [[ -n "$bridge_config" ]]; then
+        echo "1"
+    else
+        echo "$changed"
+    fi
 }
 
 module_restart_homeserver_if_changed() {
@@ -247,7 +258,18 @@ module_restart_homeserver_if_changed() {
     info "Restarting ${label} to load the updated appservice registration..."
     if docker ps --format '{{.Names}}' | grep -qx "${container}"; then
         docker restart "${container}"
-        success "${label} restarted."
+        local attempt
+        for attempt in $(seq 1 30); do
+            if docker exec "${container}" python3 -c \
+                'import urllib.request; urllib.request.urlopen("http://localhost:8008/health")' \
+                2>/dev/null; then
+                success "${label} restarted and is healthy."
+                return
+            fi
+            sleep 2
+        done
+        warn "${label} restarted but did not become healthy within 60s."
+        warn "Check logs: docker logs ${container}"
     else
         warn "${label} (${container}) is not running."
         warn "Start the core stack first: cd ${project_root}/modules/core && docker compose up -d"

@@ -247,7 +247,8 @@ register_appservice() {
         reg_dest="${CORE_SYNAPSE_DATA_DIR}/whatsapp-registration.yaml"
         reg_container_path="/data/whatsapp-registration.yaml"
     fi
-    if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_CONFIG" "$reg_container_path" "WhatsApp bridge")" == "1" ]]; then
+    local bridge_config="${BRIDGE_DATA_DIR}/config.yaml"
+    if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_CONFIG" "$reg_container_path" "WhatsApp bridge" "$bridge_config")" == "1" ]]; then
         APP_SERVICE_CHANGED="1"
     fi
 }

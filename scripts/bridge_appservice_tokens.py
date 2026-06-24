@@ -50,6 +50,27 @@ def tokens_need_regeneration(config_path: Path, registration_path: Path) -> bool
     return cfg_as != reg_as or cfg_hs != reg_hs
 
 
+def synapse_registration_out_of_sync(
+    config_path: Path,
+    registration_src: Path,
+    registration_dest: Path,
+) -> bool:
+    if not registration_dest.exists():
+        return True
+    if tokens_need_regeneration(config_path, registration_src):
+        return True
+
+    cfg_as, cfg_hs = config_tokens(config_path)
+    dest_as, dest_hs = registration_tokens(registration_dest)
+    return cfg_as != dest_as or cfg_hs != dest_hs
+
+
+def homeserver_lists_registration(homeserver_config: Path, registration_container_path: str) -> bool:
+    if not homeserver_config.exists():
+        return False
+    return registration_container_path in homeserver_config.read_text(encoding="utf-8")
+
+
 def verify_tokens(config_path: Path, registration_path: Path) -> list[str]:
     errors: list[str] = []
     cfg_as, cfg_hs = config_tokens(config_path)
@@ -78,10 +99,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check mautrix bridge appservice token consistency")
     parser.add_argument("--config-path", required=True)
     parser.add_argument("--registration-path", required=True)
+    parser.add_argument("--synapse-registration-path")
+    parser.add_argument("--homeserver-yaml")
+    parser.add_argument("--registration-container-path")
     parser.add_argument(
         "--needs-regeneration",
         action="store_true",
         help="Exit 0 when registration should be regenerated, 1 when tokens already match",
+    )
+    parser.add_argument(
+        "--synapse-out-of-sync",
+        action="store_true",
+        help="Exit 0 when the Synapse registration copy is missing or token-mismatched",
     )
     parser.add_argument(
         "--verify",
@@ -99,6 +128,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.needs_regeneration:
         return 0 if tokens_need_regeneration(config_path, registration_path) else 1
 
+    if args.synapse_out_of_sync:
+        if not args.synapse_registration_path:
+            print("--synapse-registration-path is required with --synapse-out-of-sync", file=sys.stderr)
+            return 2
+        out_of_sync = synapse_registration_out_of_sync(
+            config_path,
+            registration_path,
+            Path(args.synapse_registration_path),
+        )
+        if args.homeserver_yaml and args.registration_container_path:
+            if not homeserver_lists_registration(
+                Path(args.homeserver_yaml),
+                args.registration_container_path,
+            ):
+                return 0
+        return 0 if out_of_sync else 1
+
     if args.verify:
         errors = verify_tokens(config_path, registration_path)
         if errors:
@@ -108,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Bridge appservice tokens are consistent.")
         return 0
 
-    raise SystemExit("Specify --needs-regeneration or --verify")
+    raise SystemExit("Specify --needs-regeneration, --synapse-out-of-sync, or --verify")
 
 
 if __name__ == "__main__":
