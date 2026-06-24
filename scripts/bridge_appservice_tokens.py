@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
+import secrets
+import subprocess
 import sys
 from pathlib import Path
 
@@ -71,6 +73,78 @@ def homeserver_lists_registration(homeserver_config: Path, registration_containe
     return registration_container_path in homeserver_config.read_text(encoding="utf-8")
 
 
+def config_domain(config_path: Path) -> str:
+    data = load_yaml(config_path)
+    homeserver = data.get("homeserver", {})
+    if not isinstance(homeserver, dict):
+        return ""
+    return str(homeserver.get("domain", "") or "").strip()
+
+
+def synapse_server_name(homeserver_yaml: Path) -> str:
+    if not homeserver_yaml.exists():
+        return ""
+    for line in homeserver_yaml.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("server_name:"):
+            return stripped.split(":", 1)[1].strip().strip('"').strip("'")
+    return ""
+
+
+def rotate_config_tokens(config_path: Path) -> None:
+    data = load_yaml(config_path)
+    appservice = data.setdefault("appservice", {})
+    if not isinstance(appservice, dict):
+        raise ValueError("config.yaml appservice section is missing or invalid")
+    appservice["as_token"] = secrets.token_urlsafe(43)
+    appservice["hs_token"] = secrets.token_urlsafe(43)
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
+
+
+def test_synapse_accepts_token(
+    *,
+    as_token: str,
+    server_name: str,
+    bot_username: str,
+    synapse_container: str,
+) -> tuple[bool, str]:
+    bot_mxid = f"@{bot_username}:{server_name}"
+    script = f"""
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+bot = {bot_mxid!r}
+token = {as_token!r}
+url = "http://localhost:8008/_matrix/client/versions?" + urllib.parse.urlencode({{"user_id": bot}})
+req = urllib.request.Request(url, headers={{"Authorization": f"Bearer {{token}}"}})
+try:
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        print(resp.status)
+except urllib.error.HTTPError as exc:
+    print(exc.code)
+    sys.exit(0)
+except Exception as exc:
+    print(f"error: {{exc}}", file=sys.stderr)
+    sys.exit(1)
+"""
+    result = subprocess.run(
+        ["docker", "exec", synapse_container, "python3", "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode not in (0,):
+        detail = (result.stderr or result.stdout or "docker exec failed").strip()
+        return False, detail
+
+    status = (result.stdout or "").strip()
+    if status == "200":
+        return True, "Synapse accepted the bridge as_token"
+    return False, f"Synapse returned HTTP {status} for as_token (registration not loaded or token rejected)"
+
+
 def verify_tokens(config_path: Path, registration_path: Path) -> list[str]:
     errors: list[str] = []
     cfg_as, cfg_hs = config_tokens(config_path)
@@ -95,6 +169,58 @@ def verify_tokens(config_path: Path, registration_path: Path) -> list[str]:
     return errors
 
 
+def verify_deployment(
+    config_path: Path,
+    registration_path: Path,
+    synapse_registration_path: Path,
+    homeserver_yaml: Path,
+    registration_container_path: str,
+    server_name: str,
+    bot_username: str,
+    synapse_container: str,
+) -> list[str]:
+    errors = verify_tokens(config_path, registration_path)
+
+    config_sn = config_domain(config_path)
+    if config_sn and server_name and config_sn != server_name:
+        errors.append(
+            f"config.yaml homeserver.domain ({config_sn}) does not match server_name ({server_name})"
+        )
+
+    homeserver_sn = synapse_server_name(homeserver_yaml)
+    if homeserver_sn and server_name and homeserver_sn != server_name:
+        errors.append(
+            f"homeserver.yaml server_name ({homeserver_sn}) does not match expected server_name ({server_name})"
+        )
+
+    if not homeserver_lists_registration(homeserver_yaml, registration_container_path):
+        errors.append(
+            f"homeserver.yaml does not list {registration_container_path} in app_service_config_files"
+        )
+
+    if not synapse_registration_path.exists():
+        errors.append(f"Synapse registration copy missing: {synapse_registration_path}")
+    elif synapse_registration_out_of_sync(config_path, registration_path, synapse_registration_path):
+        errors.append("Synapse registration copy is out of sync with bridge files")
+
+    as_token, _ = config_tokens(config_path)
+    if as_token and not errors:
+        accepted, detail = test_synapse_accepts_token(
+            as_token=as_token,
+            server_name=server_name,
+            bot_username=bot_username,
+            synapse_container=synapse_container,
+        )
+        if not accepted:
+            errors.append(detail)
+            errors.append(
+                "Check Synapse startup logs for appservice load errors: "
+                f"docker logs {synapse_container} 2>&1 | grep -i appservice | tail -20"
+            )
+
+    return errors
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check mautrix bridge appservice token consistency")
     parser.add_argument("--config-path", required=True)
@@ -102,6 +228,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--synapse-registration-path")
     parser.add_argument("--homeserver-yaml")
     parser.add_argument("--registration-container-path")
+    parser.add_argument("--server-name")
+    parser.add_argument("--bot-username", default="whatsappbot")
+    parser.add_argument("--synapse-container", default="matrix_synapse")
+    parser.add_argument("--rotate-config-tokens", action="store_true")
     parser.add_argument(
         "--needs-regeneration",
         action="store_true",
@@ -117,6 +247,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Exit non-zero when config and registration tokens are invalid or mismatched",
     )
+    parser.add_argument(
+        "--verify-deployment",
+        action="store_true",
+        help="Verify on-disk wiring and that Synapse accepts the bridge as_token",
+    )
     return parser.parse_args(argv)
 
 
@@ -124,6 +259,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config_path = Path(args.config_path)
     registration_path = Path(args.registration_path)
+
+    if args.rotate_config_tokens:
+        rotate_config_tokens(config_path)
+        print("Rotated appservice tokens in config.yaml.")
+        return 0
 
     if args.needs_regeneration:
         return 0 if tokens_need_regeneration(config_path, registration_path) else 1
@@ -154,7 +294,37 @@ def main(argv: list[str] | None = None) -> int:
         print("Bridge appservice tokens are consistent.")
         return 0
 
-    raise SystemExit("Specify --needs-regeneration, --synapse-out-of-sync, or --verify")
+    if args.verify_deployment:
+        if not args.synapse_registration_path or not args.homeserver_yaml or not args.registration_container_path:
+            print(
+                "--verify-deployment requires --synapse-registration-path, "
+                "--homeserver-yaml, and --registration-container-path",
+                file=sys.stderr,
+            )
+            return 2
+        if not args.server_name:
+            print("--verify-deployment requires --server-name", file=sys.stderr)
+            return 2
+        errors = verify_deployment(
+            config_path=config_path,
+            registration_path=registration_path,
+            synapse_registration_path=Path(args.synapse_registration_path),
+            homeserver_yaml=Path(args.homeserver_yaml),
+            registration_container_path=args.registration_container_path,
+            server_name=args.server_name,
+            bot_username=args.bot_username,
+            synapse_container=args.synapse_container,
+        )
+        if errors:
+            for error in errors:
+                print(error, file=sys.stderr)
+            return 1
+        print("WhatsApp bridge appservice deployment looks healthy.")
+        return 0
+
+    raise SystemExit(
+        "Specify --needs-regeneration, --synapse-out-of-sync, --verify, --verify-deployment, or --rotate-config-tokens"
+    )
 
 
 if __name__ == "__main__":

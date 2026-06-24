@@ -251,14 +251,47 @@ register_appservice() {
     if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_CONFIG" "$reg_container_path" "WhatsApp bridge" "$bridge_config")" == "1" ]]; then
         APP_SERVICE_CHANGED="1"
     fi
+
+    module_restart_homeserver_if_changed "$APP_SERVICE_CHANGED" "$PROJECT_ROOT"
+
+    if ! module_verify_mautrix_bridge_deployment \
+        "$PROJECT_ROOT" \
+        "$bridge_config" \
+        "$reg_src" \
+        "$reg_dest" \
+        "$HOMESERVER_CONFIG" \
+        "$reg_container_path" \
+        "$SERVER_NAME" \
+        "whatsappbot"; then
+        warn "WhatsApp bridge appservice verification failed — rotating tokens and retrying once…"
+        module_repair_mautrix_bridge_tokens \
+            "$BRIDGE_DATA_DIR" \
+            "$BRIDGE_IMAGE" \
+            "$PROJECT_ROOT"
+        if [[ "$(module_sync_appservice_registration "$PROJECT_ROOT" "$reg_src" "$reg_dest" "$HOMESERVER_CONFIG" "$reg_container_path" "WhatsApp bridge" "$bridge_config")" == "1" ]]; then
+            APP_SERVICE_CHANGED="1"
+        fi
+        module_restart_homeserver_if_changed "1" "$PROJECT_ROOT"
+        if ! module_verify_mautrix_bridge_deployment \
+            "$PROJECT_ROOT" \
+            "$bridge_config" \
+            "$reg_src" \
+            "$reg_dest" \
+            "$HOMESERVER_CONFIG" \
+            "$reg_container_path" \
+            "$SERVER_NAME" \
+            "whatsappbot"; then
+            die "WhatsApp bridge appservice verification failed after token rotation. Run: bash scripts/whatsapp_bridge_check.sh"
+        fi
+    fi
 }
 
 # =============================================================================
-# Step 8 — Start the bridge and restart Synapse
+# Step 8 — Start the bridge
 # =============================================================================
 start_services() {
     module_start_bridge_after_homeserver \
-        "$APP_SERVICE_CHANGED" \
+        "0" \
         "$PROJECT_ROOT" \
         "$MODULE_DIR" \
         "mautrix-whatsapp" \

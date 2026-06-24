@@ -168,7 +168,61 @@ module_generate_registration_if_needed() {
         --verify; then
         die "Bridge appservice tokens are inconsistent after generating ${registration_name}."
     fi
+
+    if [[ -f "${project_root}/scripts/bridge_registration_patch.py" ]]; then
+        info "Patching ${registration_name} for Synapse compatibility…"
+        python3 "${project_root}/scripts/bridge_registration_patch.py" \
+            --config-path "$config_file" \
+            --registration-path "$reg_file"
+    fi
+
     success "${registration_name} generated."
+}
+
+module_verify_mautrix_bridge_deployment() {
+    local project_root="$1"
+    local config_path="$2"
+    local registration_path="$3"
+    local synapse_registration_path="$4"
+    local homeserver_config="$5"
+    local registration_container_path="$6"
+    local server_name="$7"
+    local bot_username="${8:-whatsappbot}"
+    local synapse_container="${HOMESERVER_CONTAINER:-matrix_synapse}"
+
+    python3 "${project_root}/scripts/bridge_appservice_tokens.py" \
+        --config-path "$config_path" \
+        --registration-path "$registration_path" \
+        --synapse-registration-path "$synapse_registration_path" \
+        --homeserver-yaml "$homeserver_config" \
+        --registration-container-path "$registration_container_path" \
+        --server-name "$server_name" \
+        --bot-username "$bot_username" \
+        --synapse-container "$synapse_container" \
+        --verify-deployment
+}
+
+module_repair_mautrix_bridge_tokens() {
+    local bridge_data_dir="$1"
+    local bridge_image="$2"
+    local project_root="$3"
+    local config_name="${4:-config.yaml}"
+    local registration_name="${5:-registration.yaml}"
+
+    local config_file="${bridge_data_dir}/${config_name}"
+    local reg_file="${bridge_data_dir}/${registration_name}"
+
+    warn "Rotating bridge appservice tokens and regenerating ${registration_name}…"
+    python3 "${project_root}/scripts/bridge_appservice_tokens.py" \
+        --config-path "$config_file" \
+        --registration-path "$reg_file" \
+        --rotate-config-tokens
+    module_generate_registration_if_needed \
+        "$bridge_data_dir" \
+        "$bridge_image" \
+        "$config_name" \
+        "$registration_name" \
+        "$project_root"
 }
 
 module_sync_appservice_registration() {
