@@ -19,8 +19,14 @@ class SmokeWorkflowTests(unittest.TestCase):
         build_minimal_project(self.root, preset="core_only")
         self._prev_skip_bootstrap = os.environ.get("MED_SKIP_EXTERNAL_BOOTSTRAP")
         os.environ["MED_SKIP_EXTERNAL_BOOTSTRAP"] = "1"
+        self._prev_mas_docker_generate = os.environ.get("MED_MAS_USE_DOCKER_GENERATE")
+        os.environ["MED_MAS_USE_DOCKER_GENERATE"] = "0"
 
     def tearDown(self):
+        if self._prev_mas_docker_generate is None:
+            os.environ.pop("MED_MAS_USE_DOCKER_GENERATE", None)
+        else:
+            os.environ["MED_MAS_USE_DOCKER_GENERATE"] = self._prev_mas_docker_generate
         if self._prev_skip_bootstrap is None:
             os.environ.pop("MED_SKIP_EXTERNAL_BOOTSTRAP", None)
         else:
@@ -75,8 +81,9 @@ class SmokeWorkflowTests(unittest.TestCase):
         import subprocess
 
         def _mock_setup(cmd, *args, **kwargs):
-            if "modules/hookshot/setup.sh" not in " ".join(str(part) for part in cmd):
-                return subprocess.CompletedProcess(cmd, 0)
+            cmd_str = " ".join(str(part) for part in cmd)
+            if "modules/hookshot/setup.sh" not in cmd_str:
+                return subprocess.run(cmd, *args, **kwargs)
             hookshot_dir = self.root / "modules/hookshot/hookshot"
             hookshot_dir.mkdir(parents=True, exist_ok=True)
             (hookshot_dir / "config.yml").write_text("ok\n")

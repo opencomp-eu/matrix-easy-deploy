@@ -119,6 +119,8 @@ def _write_core_templates(root: Path, *, full: bool) -> None:
         (root / "modules/core/synapse/homeserver.yaml.template").write_text(
             "server_name: {{SERVER_NAME}}\n"
             "public_baseurl: https://{{MATRIX_DOMAIN}}\n"
+            "login_via_existing_session:\n"
+            "  enabled: {{LOGIN_VIA_EXISTING_SESSION_ENABLED}}\n"
             "password_config:\n  enabled: {{LOCAL_LOGIN_ENABLED}}\n"
             "oidc_providers: {{OIDC_PROVIDERS_JSON}}\n"
             "extra_well_known_client_content:\n"

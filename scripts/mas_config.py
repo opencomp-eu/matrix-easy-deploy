@@ -252,11 +252,44 @@ def build_mas_signing_keys_yaml(keys: list[dict[str, str]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _parse_generated_mas_config(raw: str) -> dict[str, Any]:
+def _parse_generated_mas_config(raw: str | None) -> dict[str, Any]:
+    if not raw or not str(raw).strip():
+        raise ValueError("mas-cli config generate returned empty output")
     data = yaml.safe_load(raw)
     if not isinstance(data, dict):
         raise ValueError("mas-cli config generate returned invalid YAML")
     return data
+
+
+def _normalize_pem_private_key(key_material: str) -> str:
+    """Keep only private-key PEM blocks (drop EC PARAMETERS wrappers from openssl ecparam)."""
+    text = str(key_material).strip()
+    if "-----BEGIN" not in text:
+        return text
+
+    blocks: list[str] = []
+    current: list[str] = []
+    in_block = False
+    for line in text.splitlines():
+        if line.startswith("-----BEGIN"):
+            in_block = True
+            current = [line]
+            continue
+        if line.startswith("-----END"):
+            if in_block:
+                current.append(line)
+                block = "\n".join(current)
+                if "PRIVATE KEY" in block:
+                    blocks.append(block)
+            in_block = False
+            current = []
+            continue
+        if in_block:
+            current.append(line)
+
+    if blocks:
+        return "\n".join(blocks)
+    return text
 
 
 def _normalize_signing_keys(keys: list) -> list[dict[str, str]]:
@@ -270,10 +303,28 @@ def _normalize_signing_keys(keys: list) -> list[dict[str, str]]:
         normalized.append(
             {
                 "kid": str(item.get("kid") or f"key{index + 1}"),
-                "key": str(key_material).strip(),
+                "key": _normalize_pem_private_key(str(key_material)),
             }
         )
     return normalized
+
+
+def _mas_signing_keys_usable(keys: list) -> bool:
+    normalized = _normalize_signing_keys(keys)
+    if not normalized:
+        return False
+
+    has_signing_key = False
+    for item in normalized:
+        key = item.get("key", "")
+        if not key or "placeholder-test-key" in key:
+            return False
+        if "-----BEGIN EC PARAMETERS-----" in key:
+            return False
+        if "PRIVATE KEY" not in key:
+            return False
+        has_signing_key = True
+    return has_signing_key
 
 
 def _generate_mas_signing_material_stub() -> dict[str, Any]:
@@ -304,66 +355,70 @@ def _generate_mas_signing_material_stub() -> dict[str, Any]:
 
 
 def _generate_mas_signing_material_openssl() -> dict[str, Any]:
-    try:
-        rsa = subprocess.run(
-            ["openssl", "genrsa", "2048"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        ec = subprocess.run(
-            ["openssl", "ecparam", "-name", "prime256v1", "-genkey"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        if not rsa.stdout or not ec.stdout:
-            raise RuntimeError("openssl produced no output")
-        return {
-            "MAS_ENCRYPTION_SECRET": secrets.token_hex(32),
-            "MAS_SIGNING_KEYS": [
-                {"kid": "rsa1", "key": rsa.stdout.strip()},
-                {"kid": "ec1", "key": ec.stdout.strip()},
-            ],
-        }
-    except (subprocess.SubprocessError, OSError, RuntimeError):
-        return _generate_mas_signing_material_stub()
+    rsa = subprocess.run(
+        ["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    if not rsa.stdout.strip():
+        raise RuntimeError("openssl produced no RSA private key output")
+    return {
+        "MAS_ENCRYPTION_SECRET": secrets.token_hex(32),
+        "MAS_SIGNING_KEYS": [
+            {"kid": "rsa1", "key": _normalize_pem_private_key(rsa.stdout)},
+        ],
+    }
+
+
+def _generate_mas_signing_material_docker() -> dict[str, Any]:
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "ghcr.io/element-hq/matrix-authentication-service:latest",
+            "config",
+            "generate",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    generated = _parse_generated_mas_config(result.stdout)
+    secrets_block = generated.get("secrets", {})
+    if not isinstance(secrets_block, dict):
+        raise ValueError("generated config missing secrets block")
+    encryption = secrets_block.get("encryption")
+    keys = _normalize_signing_keys(secrets_block.get("keys", []))
+    if not encryption or not keys:
+        raise ValueError("generated config missing encryption or signing keys")
+    return {
+        "MAS_ENCRYPTION_SECRET": str(encryption),
+        "MAS_SIGNING_KEYS": keys,
+    }
 
 
 def generate_mas_signing_material() -> dict[str, Any]:
     """Generate MAS encryption secret and signing keys via mas-cli or openssl."""
-    use_docker = os.environ.get("MED_MAS_USE_DOCKER_GENERATE", "").strip() == "1"
-    if use_docker:
+    if os.environ.get("MED_ALLOW_INSECURE_MAS_KEYS", "").strip() == "1":
+        return _generate_mas_signing_material_stub()
+
+    if os.environ.get("MED_MAS_USE_DOCKER_GENERATE", "").strip() != "0":
         try:
-            result = subprocess.run(
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "ghcr.io/element-hq/matrix-authentication-service:latest",
-                    "config",
-                    "generate",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=True,
-            )
-            generated = _parse_generated_mas_config(result.stdout)
-            secrets_block = generated.get("secrets", {})
-            if not isinstance(secrets_block, dict):
-                raise ValueError("generated config missing secrets block")
-            encryption = secrets_block.get("encryption")
-            keys = _normalize_signing_keys(secrets_block.get("keys", []))
-            if not encryption or not keys:
-                raise ValueError("generated config missing encryption or signing keys")
-            return {
-                "MAS_ENCRYPTION_SECRET": str(encryption),
-                "MAS_SIGNING_KEYS": keys,
-            }
-        except (subprocess.SubprocessError, ValueError, OSError):
+            return _generate_mas_signing_material_docker()
+        except (subprocess.SubprocessError, ValueError, OSError, yaml.YAMLError):
             pass
-    return _generate_mas_signing_material_openssl()
+
+    try:
+        return _generate_mas_signing_material_openssl()
+    except (subprocess.SubprocessError, OSError, RuntimeError) as exc:
+        raise RuntimeError(
+            "Failed to generate MAS signing keys. Ensure openssl is installed "
+            "or Docker is available to run mas-cli config generate."
+        ) from exc
 
 
 def ensure_mas_secrets(state: dict, *, rotate: bool = False, mas_enabled: bool = False) -> dict:
@@ -373,6 +428,8 @@ def ensure_mas_secrets(state: dict, *, rotate: bool = False, mas_enabled: bool =
             updated[key] = secrets.token_hex(32)
 
     needs_keys = rotate or not updated.get("MAS_ENCRYPTION_SECRET") or not updated.get("MAS_SIGNING_KEYS")
+    if mas_enabled and not needs_keys and not _mas_signing_keys_usable(updated.get("MAS_SIGNING_KEYS", [])):
+        needs_keys = True
     if mas_enabled and needs_keys:
         material = generate_mas_signing_material()
         updated["MAS_ENCRYPTION_SECRET"] = material["MAS_ENCRYPTION_SECRET"]

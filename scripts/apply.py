@@ -693,6 +693,7 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     derived["MAS_ENABLED"] = "true" if mas_enabled else "false"
     derived["MAS_LOCAL_LOGIN_ENABLED"] = "true" if mas_local_login else "false"
     derived["LOCAL_LOGIN_ENABLED"] = "false" if mas_enabled else ("true" if mas_local_login else "false")
+    derived["LOGIN_VIA_EXISTING_SESSION_ENABLED"] = "false" if mas_enabled else "true"
 
     providers = mas.get("upstream_providers", []) if isinstance(mas.get("upstream_providers", []), list) else []
     if bool(sso.get("enabled", False)):

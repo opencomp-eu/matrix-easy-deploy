@@ -70,7 +70,7 @@ report_stats: false
 # Allow logging in on a new device via an existing signed-in session
 # (used by QR code device linking flows in Matrix clients).
 login_via_existing_session:
-  enabled: true
+  enabled: {{LOGIN_VIA_EXISTING_SESSION_ENABLED}}
 
 # Allow local Matrix password login. Disabled when MAS handles authentication.
 password_config:

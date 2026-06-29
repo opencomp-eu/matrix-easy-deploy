@@ -24,8 +24,14 @@ class ApplyTests(unittest.TestCase):
         build_minimal_project(self.root, preset="full")
         self._prev_skip_bootstrap = os.environ.get("MED_SKIP_EXTERNAL_BOOTSTRAP")
         os.environ["MED_SKIP_EXTERNAL_BOOTSTRAP"] = "1"
+        self._prev_mas_docker_generate = os.environ.get("MED_MAS_USE_DOCKER_GENERATE")
+        os.environ["MED_MAS_USE_DOCKER_GENERATE"] = "0"
 
     def tearDown(self):
+        if self._prev_mas_docker_generate is None:
+            os.environ.pop("MED_MAS_USE_DOCKER_GENERATE", None)
+        else:
+            os.environ["MED_MAS_USE_DOCKER_GENERATE"] = self._prev_mas_docker_generate
         if self._prev_skip_bootstrap is None:
             os.environ.pop("MED_SKIP_EXTERNAL_BOOTSTRAP", None)
         else:
@@ -647,6 +653,7 @@ class ApplyTests(unittest.TestCase):
 
         synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
         self.assertIn("password_config:\n  enabled: false", synapse)
+        self.assertIn("login_via_existing_session:\n  enabled: false", synapse)
         self.assertIn("oidc_providers: []", synapse)
         self.assertIn("msc3861:", synapse)
         self.assertIn("org.matrix.msc2965.authentication:", synapse)
