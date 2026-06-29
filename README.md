@@ -440,7 +440,7 @@ The wizard will ask you:
 - `deploy.yaml` is the operator-owned source of truth.
 - `bash apply.sh` reads `deploy.yaml` and writes generated runtime artifacts (`.env`, rendered service configs, module state metadata).
 - Re-running `bash apply.sh` is idempotent by default: existing generated secrets are re-used.
-- `features.local_login_enabled: false` disables Synapse password login for SSO-only deployments. `bash apply.sh` rejects this unless SSO is enabled and at least one OIDC provider is configured.
+- `features.local_login_enabled: false` disables **MAS** password login for SSO-only Synapse deployments (Synapse native passwords are always off when MAS is enabled). `bash apply.sh` rejects this unless SSO is enabled and at least one OIDC provider is configured.
 - Enabled modules converge deterministically: if required generated files are missing, setup runs non-interactively.
 - Bridge appservice registrations converge deterministically:
   - **Synapse**: enabled modules are synced into `modules/core/synapse_data` and added to `app_service_config_files`; disabled modules are removed from both.
@@ -688,7 +688,7 @@ Advantages:
 - Gives tighter onboarding control (who gets access and when).
 - Lets you combine IdP checks + explicit local account approval for defense in depth.
 
-Use the helper to create approved accounts:
+Use the helper to create approved accounts (on Synapse with MAS, this registers users in MAS and provisions the homeserver user):
 
 ```bash
 bash scripts/create-account.sh
@@ -700,14 +700,14 @@ For unattended automation, you can also create a user non-interactively:
 bash scripts/create-account.sh --username alice --password 'replace-with-a-long-random-password' --yes
 ```
 
-To create an admin account, add the admin flag:
+To create an admin account, add the admin flag (Synapse server admin is granted via the MSC3861 admin token; MAS handles authentication only):
 
 ```bash
 bash scripts/create-account.sh --username med-admin --password 'replace-with-a-long-random-password' --admin --yes
 ```
 
-You can disable SSO in the wizard if you only want local Matrix passwords.
-If password login is disabled, pre-created local accounts still exist in Synapse, but sign-in must still happen through configured SSO providers.
+You can disable SSO in the wizard if you only want MAS password login.
+If `features.local_login_enabled: false`, password account creation is blocked; users must sign in through configured SSO providers.
 
 ---
 
@@ -820,7 +820,7 @@ docker logs -f mautrix-slack       # if slack-bridge module is installed
 bash scripts/create-account.sh
 ```
 
-The helper asks for a username, generates a secure temporary password by default (or lets you set a custom one), and can optionally grant admin privileges.
+The helper asks for a username, generates a secure temporary password by default (or lets you set a custom one), and can optionally grant Synapse admin privileges. On Synapse deployments with MAS enabled, it registers the user in MAS via `mas-cli` (password login goes through MAS, not Synapse directly).
 
 For non-interactive use, pass flags instead:
 
@@ -922,9 +922,9 @@ Notes:
 **Important: SSO-only deployments**
 
 If you have `features.local_login_enabled: false` in `deploy.yaml`:
-- Bootstrap must happen **before** disabling password login
-- Once password login is disabled, the stored credentials cannot be used to obtain new tokens
-- If you hit this situation, obtain a token from elsewhere (e.g. temporarily re-enable password login, use Element's token export, or query Synapse directly) and pass it with `--access-token`
+- `create-account.sh` and `med-admin bootstrap` cannot create password accounts (MAS password login is disabled)
+- Use SSO to sign in, or temporarily set `local_login_enabled: true` and re-run `bash apply.sh` to bootstrap with a password
+- If you hit this situation after bootstrap, obtain a token from elsewhere (e.g. Element's token export) and pass it to med-admin with `--access-token`
 
 **Stop all services** (data stays intact in Docker volumes)
 ```bash

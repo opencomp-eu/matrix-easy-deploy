@@ -325,6 +325,138 @@ class SetupRuntimeTests(unittest.TestCase):
             self.assertNotIn("stop-script", events)
             self.assertFalse(any(line.startswith("docker-rm:") for line in events))
 
+    def test_start_services_starts_mas_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            events_file = tmp_path / "events.log"
+
+            (tmp_path / "caddy").mkdir(parents=True)
+            (tmp_path / "modules/core").mkdir(parents=True)
+            (tmp_path / "modules/calls").mkdir(parents=True)
+            (tmp_path / "modules/mas").mkdir(parents=True)
+            (tmp_path / "modules/mas/config.yaml").write_text("http:\n  public_base: https://matrix.example.com/auth/\n")
+
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+
+                source "$RUNTIME_SH"
+
+                info() { :; }
+                warn() { :; }
+                success() { :; }
+
+                record_compose() {
+                    printf 'compose:%s:%s\n' "$PWD" "$*" >> "$EVENTS_FILE"
+                }
+
+                docker() {
+                    if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+                        return 1
+                    fi
+                    return 0
+                }
+
+                SCRIPT_DIR="$TMP_DIR"
+                EVENTS_FILE="$EVENTS_FILE"
+                DOCKER_COMPOSE=(record_compose)
+                INSTALL_ELEMENT="false"
+                POSTGRES_PASSWORD="secret"
+                HOMESERVER_COMPOSE_PROFILE="synapse"
+                MAS_ENABLED="true"
+
+                build_core_compose_stop_profiles() {
+                    CORE_COMPOSE_PROFILES=(--profile synapse --profile tuwunel --profile element)
+                }
+                build_core_compose_start_profiles() {
+                    CORE_COMPOSE_PROFILES=(--profile synapse)
+                }
+
+                start_services
+                """
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "RUNTIME_SH": str(self.runtime_sh),
+                    "TMP_DIR": str(tmp_path),
+                    "EVENTS_FILE": str(events_file),
+                }
+            )
+
+            result = self._run_script(script, env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            events = events_file.read_text().splitlines()
+            self.assertTrue(any("modules/mas" in line for line in events))
+
+    def test_setup_admin_omits_shared_secret_when_mas_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            capture_file = tmp_path / "captured-args.txt"
+
+            scripts_dir = tmp_path / "scripts"
+            scripts_dir.mkdir(parents=True)
+            create_account = scripts_dir / "create-account.sh"
+            create_account.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "printf '%s\\n' \"$*\" > \"$CAPTURE_FILE\"\n"
+                "exit 0\n"
+            )
+            create_account.chmod(0o755)
+
+            script = textwrap.dedent(
+                """
+                set -euo pipefail
+
+                source "$RUNTIME_SH"
+
+                info() { :; }
+                warn() { :; }
+                success() { :; }
+
+                ask_secret() {
+                    printf -v "$1" '%s' "long-enough-password"
+                }
+
+                docker() {
+                    if [[ "$1" == "inspect" ]]; then
+                        echo "healthy"
+                        return 0
+                    fi
+                    return 0
+                }
+
+                CYAN=""
+                RESET=""
+                SCRIPT_DIR="$TMP_DIR"
+                MATRIX_DOMAIN="matrix.example.com"
+                REGISTRATION_SHARED_SECRET="reg-secret"
+                ADMIN_USERNAME="admin"
+                SERVER_NAME="example.com"
+                MAS_ENABLED="true"
+                ADMIN_PASSWORD="long-enough-password"
+
+                setup_admin
+                """
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "RUNTIME_SH": str(self.runtime_sh),
+                    "TMP_DIR": str(tmp_path),
+                    "CAPTURE_FILE": str(capture_file),
+                }
+            )
+
+            result = self._run_script(script, env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            args = capture_file.read_text()
+            self.assertNotIn("--shared-secret", args)
+
 
 if __name__ == "__main__":
     unittest.main()
