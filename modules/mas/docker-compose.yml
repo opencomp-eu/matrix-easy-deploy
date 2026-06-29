@@ -11,14 +11,10 @@ services:
     networks:
       - matrix_internal
       - caddy_net
-    healthcheck:
-      # Distroless image has no curl/wget; validate config via mas-cli (see #3741).
-      # Uses --config= (not -c) — global/server -c does not apply to config check.
-      test: ["CMD", "config", "check", "--config=/config/config.yaml"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+    # No Docker healthcheck: the official image is distroless (no curl/wget) and
+    # mas-cli config check does not hit the HTTP /health endpoint. Use
+    # scripts/mas_health.sh or wait_for_mas_http in setup scripts instead.
+    # See: https://github.com/element-hq/matrix-authentication-service/issues/3741
 
 networks:
   matrix_internal:
