@@ -204,6 +204,30 @@ wait_for_url() {
     success "${label} is up."
 }
 
+# wait_for_mas_http [HOMESERVER_CONTAINER] [MAX_ATTEMPTS] [SLEEP_SECS]
+# Probe MAS /health over the Docker internal network via the homeserver container.
+wait_for_mas_http() {
+    local homeserver_container="${1:-matrix_synapse}"
+    local max_attempts="${2:-30}"
+    local sleep_secs="${3:-5}"
+
+    info "Waiting for MAS to be ready…"
+    local attempt=0
+    until docker exec "$homeserver_container" python3 -c \
+        'import urllib.request; urllib.request.urlopen("http://matrix_mas:8080/health", timeout=5)' \
+        2>/dev/null; do
+        attempt=$((attempt + 1))
+        if [[ $attempt -ge $max_attempts ]]; then
+            error "Timed out waiting for MAS HTTP health at http://matrix_mas:8080/health"
+            return 1
+        fi
+        echo -ne "    attempt ${attempt}/${max_attempts}…\r"
+        sleep "$sleep_secs"
+    done
+    echo
+    success "MAS is ready."
+}
+
 # ---------------------------------------------------------------------------
 # Runtime desired-state loader
 # Uses deploy.yaml/.matrix-easy-deploy state to set runtime feature flags.

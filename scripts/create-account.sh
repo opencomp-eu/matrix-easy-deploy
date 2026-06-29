@@ -297,21 +297,12 @@ encoded_matrix_user_id() {
 # ---------------------------------------------------------------------------
 
 wait_for_mas_container() {
-    local attempt=0
-    local max=30
-
     if ! docker inspect "$MAS_CONTAINER" &>/dev/null; then
         die "MAS container '${MAS_CONTAINER}' is not running. Start services with 'bash start.sh' first."
     fi
 
-    info "Waiting for MAS to become healthy…" >&2
-    until [[ "$(docker inspect --format='{{.State.Health.Status}}' "$MAS_CONTAINER" 2>/dev/null)" == "healthy" ]]; do
-        attempt=$((attempt + 1))
-        if [[ $attempt -ge $max ]]; then
-            die "MAS has not become healthy after $((max * 5))s. Check 'docker logs ${MAS_CONTAINER}'."
-        fi
-        sleep 5
-    done
+    local hs_container="${HOMESERVER_CONTAINER:-matrix_synapse}"
+    wait_for_mas_http "$hs_container" || die "MAS is not ready. Check 'docker logs ${MAS_CONTAINER}'."
 }
 
 mas_cli() {

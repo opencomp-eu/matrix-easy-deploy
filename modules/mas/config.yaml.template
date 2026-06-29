@@ -11,6 +11,7 @@ http:
         - name: human
         - name: oauth
         - name: compat
+        - name: health
         - name: graphql
           playground: false
         - name: assets

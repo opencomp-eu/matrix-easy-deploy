@@ -12,7 +12,9 @@ services:
       - matrix_internal
       - caddy_net
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/health >/dev/null 2>&1 || curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1"]
+      # Distroless MAS image has no shell/curl/wget; mas-cli config check is the
+      # supported in-container probe (see element-hq/matrix-authentication-service#3741).
+      test: ["CMD", "config", "check", "-c", "/config/config.yaml"]
       interval: 15s
       timeout: 10s
       retries: 10

@@ -127,20 +127,11 @@ setup_admin() {
     success "${_hs_name} is responding."
 
     if [[ "${MAS_ENABLED:-false}" == "true" ]]; then
-        info "Waiting for MAS to finish starting…"
-        attempt=0
-        until [[ "$(docker inspect --format='{{.State.Health.Status}}' matrix_mas 2>/dev/null)" == "healthy" ]]; do
-            attempt=$((attempt + 1))
-            if [[ $attempt -ge $max ]]; then
-                warn "MAS hasn't responded after $((max * 5))s."
-                warn "You can create the admin user later with 'bash scripts/create-account.sh'."
-                return 0
-            fi
-            printf "    %ds elapsed…\r" $((attempt * 5))
-            sleep 5
-        done
-        echo
-        success "MAS is responding."
+        wait_for_mas_http "${_hs_container}" "$max" 5 || {
+            warn "MAS hasn't responded after $((max * 5))s."
+            warn "You can create the admin user later with 'bash scripts/create-account.sh'."
+            return 0
+        }
     fi
 
     echo
