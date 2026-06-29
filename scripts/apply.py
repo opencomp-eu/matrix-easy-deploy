@@ -182,9 +182,8 @@ def load_config(ctx: ApplyContext) -> dict:
 
     features = config.get("features")
     if isinstance(features, dict):
-        warnings = mas_config.migrate_legacy_auth_features(features)
+        warnings = mas_config.migrate_legacy_mas_features(features)
         mas_config.emit_migration_warnings(warnings)
-        mas_config.normalize_mas_for_homeserver(config)
 
     return config
 
@@ -526,13 +525,11 @@ def validate_config(config: dict) -> None:
         raise ValueError("backup must be an object when provided")
 
     if isinstance(features, dict):
-        mas_config.normalize_mas_for_homeserver(config)
-
-        for key in ("registration_enabled", "federation_enabled"):
+        for key in ("registration_enabled", "federation_enabled", "local_login_enabled"):
             if key in features and not isinstance(features[key], bool):
                 raise ValueError(f"features.{key} must be true/false")
 
-        for section in ("element", "calls", "mas", "auto_join"):
+        for section in ("element", "calls", "sso", "auto_join"):
             if section in features and not isinstance(features.get(section), dict):
                 raise ValueError(f"features.{section} must be an object")
 
@@ -544,8 +541,7 @@ def validate_config(config: dict) -> None:
         if auto_join:
             validate_auto_join_config(auto_join)
 
-        mas = mas_config.get_mas_config(config)
-        mas_config.validate_mas_config(config, mas)
+        mas_config.validate_sso_config(config)
 
     if isinstance(modules, dict):
         for key, value in modules.items():
@@ -677,33 +673,41 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     # registration_token secret gates who can register (not open public signup).
     derived["TUWUNEL_ALLOW_REGISTRATION"] = "true"
 
-    mas = mas_config.get_mas_config(config)
+    mas = mas_config.resolve_mas_runtime_config(config)
+    sso = mas_config.get_sso_config(features)
     mas_enabled = bool(mas.get("enabled", False)) and hs_spec.implementation == "synapse"
     mas_local_login = bool(mas.get("local_login_enabled", True))
     derived["MAS_ENABLED"] = "true" if mas_enabled else "false"
     derived["MAS_LOCAL_LOGIN_ENABLED"] = "true" if mas_local_login else "false"
-    if mas_enabled:
-        derived["MAS_DOMAIN"] = mas.get("domain") or f"auth.{server_name}"
-        derived["LOCAL_LOGIN_ENABLED"] = "false"
-        mas_sections = mas_config.build_synapse_mas_sections(
-            enabled=True,
-            server_name=server_name,
-            mas_domain=derived["MAS_DOMAIN"],
-            secrets={},
-        )
-        derived.update(mas_sections)
-        derived["OIDC_PROVIDERS_JSON"] = "[]"
-        derived["ENABLE_SSO"] = "false"
-        derived["OIDC_PROVIDER_COUNT"] = "0"
-        derived["OIDC_PROVIDER_NAMES"] = ""
-        providers = mas.get("upstream_providers", []) if isinstance(mas.get("upstream_providers", []), list) else []
-        derived["MAS_UPSTREAM_PROVIDER_COUNT"] = str(len(providers))
-        derived["MAS_UPSTREAM_PROVIDER_NAMES"] = ",".join(
+    derived["LOCAL_LOGIN_ENABLED"] = "false" if mas_enabled else ("true" if mas_local_login else "false")
+
+    providers = mas.get("upstream_providers", []) if isinstance(mas.get("upstream_providers", []), list) else []
+    if bool(sso.get("enabled", False)):
+        derived["ENABLE_SSO"] = "true"
+        derived["OIDC_PROVIDER_COUNT"] = str(len(providers))
+        derived["OIDC_PROVIDER_NAMES"] = ",".join(
             p.get("name", "") for p in providers if isinstance(p, dict)
         )
     else:
+        derived["ENABLE_SSO"] = "false"
+        derived["OIDC_PROVIDER_COUNT"] = "0"
+        derived["OIDC_PROVIDER_NAMES"] = ""
+    derived["OIDC_PROVIDERS_JSON"] = "[]"
+    derived["MAS_UPSTREAM_PROVIDER_COUNT"] = derived["OIDC_PROVIDER_COUNT"]
+    derived["MAS_UPSTREAM_PROVIDER_NAMES"] = derived["OIDC_PROVIDER_NAMES"]
+
+    if mas_enabled:
+        derived["MAS_DOMAIN"] = mas.get("domain") or f"auth.{server_name}"
+        derived.update(
+            mas_config.build_synapse_mas_sections(
+                enabled=True,
+                server_name=server_name,
+                mas_domain=derived["MAS_DOMAIN"],
+                secrets={},
+            )
+        )
+    else:
         derived["MAS_DOMAIN"] = ""
-        derived["LOCAL_LOGIN_ENABLED"] = "true" if mas_local_login else "false"
         derived.update(
             mas_config.build_synapse_mas_sections(
                 enabled=False,
@@ -712,12 +716,6 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
                 secrets={},
             )
         )
-        derived["OIDC_PROVIDERS_JSON"] = "[]"
-        derived["ENABLE_SSO"] = "false"
-        derived["OIDC_PROVIDER_COUNT"] = "0"
-        derived["OIDC_PROVIDER_NAMES"] = ""
-        derived["MAS_UPSTREAM_PROVIDER_COUNT"] = "0"
-        derived["MAS_UPSTREAM_PROVIDER_NAMES"] = ""
 
     derived["SYNAPSE_AUTO_JOIN_SECTION"] = build_synapse_auto_join_section(
         get_auto_join_config(features),
@@ -853,7 +851,7 @@ def build_env_vars(config: dict, derived: dict, state_secrets: dict) -> dict:
     env_vars.update(state_secrets)
 
     if env_vars.get("MAS_ENABLED") == "true":
-        mas = mas_config.get_mas_config(config)
+        mas = mas_config.resolve_mas_runtime_config(config)
         mas_domain = env_vars.get("MAS_DOMAIN", "")
         providers = mas.get("upstream_providers", []) if isinstance(mas.get("upstream_providers", []), list) else []
         env_vars["MAS_UPSTREAM_OAUTH2_YAML"] = mas_config.build_mas_upstream_oauth2_yaml(providers, mas_domain)

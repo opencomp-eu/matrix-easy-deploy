@@ -55,13 +55,11 @@ class ApplyTests(unittest.TestCase):
         derived = apply.derive_values(self.sample_config(), server_ip="1.2.3.4")
         self.assertEqual(derived["CADDY_MATRIX_HOSTS"], "matrix.example.com, example.com")
 
-    def test_derive_values_with_mas_upstream_providers(self):
+    def test_derive_values_with_oidc_providers(self):
         cfg = self.sample_config()
-        cfg["features"]["mas"] = {
+        cfg["features"]["sso"] = {
             "enabled": True,
-            "domain": "auth.example.com",
-            "local_login_enabled": True,
-            "upstream_providers": [
+            "providers": [
                 {
                     "name": "Google",
                     "issuer": "https://accounts.google.com/",
@@ -75,18 +73,27 @@ class ApplyTests(unittest.TestCase):
         derived = apply.derive_values(cfg, server_ip="1.2.3.4")
 
         self.assertEqual(derived["MAS_ENABLED"], "true")
+        self.assertEqual(derived["ENABLE_SSO"], "true")
+        self.assertEqual(derived["OIDC_PROVIDER_COUNT"], "1")
+        self.assertEqual(derived["OIDC_PROVIDER_NAMES"], "Google")
         self.assertEqual(derived["MAS_UPSTREAM_PROVIDER_COUNT"], "1")
         self.assertEqual(derived["MAS_UPSTREAM_PROVIDER_NAMES"], "Google")
         self.assertEqual(derived["LOCAL_LOGIN_ENABLED"], "false")
         self.assertIn("msc3861:", derived["SYNAPSE_MAS_EXPERIMENTAL_SECTION"])
 
-    def test_derive_values_mas_sso_only(self):
+    def test_derive_values_sso_only(self):
         cfg = self.sample_config()
-        cfg["features"]["mas"] = {
+        cfg["features"]["local_login_enabled"] = False
+        cfg["features"]["sso"] = {
             "enabled": True,
-            "domain": "auth.example.com",
-            "local_login_enabled": False,
-            "upstream_providers": [{"name": "Google", "issuer": "https://accounts.google.com/", "client_id": "a", "client_secret": "b"}],
+            "providers": [
+                {
+                    "name": "Google",
+                    "issuer": "https://accounts.google.com/",
+                    "client_id": "a",
+                    "client_secret": "b",
+                }
+            ],
         }
 
         derived = apply.derive_values(cfg, server_ip="1.2.3.4")
@@ -106,9 +113,9 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
-    def test_validate_config_rejects_invalid_mas_local_login_enabled_type(self):
+    def test_validate_config_rejects_invalid_local_login_enabled_type(self):
         cfg = self.sample_config()
-        cfg["features"]["mas"]["local_login_enabled"] = "no"
+        cfg["features"]["local_login_enabled"] = "no"
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
@@ -134,19 +141,29 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
-    def test_validate_config_rejects_mas_sso_only_without_providers(self):
+    def test_validate_config_rejects_sso_only_without_providers(self):
         cfg = self.sample_config()
-        cfg["features"]["mas"]["local_login_enabled"] = False
-        cfg["features"]["mas"]["upstream_providers"] = []
+        cfg["features"]["local_login_enabled"] = False
+        cfg["features"]["sso"] = {"enabled": True, "providers": []}
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
-    def test_validate_config_auto_disables_mas_for_tuwunel(self):
+    def test_validate_config_rejects_sso_on_tuwunel(self):
         cfg = self.sample_config()
         cfg["matrix"]["server_implementation"] = "tuwunel"
-        cfg["features"]["mas"]["enabled"] = True
-        apply.validate_config(cfg)
-        self.assertFalse(cfg["features"]["mas"]["enabled"])
+        cfg["features"]["sso"] = {
+            "enabled": True,
+            "providers": [
+                {
+                    "name": "Google",
+                    "issuer": "https://accounts.google.com/",
+                    "client_id": "a",
+                    "client_secret": "b",
+                }
+            ],
+        }
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
 
     def test_validate_config_rejects_backup_path_when_relative(self):
         cfg = self.sample_config()
@@ -584,15 +601,18 @@ class ApplyTests(unittest.TestCase):
 
     def test_apply_configuration_renders_mas_enabled_synapse(self):
         cfg = self.sample_config()
-        cfg["features"]["mas"]["local_login_enabled"] = False
-        cfg["features"]["mas"]["upstream_providers"] = [
-            {
-                "name": "Google",
-                "issuer": "https://accounts.google.com/",
-                "client_id": "id",
-                "client_secret": "secret",
-            }
-        ]
+        cfg["features"]["local_login_enabled"] = False
+        cfg["features"]["sso"] = {
+            "enabled": True,
+            "providers": [
+                {
+                    "name": "Google",
+                    "issuer": "https://accounts.google.com/",
+                    "client_id": "id",
+                    "client_secret": "secret",
+                }
+            ],
+        }
         self.write_config(cfg)
         ctx = apply.ApplyContext(self.root)
 

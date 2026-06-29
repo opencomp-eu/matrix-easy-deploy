@@ -31,12 +31,8 @@ def default_deploy_config(**overrides: Any) -> dict[str, Any]:
             "federation_enabled": True,
             "element": {"enabled": True, "domain": "element.example.com"},
             "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
-            "mas": {
-                "enabled": True,
-                "domain": "auth.example.com",
-                "local_login_enabled": True,
-                "upstream_providers": [],
-            },
+            "local_login_enabled": True,
+            "sso": {"enabled": False, "providers": []},
         },
         "modules": default_modules_config(),
     }

@@ -61,10 +61,7 @@ def resolve_runtime_state(project_root: Path) -> dict[str, str]:
     if server_implementation not in {"synapse", "tuwunel"}:
         server_implementation = "synapse"
 
-    mas_cfg = _as_dict(features.get("mas"))
-    mas_on = False
-    if server_implementation == "synapse":
-        mas_on = _as_bool(mas_cfg.get("enabled"), True) if mas_cfg else True
+    mas_on = server_implementation == "synapse"
 
     compose_profile = "tuwunel" if server_implementation == "tuwunel" else "synapse"
     container = "matrix_tuwunel" if server_implementation == "tuwunel" else "matrix_synapse"

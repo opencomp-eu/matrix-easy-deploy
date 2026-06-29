@@ -62,12 +62,11 @@ features:
   calls:
     enabled: true
     livekit_domain: livekit.example.com
-  mas:
-    enabled: true
-    domain: auth.example.com
-    local_login_enabled: true
-    upstream_providers: []
-    # Example upstream provider (Google):
+  local_login_enabled: true
+  sso:
+    enabled: false
+    providers: []
+    # Example provider (Google):
     # - name: Google
     #   issuer: https://accounts.google.com/
     #   client_id: your-client-id
