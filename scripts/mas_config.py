@@ -55,13 +55,17 @@ def mas_public_base(matrix_domain: str, path_prefix: str = MAS_PATH_PREFIX) -> s
 
 
 def caddy_mas_block(path_prefix: str = MAS_PATH_PREFIX) -> str:
-    """Caddy routes for MAS on the matrix domain (path prefix + compat login endpoints)."""
+    """Caddy routes for MAS (compat login, path prefix, issuer OIDC discovery)."""
     prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
     prefix = prefix.rstrip("/") or MAS_PATH_PREFIX
     return (
         "\n    # Matrix Authentication Service (OIDC, QR login)\n"
         f"    @mas_compat path_regexp ^/_matrix/client/[^/]+/(login|logout|refresh)$\n"
         "    handle @mas_compat {\n"
+        "        reverse_proxy matrix_mas:8080\n"
+        "    }\n"
+        "\n    # Issuer lives on SERVER_NAME; MAS serves OIDC discovery at this path.\n"
+        "    handle /.well-known/openid-configuration {\n"
         "        reverse_proxy matrix_mas:8080\n"
         "    }\n"
         f"\n    handle {prefix}* {{\n"

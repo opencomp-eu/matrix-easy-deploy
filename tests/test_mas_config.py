@@ -58,3 +58,11 @@ class MasConfigSigningKeyTests(unittest.TestCase):
             updated = mas_config.ensure_mas_secrets(state, mas_enabled=True)
         self.assertTrue(mas_config._mas_signing_keys_usable(updated["MAS_SIGNING_KEYS"]))
         self.assertNotEqual(updated["MAS_SIGNING_KEYS"], invalid["MAS_SIGNING_KEYS"])
+
+
+class MasConfigCaddyTests(unittest.TestCase):
+    def test_caddy_mas_block_routes_oidc_discovery(self):
+        block = mas_config.caddy_mas_block()
+        self.assertIn("handle /.well-known/openid-configuration", block)
+        self.assertIn("handle /auth*", block)
+        self.assertIn("reverse_proxy matrix_mas:8080", block)

@@ -663,6 +663,7 @@ class ApplyTests(unittest.TestCase):
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
         self.assertIn("handle /auth*", caddy)
+        self.assertIn("handle /.well-known/openid-configuration", caddy)
         self.assertIn("reverse_proxy matrix_mas:8080", caddy)
 
     def test_reconcile_mas_bootstrap_defers_without_postgres(self):
