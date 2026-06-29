@@ -311,7 +311,7 @@ mas_set_password() {
     mas_cli manage set-password "$USERNAME" "$PASSWORD" --ignore-complexity
 }
 
-mas_register_or_update_password() {
+mas_register_or_reconcile_user() {
     local register_output register_status
 
     set +e
@@ -324,8 +324,12 @@ mas_register_or_update_password() {
     fi
 
     if [[ "$register_output" == *"User already exists"* ]]; then
-        warn "User '${USERNAME}' already exists in MAS. Updating password…"
-        mas_set_password
+        if [[ "$MAS_LOCAL_LOGIN_ENABLED" == "true" ]]; then
+            warn "User '${USERNAME}' already exists in MAS. Updating password (local login is enabled)…"
+            mas_set_password
+        else
+            warn "User '${USERNAME}' already exists in MAS. Skipping password update (MAS password login is disabled)."
+        fi
         return 0
     fi
 
@@ -474,7 +478,7 @@ create_account_mas() {
     wait_for_mas_container
 
     info "Registering ${account_label} '${USERNAME}' via MAS…"
-    mas_register_or_update_password
+    mas_register_or_reconcile_user
 
     if [[ "$IS_ADMIN" == "true" ]]; then
         promote_synapse_admin

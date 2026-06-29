@@ -465,6 +465,70 @@ class ShellEntrypointTests(unittest.TestCase):
             self.assertIn("/_synapse/admin/v2/users/", events_text)
             self.assertNotIn("Fetching registration nonce", result.stderr)
 
+    def test_create_account_mas_existing_user_updates_password_only_when_local_login_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "events.log"
+
+            self._copy_executable(self.create_account_script, root / "scripts/create-account.sh")
+            self._copy_executable(self.lib_script, root / "scripts/lib.sh")
+            (root / ".env").write_text(
+                "SERVER_NAME=example.com\n"
+                "MATRIX_DOMAIN=matrix.example.com\n"
+                "MAS_ENABLED=true\n"
+                "MAS_LOCAL_LOGIN_ENABLED=true\n"
+            )
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            self._write_executable(
+                fake_bin / "docker",
+                "#!/usr/bin/env bash\n"
+                "echo docker:$* >> \"$EVENTS\"\n"
+                "if [[ \"$1\" == inspect ]]; then\n"
+                "  if [[ \"$2\" == --format=* ]]; then echo healthy; fi\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$1\" == exec && \"$3\" == mas-cli ]]; then\n"
+                "  if [[ \"$*\" == *register-user* ]]; then\n"
+                "    echo User already exists >&2\n"
+                "    exit 1\n"
+                "  fi\n"
+                "  if [[ \"$*\" == *set-password* ]]; then\n"
+                "    exit 0\n"
+                "  fi\n"
+                "fi\n"
+                "exit 1\n",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["EVENTS"] = str(events)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/create-account.sh",
+                    "--username",
+                    "alice",
+                    "--password",
+                    "averylongsecret",
+                    "--yes",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+            combined = result.stdout + result.stderr
+            self.assertIn("Updating password (local login is enabled)", combined)
+            events_text = events.read_text()
+            self.assertIn("manage register-user", events_text)
+            self.assertIn("manage set-password", events_text)
+
     def test_create_account_mas_rejects_sso_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

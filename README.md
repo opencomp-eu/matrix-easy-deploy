@@ -233,7 +233,7 @@ Notes:
 
 - `bash apply.sh` now runs stop/start by default so generated config and running containers stay aligned.
 - Use `bash apply.sh --no-reconcile-runtime` when you want render-only behavior.
-- `scripts/create-account.sh` is safe to re-run; if the user already exists it will warn and skip.
+- `scripts/create-account.sh` is safe to re-run; if the user already exists in MAS it warns and skips, or updates the password only when `features.local_login_enabled` is true.
 - Keep the admin password out of `deploy.yaml` and `.env`. Pass it at execution time or inject it through your automation/secret manager.
 - Enabled modules are bootstrapped non-interactively during `bash apply.sh` when their required generated config is missing.
 - Bridge/module enable-disable transitions are reconciled by `bash apply.sh` by default; use `--no-reconcile-runtime` to skip the stop/start step.
