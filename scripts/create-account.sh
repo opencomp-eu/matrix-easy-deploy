@@ -311,11 +311,11 @@ mas_cli() {
 
 mas_register_user() {
     mas_cli manage register-user \
-        --username "$USERNAME" \
         --password "$PASSWORD" \
         --no-admin \
         --yes \
-        --ignore-password-complexity
+        --ignore-password-complexity \
+        "$USERNAME"
 }
 
 mas_set_password() {
