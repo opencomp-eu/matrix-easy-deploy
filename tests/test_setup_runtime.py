@@ -335,6 +335,20 @@ class SetupRuntimeTests(unittest.TestCase):
             (tmp_path / "modules/calls").mkdir(parents=True)
             (tmp_path / "modules/mas").mkdir(parents=True)
             (tmp_path / "modules/mas/config.yaml").write_text("http:\n  public_base: https://matrix.example.com/auth/\n")
+            (tmp_path / "modules/mas/setup.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+            (tmp_path / "modules/mas/setup.sh").chmod(0o755)
+            (tmp_path / ".env").write_text(
+                "\n".join(
+                    [
+                        "MATRIX_DOMAIN=matrix.example.com",
+                        "SERVER_NAME=matrix.example.com",
+                        "MAS_ENABLED=true",
+                        "MAS_DB_PASSWORD=secret",
+                        "POSTGRES_PASSWORD=secret",
+                    ]
+                )
+                + "\n"
+            )
 
             script = textwrap.dedent(
                 """
@@ -353,6 +367,13 @@ class SetupRuntimeTests(unittest.TestCase):
                 docker() {
                     if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
                         return 1
+                    fi
+                    if [[ "$1" == "ps" ]]; then
+                        echo "matrix_postgres"
+                        return 0
+                    fi
+                    if [[ "$1" == "exec" ]]; then
+                        return 0
                     fi
                     return 0
                 }

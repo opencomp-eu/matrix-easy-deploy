@@ -3,6 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/lib.sh"
+source "${SCRIPT_DIR}/scripts/module_common.sh"
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 
 # Ensure external Docker resources exist for direct apply/start workflows.
@@ -33,6 +34,7 @@ build_core_compose_start_profiles
 (cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${CORE_COMPOSE_PROFILES[@]}" up -d)
 
 if [[ "${MAS_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/mas/config.yaml" ]]; then
+    bootstrap_mas_database "${SCRIPT_DIR}"
     info "Starting Matrix Authentication Service (MAS)…"
     (cd "${SCRIPT_DIR}/modules/mas" && "${DOCKER_COMPOSE[@]}" up -d)
 elif [[ "${MAS_ENABLED:-false}" == "true" ]]; then

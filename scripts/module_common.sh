@@ -89,6 +89,57 @@ module_verify_server_name() {
     info "Using server_name=${SERVER_NAME} for ${usage_context}."
 }
 
+wait_for_matrix_postgres() {
+    local attempt=0
+    local max=30
+
+    while ! docker ps --format '{{.Names}}' | grep -q '^matrix_postgres$'; do
+        attempt=$((attempt + 1))
+        if [[ $attempt -ge $max ]]; then
+            die "matrix_postgres is not running. Please start the core stack first."
+        fi
+        sleep 2
+    done
+
+    attempt=0
+    while ! docker exec matrix_postgres pg_isready -U synapse -q 2>/dev/null; do
+        attempt=$((attempt + 1))
+        if [[ $attempt -ge $max ]]; then
+            die "matrix_postgres is not ready to accept connections."
+        fi
+        sleep 2
+    done
+}
+
+bootstrap_mas_database() {
+    local project_root="$1"
+    local deploy_env="${project_root}/.env"
+
+    if [[ ! -f "$deploy_env" ]]; then
+        die "Missing .env at ${deploy_env}. Run bash apply.sh first."
+    fi
+
+    module_load_env "$deploy_env" "bash apply.sh"
+
+    if [[ "${MAS_ENABLED:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    if [[ ! -f "${project_root}/modules/mas/config.yaml" ]]; then
+        warn "MAS is enabled but modules/mas/config.yaml is missing — skipping database bootstrap."
+        return 0
+    fi
+
+    local setup_script="${project_root}/modules/mas/setup.sh"
+    if [[ ! -f "$setup_script" ]]; then
+        die "MAS setup script missing: $setup_script"
+    fi
+
+    info "Bootstrapping MAS database…"
+    wait_for_matrix_postgres
+    MED_NON_INTERACTIVE=1 bash "$setup_script"
+}
+
 ensure_postgres_role_and_database() {
     local postgres_password="$1"
     local db_user="$2"
@@ -99,9 +150,7 @@ ensure_postgres_role_and_database() {
         die "POSTGRES_PASSWORD is required"
     fi
 
-    if ! docker ps --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
-        die "matrix_postgres is not running. Please start the core stack first."
-    fi
+    wait_for_matrix_postgres
 
     docker exec -e PGPASSWORD="${postgres_password}" matrix_postgres \
         psql -U synapse -c \

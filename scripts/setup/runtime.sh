@@ -78,6 +78,11 @@ start_services() {
 
     if [[ "${MAS_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/mas/config.yaml" ]]; then
         echo
+        local _med_scripts_dir
+        _med_scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        # shellcheck source=../module_common.sh
+        source "${_med_scripts_dir}/module_common.sh"
+        bootstrap_mas_database "${SCRIPT_DIR}"
         info "Starting Matrix Authentication Service (MAS)…"
         (cd "${SCRIPT_DIR}/modules/mas" && "${DOCKER_COMPOSE[@]}" up -d --pull always)
         success "MAS started."

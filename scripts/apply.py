@@ -1406,12 +1406,32 @@ def reconcile_module_bootstrap(ctx: ApplyContext, config: dict) -> None:
         raise RuntimeError("One or more enabled modules failed to converge")
 
 
+def _postgres_container_running() -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(line.strip() == "matrix_postgres" for line in result.stdout.splitlines())
+
+
 def reconcile_mas_bootstrap(ctx: ApplyContext, config: dict, env_vars: dict) -> None:
     if env_vars.get("MAS_ENABLED") != "true":
         return
 
     if os.environ.get("MED_SKIP_EXTERNAL_BOOTSTRAP") == "1":
         print("MAS bootstrap: skipped (MED_SKIP_EXTERNAL_BOOTSTRAP=1)")
+        return
+
+    if not _postgres_container_running():
+        print(
+            "MAS bootstrap: deferred (matrix_postgres is not running; "
+            "will run automatically when services start)"
+        )
         return
 
     mas_config_path = ctx.project_root / "modules" / "mas" / "config.yaml"

@@ -4,7 +4,7 @@ import re
 import tempfile
 import unittest
 from io import StringIO
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from pathlib import Path
 
 import yaml
@@ -630,6 +630,39 @@ class ApplyTests(unittest.TestCase):
         caddy = (self.root / "caddy/Caddyfile").read_text()
         self.assertIn("handle /auth*", caddy)
         self.assertIn("reverse_proxy matrix_mas:8080", caddy)
+
+    def test_reconcile_mas_bootstrap_defers_without_postgres(self):
+        cfg = self.sample_config()
+        cfg["features"]["sso"] = {
+            "enabled": True,
+            "providers": [
+                {
+                    "name": "Google",
+                    "issuer": "https://accounts.google.com/",
+                    "client_id": "id",
+                    "client_secret": "secret",
+                }
+            ],
+        }
+        self.write_config(cfg)
+        (self.root / "modules/mas/config.yaml").write_text("http:\n  public_base: https://matrix.example.com/auth/\n")
+        ctx = apply.ApplyContext(self.root)
+        env_vars = {"MAS_ENABLED": "true", "MAS_DB_PASSWORD": "secret"}
+
+        with patch("scripts.apply.subprocess.run") as mock_run:
+            mock_run.return_value = Mock(
+                returncode=0,
+                stdout="matrix_synapse\n",
+                stderr="",
+            )
+            apply.reconcile_mas_bootstrap(ctx, cfg, env_vars)
+
+        setup_calls = [
+            call
+            for call in mock_run.call_args_list
+            if call.args and "setup.sh" in str(call.args[0])
+        ]
+        self.assertEqual(setup_calls, [])
 
     def test_apply_configuration_strips_disabled_livekit_caddy_block(self):
         cfg = self.sample_config()
