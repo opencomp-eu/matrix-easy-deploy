@@ -34,6 +34,25 @@ class ShellEntrypointTests(unittest.TestCase):
         dest.write_text(src.read_text())
         dest.chmod(0o755)
 
+    def _write_fake_docker_mas(self, path: Path, *, exec_body: str = "") -> None:
+        """Fake docker for MAS create-account tests (health probe + optional exec logic)."""
+        script = (
+            "#!/usr/bin/env bash\n"
+            'echo docker:$* >> "$EVENTS"\n'
+            'if [[ "$1" == inspect ]]; then\n'
+            '  if [[ "${2:-}" == --format=* ]]; then\n'
+            '    echo healthy\n'
+            "  fi\n"
+            "  exit 0\n"
+            "fi\n"
+            'if [[ "$1" == exec && "$3" == python3 ]]; then\n'
+            "  exit 0\n"
+            "fi\n"
+            f"{exec_body}"
+            "exit 1\n"
+        )
+        self._write_executable(path, script)
+
     def _install_med_admin(self, root: Path) -> None:
         self._copy_executable(self.med_admin_script, root / "scripts/med-admin.sh")
         self._copy_executable(self.med_admin_py, root / "scripts/med_admin.py")
@@ -395,21 +414,13 @@ class ShellEntrypointTests(unittest.TestCase):
 
             fake_bin = root / "bin"
             fake_bin.mkdir(parents=True, exist_ok=True)
-            self._write_executable(
+            self._write_fake_docker_mas(
                 fake_bin / "docker",
-                "#!/usr/bin/env bash\n"
-                "echo docker:$* >> \"$EVENTS\"\n"
-                "if [[ \"$1\" == inspect ]]; then\n"
-                "  if [[ \"$2\" == --format=* ]]; then\n"
-                "    echo healthy\n"
-                "    exit 0\n"
-                "  fi\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"$1\" == exec && \"$3\" == mas-cli ]]; then\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 1\n",
+                exec_body=(
+                    'if [[ "$1" == exec && "$3" == mas-cli ]]; then\n'
+                    "  exit 0\n"
+                    "fi\n"
+                ),
             )
             self._write_executable(
                 fake_bin / "curl",
@@ -481,24 +492,19 @@ class ShellEntrypointTests(unittest.TestCase):
 
             fake_bin = root / "bin"
             fake_bin.mkdir(parents=True, exist_ok=True)
-            self._write_executable(
+            self._write_fake_docker_mas(
                 fake_bin / "docker",
-                "#!/usr/bin/env bash\n"
-                "echo docker:$* >> \"$EVENTS\"\n"
-                "if [[ \"$1\" == inspect ]]; then\n"
-                "  if [[ \"$2\" == --format=* ]]; then echo healthy; fi\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [[ \"$1\" == exec && \"$3\" == mas-cli ]]; then\n"
-                "  if [[ \"$*\" == *register-user* ]]; then\n"
-                "    echo User already exists >&2\n"
-                "    exit 1\n"
-                "  fi\n"
-                "  if [[ \"$*\" == *set-password* ]]; then\n"
-                "    exit 0\n"
-                "  fi\n"
-                "fi\n"
-                "exit 1\n",
+                exec_body=(
+                    'if [[ "$1" == exec && "$3" == mas-cli ]]; then\n'
+                    '  if [[ "$*" == *register-user* ]]; then\n'
+                    "    echo User already exists >&2\n"
+                    "    exit 1\n"
+                    "  fi\n"
+                    '  if [[ "$*" == *set-password* ]]; then\n'
+                    "    exit 0\n"
+                    "  fi\n"
+                    "fi\n"
+                ),
             )
 
             env = os.environ.copy()

@@ -78,12 +78,12 @@ class SmokeWorkflowTests(unittest.TestCase):
         self._write_config(modules={"hookshot": {"enabled": True, "domain": "hookshot.example.com"}})
         ctx = apply.ApplyContext(self.root)
 
-        import subprocess
+        real_subprocess_run = subprocess.run
 
         def _mock_setup(cmd, *args, **kwargs):
             cmd_str = " ".join(str(part) for part in cmd)
             if "modules/hookshot/setup.sh" not in cmd_str:
-                return subprocess.run(cmd, *args, **kwargs)
+                return real_subprocess_run(cmd, *args, **kwargs)
             hookshot_dir = self.root / "modules/hookshot/hookshot"
             hookshot_dir.mkdir(parents=True, exist_ok=True)
             (hookshot_dir / "config.yml").write_text("ok\n")

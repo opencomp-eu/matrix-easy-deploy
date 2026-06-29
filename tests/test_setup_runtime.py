@@ -52,6 +52,7 @@ class SetupRuntimeTests(unittest.TestCase):
                 """
                 set -euo pipefail
 
+                wait_for_mas_http() { return 0; }
                 source "$RUNTIME_SH"
 
                 info() { :; }
@@ -126,6 +127,7 @@ class SetupRuntimeTests(unittest.TestCase):
                 """
                 set -euo pipefail
 
+                wait_for_mas_http() { return 0; }
                 source "$RUNTIME_SH"
 
                 info() { :; }
@@ -197,6 +199,7 @@ class SetupRuntimeTests(unittest.TestCase):
                 """
                 set -euo pipefail
 
+                wait_for_mas_http() { return 0; }
                 source "$RUNTIME_SH"
 
                 info() { :; }
@@ -270,6 +273,7 @@ class SetupRuntimeTests(unittest.TestCase):
                 """
                 set -euo pipefail
 
+                wait_for_mas_http() { return 0; }
                 source "$RUNTIME_SH"
 
                 info() { :; }
@@ -354,6 +358,7 @@ class SetupRuntimeTests(unittest.TestCase):
                 """
                 set -euo pipefail
 
+                wait_for_mas_http() { return 0; }
                 source "$RUNTIME_SH"
 
                 info() { :; }
@@ -432,6 +437,7 @@ class SetupRuntimeTests(unittest.TestCase):
                 """
                 set -euo pipefail
 
+                wait_for_mas_http() { return 0; }
                 source "$RUNTIME_SH"
 
                 info() { :; }
@@ -445,6 +451,9 @@ class SetupRuntimeTests(unittest.TestCase):
                 docker() {
                     if [[ "$1" == "inspect" ]]; then
                         echo "healthy"
+                        return 0
+                    fi
+                    if [[ "$1" == "exec" ]]; then
                         return 0
                     fi
                     return 0
