@@ -31,9 +31,9 @@ Usage:
   bash scripts/create-account.sh
   bash scripts/create-account.sh --username alice [--password 'long-secret'] [--admin] [--yes]
 
-Creates a Matrix account with a password. On Synapse deployments with MAS enabled,
-registers the user in MAS (authentication) and provisions the homeserver user.
-Use --admin to grant Synapse server admin via the MSC3861 admin token.
+Creates a Matrix account. Auth backend (MAS, legacy Synapse register, Tuwunel, etc.)
+handles identity and credentials; Synapse server admin (--admin) is granted separately
+via the homeserver admin API when a server admin token is available.
 
 Options:
   --username VALUE       Localpart for the new Matrix user.
@@ -149,15 +149,19 @@ read_deploy_env() {
     SERVER_IMPLEMENTATION="${SERVER_IMPLEMENTATION:-synapse}"
 }
 
-uses_mas_path() {
+uses_mas_auth() {
     [[ "${SERVER_IMPLEMENTATION,,}" == "synapse" && "$MAS_ENABLED" == "true" ]]
+}
+
+is_synapse() {
+    [[ "${SERVER_IMPLEMENTATION,,}" == "synapse" ]]
 }
 
 check_dependencies() {
     command -v curl &>/dev/null || die "curl is required."
     command -v python3 &>/dev/null || die "python3 is required."
     command -v openssl &>/dev/null || die "openssl is required."
-    if uses_mas_path; then
+    if uses_mas_auth; then
         command -v docker &>/dev/null || die "docker is required when MAS is enabled."
     fi
 }
@@ -165,17 +169,19 @@ check_dependencies() {
 ensure_registration_config() {
     [[ -n "$BASE_URL" ]] || die "Could not determine homeserver base URL. Pass --base-url or ensure MATRIX_DOMAIN exists in .env."
 
-    if uses_mas_path; then
+    if uses_mas_auth; then
         if [[ "$MAS_LOCAL_LOGIN_ENABLED" != "true" ]]; then
             die "Password account creation requires features.local_login_enabled=true (MAS password login is disabled). Enable local login in deploy.yaml, use SSO to sign in, or pass --access-token to med-admin."
         fi
-        if [[ "$IS_ADMIN" == "true" && -z "$MAS_HOMESERVER_SECRET" ]]; then
-            die "Could not determine MAS_HOMESERVER_SECRET. Run bash apply.sh first or pass admin credentials another way."
-        fi
-        return
+    elif ! is_synapse; then
+        [[ -n "$SHARED_SECRET" ]] || die "Could not determine REGISTRATION_SHARED_SECRET. Pass --shared-secret or ensure it exists in .env."
+    elif [[ -z "$MAS_HOMESERVER_SECRET" && -z "$SHARED_SECRET" ]]; then
+        die "Could not determine MAS_HOMESERVER_SECRET or REGISTRATION_SHARED_SECRET. Run bash apply.sh first."
     fi
 
-    [[ -n "$SHARED_SECRET" ]] || die "Could not determine REGISTRATION_SHARED_SECRET. Pass --shared-secret or ensure it exists in .env."
+    if [[ "$IS_ADMIN" == "true" ]] && is_synapse && [[ -z "$MAS_HOMESERVER_SECRET" && -z "$SHARED_SECRET" ]]; then
+        die "Could not determine credentials to grant Synapse admin. Run bash apply.sh first."
+    fi
 }
 
 generate_temp_password() {
@@ -249,8 +255,10 @@ show_summary() {
     echo -e "Password mode  : ${CYAN}${PASSWORD_SOURCE}${RESET}"
     echo -e "Admin          : ${CYAN}${IS_ADMIN}${RESET}"
     echo -e "Homeserver     : ${CYAN}${BASE_URL}${RESET}"
-    if uses_mas_path; then
+    if uses_mas_auth; then
         echo -e "Auth backend   : ${CYAN}MAS${RESET}"
+    elif is_synapse; then
+        echo -e "Auth backend   : ${CYAN}Synapse (legacy register)${RESET}"
     fi
 }
 
@@ -275,6 +283,18 @@ print_login_details() {
         echo -e "    ${YELLOW}This is a temporary password — ask the user to change it after first login.${RESET}"
     fi
 }
+
+matrix_user_id() {
+    printf '@%s:%s' "$USERNAME" "$SERVER_NAME"
+}
+
+encoded_matrix_user_id() {
+    python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$(matrix_user_id)"
+}
+
+# ---------------------------------------------------------------------------
+# Auth backends — identity + credentials only (no Synapse admin flag).
+# ---------------------------------------------------------------------------
 
 wait_for_mas_container() {
     local attempt=0
@@ -311,9 +331,11 @@ mas_set_password() {
     mas_cli manage set-password "$USERNAME" "$PASSWORD" --ignore-complexity
 }
 
-mas_register_or_reconcile_user() {
-    local register_output register_status
+register_auth_mas() {
+    wait_for_mas_container
+    info "Registering '${USERNAME}' via MAS…"
 
+    local register_output register_status
     set +e
     register_output="$(mas_register_user 2>&1)"
     register_status=$?
@@ -334,78 +356,13 @@ mas_register_or_reconcile_user() {
     fi
 
     if [[ "$register_output" == *"Username not available on homeserver"* ]]; then
-        die "User '@${USERNAME}:${SERVER_NAME}' exists on Synapse but not in MAS. Recover manually: remove the Synapse user or link it in MAS before re-running this script."
+        die "User '$(matrix_user_id)' exists on Synapse but not in MAS. Recover manually: remove the Synapse user or link it in MAS before re-running this script."
     fi
 
     die "Failed to register user in MAS: ${register_output}"
 }
 
-promote_synapse_admin() {
-    local user_id response_file http_status response_body
-
-    user_id="@${USERNAME}:${SERVER_NAME}"
-    response_file="$(mktemp)"
-    trap 'rm -f "${response_file:-}"' RETURN
-
-    info "Granting Synapse admin to '${user_id}'…"
-    http_status="$(curl -sS -o "$response_file" -w "%{http_code}" \
-        -X PUT "${BASE_URL}/_synapse/admin/v2/users/$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$user_id")" \
-        -H "Authorization: Bearer ${MAS_HOMESERVER_SECRET}" \
-        -H "Content-Type: application/json" \
-        --data-binary '{"admin": true}')"
-
-    if [[ "$http_status" == "200" ]] || [[ "$http_status" == "201" ]]; then
-        return 0
-    fi
-
-    response_body="$(cat "$response_file")"
-    die "Failed to grant Synapse admin (HTTP ${http_status}). Response: ${response_body}"
-}
-
-fetch_nonce() {
-    local nonce_response nonce
-
-    info "Fetching registration nonce from Synapse…" >&2
-    nonce_response="$(curl -fsSL "${BASE_URL}/_synapse/admin/v1/register")"
-    nonce="$(echo "$nonce_response" | python3 -c "import sys,json; print(json.load(sys.stdin)['nonce'])")"
-
-    [[ -n "$nonce" ]] || die "Could not retrieve nonce from Synapse. Is the server running and reachable?"
-    printf '%s' "$nonce"
-}
-
-compute_mac() {
-    local nonce="$1"
-    local admin_mode="notadmin"
-
-    if [[ "$IS_ADMIN" == "true" ]]; then
-        admin_mode="admin"
-    fi
-
-    python3 - <<PYEOF
-import hmac, hashlib
-
-nonce = ${nonce@Q}
-username = ${USERNAME@Q}
-password = ${PASSWORD@Q}
-secret = ${SHARED_SECRET@Q}
-admin_mode = ${admin_mode@Q}
-
-mac = hmac.new(
-    secret.encode("utf-8"),
-    b"\x00".join([
-        nonce.encode("utf-8"),
-        username.encode("utf-8"),
-        password.encode("utf-8"),
-        admin_mode.encode("utf-8"),
-    ]),
-    hashlib.sha1,
-).hexdigest()
-
-print(mac)
-PYEOF
-}
-
-create_account_tuwunel() {
+register_auth_tuwunel() {
     local payload response_file http_status response_body err_info err_code err_msg
 
     info "Creating user '${USERNAME}' via Tuwunel registration API…"
@@ -433,13 +390,11 @@ PYEOF
         --data-binary @- <<< "$payload")"
 
     if [[ "$http_status" == "200" ]] || [[ "$http_status" == "201" ]]; then
-        success "Account '@${USERNAME}:${SERVER_NAME}' created successfully."
-        if [[ "$IS_ADMIN" == "true" ]]; then
-            info "Tuwunel grants admin to the first registered user automatically (grant_admin_to_first_user)."
-        fi
-    else
-        response_body="$(cat "$response_file")"
-        err_info="$(python3 - <<'PYEOF' "$response_body"
+        return 0
+    fi
+
+    response_body="$(cat "$response_file")"
+    err_info="$(python3 - <<'PYEOF' "$response_body"
 import json
 import sys
 
@@ -452,58 +407,69 @@ except Exception:
 print(f"{data.get('errcode', '')}\t{data.get('error', '')}")
 PYEOF
 )"
-        err_code="${err_info%%$'\t'*}"
-        err_msg="${err_info#*$'\t'}"
+    err_code="${err_info%%$'\t'*}"
+    err_msg="${err_info#*$'\t'}"
 
-        if [[ "$http_status" == "400" && "$err_code" == "M_USER_IN_USE" ]]; then
-            warn "User '${USERNAME}' already exists. Skipping."
-            return
-        fi
-
-        if [[ -n "$err_code" || -n "$err_msg" ]]; then
-            die "Failed to create account (HTTP ${http_status}, ${err_code}: ${err_msg})."
-        fi
-        die "Failed to create account (HTTP ${http_status}). Response: ${response_body}"
+    if [[ "$http_status" == "400" && "$err_code" == "M_USER_IN_USE" ]]; then
+        warn "User '${USERNAME}' already exists. Skipping."
+        return 0
     fi
 
-    print_login_details
+    if [[ -n "$err_code" || -n "$err_msg" ]]; then
+        die "Failed to create account (HTTP ${http_status}, ${err_code}: ${err_msg})."
+    fi
+    die "Failed to create account (HTTP ${http_status}). Response: ${response_body}"
 }
 
-create_account_mas() {
-    local account_label="user"
-    if [[ "$IS_ADMIN" == "true" ]]; then
-        account_label="admin user"
-    fi
+fetch_synapse_register_nonce() {
+    local nonce_response nonce
 
-    wait_for_mas_container
+    info "Fetching registration nonce from Synapse…" >&2
+    nonce_response="$(curl -fsSL "${BASE_URL}/_synapse/admin/v1/register")"
+    nonce="$(echo "$nonce_response" | python3 -c "import sys,json; print(json.load(sys.stdin)['nonce'])")"
 
-    info "Registering ${account_label} '${USERNAME}' via MAS…"
-    mas_register_or_reconcile_user
-
-    if [[ "$IS_ADMIN" == "true" ]]; then
-        promote_synapse_admin
-    fi
-
-    success "Account '@${USERNAME}:${SERVER_NAME}' created successfully."
-    print_login_details
+    [[ -n "$nonce" ]] || die "Could not retrieve nonce from Synapse. Is the server running and reachable?"
+    printf '%s' "$nonce"
 }
 
-create_account_synapse() {
+compute_synapse_register_mac() {
+    local nonce="$1"
+    local admin_mode="$2"
+
+    python3 - <<PYEOF
+import hmac, hashlib
+
+nonce = ${nonce@Q}
+username = ${USERNAME@Q}
+password = ${PASSWORD@Q}
+secret = ${SHARED_SECRET@Q}
+admin_mode = ${admin_mode@Q}
+
+mac = hmac.new(
+    secret.encode("utf-8"),
+    b"\x00".join([
+        nonce.encode("utf-8"),
+        username.encode("utf-8"),
+        password.encode("utf-8"),
+        admin_mode.encode("utf-8"),
+    ]),
+    hashlib.sha1,
+).hexdigest()
+
+print(mac)
+PYEOF
+}
+
+# Legacy Synapse shared-secret register (auth + optional admin in one call when no server token).
+register_auth_synapse_shared_secret() {
+    local admin_mode="$1"
     local nonce mac response_file http_status response_body err_info err_code err_msg
     local admin_json="False"
-    local account_label="user"
 
-    if [[ "$IS_ADMIN" == "true" ]]; then
-        admin_json="True"
-        account_label="admin user"
-    fi
+    [[ "$admin_mode" == "admin" ]] && admin_json="True"
 
-    nonce="$(fetch_nonce)"
-
-    info "Computing registration MAC…"
-    mac="$(compute_mac "$nonce")"
-
-    info "Registering ${account_label} '${USERNAME}'…"
+    nonce="$(fetch_synapse_register_nonce)"
+    mac="$(compute_synapse_register_mac "$nonce" "$admin_mode")"
 
     local json_payload
     json_payload="$(python3 - <<PYEOF
@@ -532,10 +498,11 @@ PYEOF
     unset json_payload
 
     if [[ "$http_status" == "200" ]] || [[ "$http_status" == "201" ]]; then
-        success "Account '@${USERNAME}:${SERVER_NAME}' created successfully."
-    else
-        response_body="$(cat "$response_file")"
-        err_info="$(python3 - <<'PYEOF' "$response_body"
+        return 0
+    fi
+
+    response_body="$(cat "$response_file")"
+    err_info="$(python3 - <<'PYEOF' "$response_body"
 import json
 import sys
 
@@ -551,31 +518,96 @@ print(f"{errcode}\t{error}")
 PYEOF
 )"
 
-        err_code="${err_info%%$'\t'*}"
-        err_msg="${err_info#*$'\t'}"
+    err_code="${err_info%%$'\t'*}"
+    err_msg="${err_info#*$'\t'}"
 
-        if [[ "$http_status" == "400" && "$err_code" == "M_USER_IN_USE" ]]; then
-            warn "User '${USERNAME}' already exists. Skipping."
-            return
-        fi
-
-        if [[ -n "$err_code" || -n "$err_msg" ]]; then
-            die "Failed to create account (HTTP ${http_status}, ${err_code}: ${err_msg})."
-        fi
-        die "Failed to create account (HTTP ${http_status}). Response: ${response_body}"
+    if [[ "$http_status" == "400" && "$err_code" == "M_USER_IN_USE" ]]; then
+        warn "User '${USERNAME}' already exists. Skipping."
+        return 0
     fi
 
-    print_login_details
+    if [[ -n "$err_code" || -n "$err_msg" ]]; then
+        die "Failed to create account (HTTP ${http_status}, ${err_code}: ${err_msg})."
+    fi
+    die "Failed to create account (HTTP ${http_status}). Response: ${response_body}"
+}
+
+register_auth_synapse_legacy() {
+    info "Registering '${USERNAME}' via Synapse shared-secret register…"
+    register_auth_synapse_shared_secret "notadmin"
+}
+
+register_auth_user() {
+    if [[ "${SERVER_IMPLEMENTATION,,}" == "tuwunel" ]]; then
+        register_auth_tuwunel
+    elif uses_mas_auth; then
+        register_auth_mas
+    elif is_synapse; then
+        # Legacy bootstrap: no server admin token — create user + admin in one register call.
+        if [[ "$IS_ADMIN" == "true" && -z "$MAS_HOMESERVER_SECRET" ]]; then
+            info "Registering admin user '${USERNAME}' via Synapse shared-secret register…"
+            register_auth_synapse_shared_secret "admin"
+        else
+            register_auth_synapse_legacy
+        fi
+    else
+        die "Unsupported server implementation: ${SERVER_IMPLEMENTATION}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Homeserver admin — Synapse is the source of truth; auth backend is irrelevant.
+# ---------------------------------------------------------------------------
+
+promote_synapse_admin_via_server_token() {
+    local response_file http_status response_body
+
+    response_file="$(mktemp)"
+    trap 'rm -f "${response_file:-}"' RETURN
+
+    info "Granting Synapse admin to '$(matrix_user_id)'…"
+    http_status="$(curl -sS -o "$response_file" -w "%{http_code}" \
+        -X PUT "${BASE_URL}/_synapse/admin/v2/users/$(encoded_matrix_user_id)" \
+        -H "Authorization: Bearer ${MAS_HOMESERVER_SECRET}" \
+        -H "Content-Type: application/json" \
+        --data-binary '{"admin": true}')"
+
+    if [[ "$http_status" == "200" ]] || [[ "$http_status" == "201" ]]; then
+        return 0
+    fi
+
+    response_body="$(cat "$response_file")"
+    die "Failed to grant Synapse admin (HTTP ${http_status}). Response: ${response_body}"
+}
+
+grant_homeserver_admin_if_requested() {
+    [[ "$IS_ADMIN" == "true" ]] || return 0
+
+    if [[ "${SERVER_IMPLEMENTATION,,}" == "tuwunel" ]]; then
+        info "Tuwunel grants admin to the first registered user automatically (grant_admin_to_first_user)."
+        return 0
+    fi
+
+    if ! is_synapse; then
+        return 0
+    fi
+
+    if [[ -n "$MAS_HOMESERVER_SECRET" ]]; then
+        promote_synapse_admin_via_server_token
+        return 0
+    fi
+
+    # Legacy Synapse without a server admin token: admin was set during shared-secret register.
+    if [[ "$IS_ADMIN" == "true" ]]; then
+        info "Synapse admin was granted during shared-secret registration (no server admin token available)."
+    fi
 }
 
 create_account() {
-    if [[ "${SERVER_IMPLEMENTATION,,}" == "tuwunel" ]]; then
-        create_account_tuwunel
-    elif uses_mas_path; then
-        create_account_mas
-    else
-        create_account_synapse
-    fi
+    register_auth_user
+    grant_homeserver_admin_if_requested
+    success "Account '$(matrix_user_id)' created successfully."
+    print_login_details
 }
 
 main() {
