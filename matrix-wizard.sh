@@ -112,7 +112,7 @@ edit_deploy_config() {
             "$config_local_login_default"
         LOCAL_LOGIN_ENABLED="$([ "$LOCAL_LOGIN_INPUT" == "y" ] && echo "true" || echo "false")"
         gather_sso_config
-        AUTH_DOMAIN="auth.${SERVER_NAME}"
+        AUTH_DOMAIN="${MATRIX_DOMAIN}/auth"
     else
         LOCAL_LOGIN_ENABLED="true"
         ENABLE_SSO="false"
@@ -170,7 +170,7 @@ edit_deploy_config() {
     echo -e "  Public reg.     : ${CYAN}${ENABLE_REGISTRATION}${RESET}"
     echo -e "  Federation      : ${CYAN}${ENABLE_FEDERATION_INPUT}${RESET}"
     if [[ "$SERVER_IMPLEMENTATION" == "synapse" ]]; then
-        echo -e "  Auth service    : ${CYAN}auth.${SERVER_NAME}${RESET}"
+        echo -e "  Auth service    : ${CYAN}https://${MATRIX_DOMAIN}/auth${RESET}"
         echo -e "  Password login  : ${CYAN}${LOCAL_LOGIN_ENABLED}${RESET}"
         if [[ "$ENABLE_SSO" == "true" ]]; then
             echo -e "  SSO (OIDC)      : ${CYAN}enabled${RESET}"
@@ -199,9 +199,6 @@ edit_deploy_config() {
     fi
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         echo -e "    ${CYAN}${ELEMENT_DOMAIN}${RESET}  →  <this server's IP>"
-    fi
-    if [[ "$SERVER_IMPLEMENTATION" == "synapse" ]]; then
-        echo -e "    ${CYAN}auth.${SERVER_NAME}${RESET}  →  <this server's IP>"
     fi
     if [[ "$ENABLE_CALLS" == "true" ]]; then
         echo -e "    ${CYAN}${LIVEKIT_DOMAIN}${RESET}  →  <this server's IP>"

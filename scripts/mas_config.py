@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 MAS_SYNAPSE_CLIENT_ID = "0000000000000000000SYNAPSE"
+MAS_PATH_PREFIX = "/auth"
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -42,6 +43,31 @@ def stable_provider_ulid(name: str, issuer: str) -> str:
         chars.append(_CROCKFORD[value & 0x1F])
         value >>= 5
     return "".join(reversed(chars))
+
+
+def mas_public_base(matrix_domain: str, path_prefix: str = MAS_PATH_PREFIX) -> str:
+    """Absolute public URL base for MAS (includes path prefix when set)."""
+    normalized = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
+    normalized = normalized.rstrip("/") or MAS_PATH_PREFIX
+    if normalized == "/":
+        return f"https://{matrix_domain}/"
+    return f"https://{matrix_domain}{normalized}/"
+
+
+def caddy_mas_block(path_prefix: str = MAS_PATH_PREFIX) -> str:
+    """Caddy routes for MAS on the matrix domain (path prefix + compat login endpoints)."""
+    prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
+    prefix = prefix.rstrip("/") or MAS_PATH_PREFIX
+    return (
+        "\n    # Matrix Authentication Service (OIDC, QR login)\n"
+        f"    @mas_compat path_regexp ^/_matrix/client/[^/]+/(login|logout|refresh)$\n"
+        "    handle @mas_compat {\n"
+        "        reverse_proxy matrix_mas:8080\n"
+        "    }\n"
+        f"\n    handle {prefix}* {{\n"
+        "        reverse_proxy matrix_mas:8080\n"
+        "    }\n"
+    )
 
 
 def extract_base_domain(fqdn: str) -> str:
@@ -114,7 +140,8 @@ def resolve_mas_runtime_config(config: dict) -> dict[str, Any]:
     enabled = hs_impl == "synapse"
     return {
         "enabled": enabled,
-        "domain": f"auth.{server_name}",
+        "domain": str(matrix_domain),
+        "path_prefix": MAS_PATH_PREFIX,
         "local_login_enabled": local_login_enabled,
         "upstream_providers": list(sso["providers"]) if sso["enabled"] else [],
     }
@@ -179,10 +206,11 @@ def validate_sso_config(config: dict) -> None:
                 raise ValueError(f"{path}.id must be a 26-character ULID when set")
 
 
-def build_mas_upstream_oauth2_yaml(providers: list, mas_domain: str) -> str:
+def build_mas_upstream_oauth2_yaml(providers: list, mas_public_base: str) -> str:
     if not providers:
         return "upstream_oauth2:\n  providers: []\n"
 
+    base = mas_public_base.rstrip("/")
     entries: list[dict[str, Any]] = []
     for index, provider in enumerate(providers):
         if not isinstance(provider, dict):
@@ -203,7 +231,7 @@ def build_mas_upstream_oauth2_yaml(providers: list, mas_domain: str) -> str:
                 "displayname": {"action": "suggest", "template": "{{ user.name }}"},
                 "email": {"action": "suggest", "template": "{{ user.email }}"},
             },
-            "redirect_uri": f"https://{mas_domain}/upstream/callback/{provider_id}",
+            "redirect_uri": f"{base}/upstream/callback/{provider_id}",
         }
         brand = provider.get("brand_name")
         if isinstance(brand, str) and brand.strip():
@@ -364,7 +392,7 @@ def build_mas_signing_keys_yaml_from_state(state: dict) -> str:
     return build_mas_signing_keys_yaml([payload])
 
 
-def build_synapse_mas_sections(*, enabled: bool, server_name: str, mas_domain: str, secrets: dict) -> dict[str, str]:
+def build_synapse_mas_sections(*, enabled: bool, server_name: str, mas_public_base: str, secrets: dict) -> dict[str, str]:
     if not enabled:
         return {
             "SYNAPSE_MAS_EXPERIMENTAL_SECTION": "",
@@ -374,6 +402,7 @@ def build_synapse_mas_sections(*, enabled: bool, server_name: str, mas_domain: s
 
     client_secret = secrets.get("MAS_SYNAPSE_CLIENT_SECRET", "")
     admin_token = secrets.get("MAS_HOMESERVER_SECRET", "")
+    account_base = mas_public_base.rstrip("/")
     experimental = "\n".join(
         [
             "  msc3861:",
@@ -383,7 +412,7 @@ def build_synapse_mas_sections(*, enabled: bool, server_name: str, mas_domain: s
             "    client_auth_method: client_secret_basic",
             f'    client_secret: "{client_secret}"',
             f'    admin_token: "{admin_token}"',
-            f'    account_management_url: "https://{mas_domain}/account"',
+            f'    account_management_url: "{account_base}/account"',
             "  msc4108_enabled: true",
             "  msc4190_enabled: true",
         ]
@@ -392,7 +421,7 @@ def build_synapse_mas_sections(*, enabled: bool, server_name: str, mas_domain: s
         [
             "  org.matrix.msc2965.authentication:",
             f"    issuer: https://{server_name}/",
-            f"    account: https://{mas_domain}/account",
+            f"    account: {account_base}/account",
         ]
     )
     return {

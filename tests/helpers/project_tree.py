@@ -103,6 +103,7 @@ def _write_core_templates(root: Path, *, full: bool) -> None:
     if full:
         (root / "caddy/Caddyfile.template").write_text(
             "{{CADDY_MATRIX_HOSTS}} {\n"
+            "{{CADDY_MAS_BLOCK}}"
             "    reverse_proxy {{HOMESERVER_UPSTREAM}}\n"
             "{{CADDY_SYNAPSE_ADMIN_BLOCK}}"
             "}\n\n"
@@ -113,9 +114,6 @@ def _write_core_templates(root: Path, *, full: bool) -> None:
             "    handle_path /livekit/sfu* {\n"
             "        reverse_proxy host.docker.internal:7880\n"
             "    }\n"
-            "}\n\n"
-            "{{MAS_DOMAIN}} {\n"
-            "    reverse_proxy matrix_mas:8080\n"
             "}\n"
         )
         (root / "modules/core/synapse/homeserver.yaml.template").write_text(
@@ -144,7 +142,7 @@ def _write_core_templates(root: Path, *, full: bool) -> None:
 
     (root / "modules/mas").mkdir(parents=True, exist_ok=True)
     (root / "modules/mas/config.yaml.template").write_text(
-        "public_base: https://{{MAS_DOMAIN}}/\n"
+        "public_base: {{MAS_PUBLIC_BASE}}\n"
         "passwords:\n  enabled: {{MAS_LOCAL_LOGIN_ENABLED}}\n"
         "{{MAS_SIGNING_KEYS_YAML}}"
         "{{MAS_UPSTREAM_OAUTH2_YAML}}"

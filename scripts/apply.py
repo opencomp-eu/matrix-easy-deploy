@@ -697,22 +697,30 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     derived["MAS_UPSTREAM_PROVIDER_NAMES"] = derived["OIDC_PROVIDER_NAMES"]
 
     if mas_enabled:
-        derived["MAS_DOMAIN"] = mas.get("domain") or f"auth.{server_name}"
+        path_prefix = mas.get("path_prefix", mas_config.MAS_PATH_PREFIX)
+        public_base = mas_config.mas_public_base(matrix_domain, path_prefix)
+        derived["MAS_DOMAIN"] = matrix_domain
+        derived["MAS_PATH_PREFIX"] = path_prefix
+        derived["MAS_PUBLIC_BASE"] = public_base
+        derived["CADDY_MAS_BLOCK"] = mas_config.caddy_mas_block(path_prefix)
         derived.update(
             mas_config.build_synapse_mas_sections(
                 enabled=True,
                 server_name=server_name,
-                mas_domain=derived["MAS_DOMAIN"],
+                mas_public_base=public_base,
                 secrets={},
             )
         )
     else:
         derived["MAS_DOMAIN"] = ""
+        derived["MAS_PATH_PREFIX"] = ""
+        derived["MAS_PUBLIC_BASE"] = ""
+        derived["CADDY_MAS_BLOCK"] = ""
         derived.update(
             mas_config.build_synapse_mas_sections(
                 enabled=False,
                 server_name=server_name,
-                mas_domain="",
+                mas_public_base="",
                 secrets={},
             )
         )
@@ -852,14 +860,14 @@ def build_env_vars(config: dict, derived: dict, state_secrets: dict) -> dict:
 
     if env_vars.get("MAS_ENABLED") == "true":
         mas = mas_config.resolve_mas_runtime_config(config)
-        mas_domain = env_vars.get("MAS_DOMAIN", "")
+        public_base = env_vars.get("MAS_PUBLIC_BASE", "")
         providers = mas.get("upstream_providers", []) if isinstance(mas.get("upstream_providers", []), list) else []
-        env_vars["MAS_UPSTREAM_OAUTH2_YAML"] = mas_config.build_mas_upstream_oauth2_yaml(providers, mas_domain)
+        env_vars["MAS_UPSTREAM_OAUTH2_YAML"] = mas_config.build_mas_upstream_oauth2_yaml(providers, public_base)
         env_vars["MAS_SIGNING_KEYS_YAML"] = mas_config.build_mas_signing_keys_yaml_from_state(state_secrets)
         mas_sections = mas_config.build_synapse_mas_sections(
             enabled=True,
             server_name=derived["SERVER_NAME"],
-            mas_domain=mas_domain,
+            mas_public_base=public_base,
             secrets=state_secrets,
         )
         env_vars.update(mas_sections)
