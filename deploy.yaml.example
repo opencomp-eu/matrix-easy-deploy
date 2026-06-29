@@ -7,7 +7,6 @@ matrix:
 features:
   registration_enabled: false
   federation_enabled: true
-  local_login_enabled: true
   auto_join:
     rooms: []
     # Example when enabling named welcome rooms (provisioned automatically by apply.sh):
@@ -63,9 +62,17 @@ features:
   calls:
     enabled: true
     livekit_domain: livekit.example.com
-  sso:
-    enabled: false
-    providers: []
+  mas:
+    enabled: true
+    domain: auth.example.com
+    local_login_enabled: true
+    upstream_providers: []
+    # Example upstream provider (Google):
+    # - name: Google
+    #   issuer: https://accounts.google.com/
+    #   client_id: your-client-id
+    #   client_secret: your-client-secret
+    #   allow_registration: true
 modules:
   hookshot:
     enabled: false

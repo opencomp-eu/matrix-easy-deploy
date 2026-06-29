@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import tempfile
 import unittest
 from io import StringIO
@@ -20,8 +22,14 @@ class ApplyTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         build_minimal_project(self.root, preset="full")
+        self._prev_skip_bootstrap = os.environ.get("MED_SKIP_EXTERNAL_BOOTSTRAP")
+        os.environ["MED_SKIP_EXTERNAL_BOOTSTRAP"] = "1"
 
     def tearDown(self):
+        if self._prev_skip_bootstrap is None:
+            os.environ.pop("MED_SKIP_EXTERNAL_BOOTSTRAP", None)
+        else:
+            os.environ["MED_SKIP_EXTERNAL_BOOTSTRAP"] = self._prev_skip_bootstrap
         self.tmp.cleanup()
 
     def sample_config(self):
@@ -47,11 +55,13 @@ class ApplyTests(unittest.TestCase):
         derived = apply.derive_values(self.sample_config(), server_ip="1.2.3.4")
         self.assertEqual(derived["CADDY_MATRIX_HOSTS"], "matrix.example.com, example.com")
 
-    def test_derive_values_with_oidc_providers(self):
+    def test_derive_values_with_mas_upstream_providers(self):
         cfg = self.sample_config()
-        cfg["features"]["sso"] = {
+        cfg["features"]["mas"] = {
             "enabled": True,
-            "providers": [
+            "domain": "auth.example.com",
+            "local_login_enabled": True,
+            "upstream_providers": [
                 {
                     "name": "Google",
                     "issuer": "https://accounts.google.com/",
@@ -64,21 +74,24 @@ class ApplyTests(unittest.TestCase):
 
         derived = apply.derive_values(cfg, server_ip="1.2.3.4")
 
-        self.assertEqual(derived["ENABLE_SSO"], "true")
-        self.assertEqual(derived["OIDC_PROVIDER_COUNT"], "1")
-        self.assertEqual(derived["OIDC_PROVIDER_NAMES"], "Google")
-        self.assertIn('"idp_name":"Google"', derived["OIDC_PROVIDERS_JSON"])
+        self.assertEqual(derived["MAS_ENABLED"], "true")
+        self.assertEqual(derived["MAS_UPSTREAM_PROVIDER_COUNT"], "1")
+        self.assertEqual(derived["MAS_UPSTREAM_PROVIDER_NAMES"], "Google")
+        self.assertEqual(derived["LOCAL_LOGIN_ENABLED"], "false")
+        self.assertIn("msc3861:", derived["SYNAPSE_MAS_EXPERIMENTAL_SECTION"])
 
-    def test_derive_values_password_login_disabled(self):
+    def test_derive_values_mas_sso_only(self):
         cfg = self.sample_config()
-        cfg["features"]["local_login_enabled"] = False
-        cfg["features"]["sso"] = {
+        cfg["features"]["mas"] = {
             "enabled": True,
-            "providers": [{"name": "Google", "issuer": "https://accounts.google.com/"}],
+            "domain": "auth.example.com",
+            "local_login_enabled": False,
+            "upstream_providers": [{"name": "Google", "issuer": "https://accounts.google.com/", "client_id": "a", "client_secret": "b"}],
         }
 
         derived = apply.derive_values(cfg, server_ip="1.2.3.4")
 
+        self.assertEqual(derived["MAS_LOCAL_LOGIN_ENABLED"], "false")
         self.assertEqual(derived["LOCAL_LOGIN_ENABLED"], "false")
 
     def test_validate_config_rejects_invalid_modules_shape(self):
@@ -93,9 +106,9 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
-    def test_validate_config_rejects_invalid_local_login_enabled_type(self):
+    def test_validate_config_rejects_invalid_mas_local_login_enabled_type(self):
         cfg = self.sample_config()
-        cfg["features"]["local_login_enabled"] = "no"
+        cfg["features"]["mas"]["local_login_enabled"] = "no"
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
@@ -121,18 +134,19 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
-    def test_validate_config_rejects_password_login_disabled_without_sso(self):
+    def test_validate_config_rejects_mas_sso_only_without_providers(self):
         cfg = self.sample_config()
-        cfg["features"]["local_login_enabled"] = False
+        cfg["features"]["mas"]["local_login_enabled"] = False
+        cfg["features"]["mas"]["upstream_providers"] = []
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
-    def test_validate_config_rejects_password_login_disabled_without_sso_providers(self):
+    def test_validate_config_auto_disables_mas_for_tuwunel(self):
         cfg = self.sample_config()
-        cfg["features"]["local_login_enabled"] = False
-        cfg["features"]["sso"] = {"enabled": True, "providers": []}
-        with self.assertRaises(ValueError):
-            apply.validate_config(cfg)
+        cfg["matrix"]["server_implementation"] = "tuwunel"
+        cfg["features"]["mas"]["enabled"] = True
+        apply.validate_config(cfg)
+        self.assertFalse(cfg["features"]["mas"]["enabled"])
 
     def test_validate_config_rejects_backup_path_when_relative(self):
         cfg = self.sample_config()
@@ -568,25 +582,30 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(element["integrations_rest_url"], "https://scalar.example.com/api")
         self.assertEqual(element["integrations_widgets_urls"], ["https://scalar.example.com/widgets"])
 
-    def test_apply_configuration_renders_sso_only_password_setting(self):
+    def test_apply_configuration_renders_mas_enabled_synapse(self):
         cfg = self.sample_config()
-        cfg["features"]["local_login_enabled"] = False
-        cfg["features"]["sso"] = {
-            "enabled": True,
-            "providers": [{"name": "Google", "issuer": "https://accounts.google.com/"}],
-        }
+        cfg["features"]["mas"]["local_login_enabled"] = False
+        cfg["features"]["mas"]["upstream_providers"] = [
+            {
+                "name": "Google",
+                "issuer": "https://accounts.google.com/",
+                "client_id": "id",
+                "client_secret": "secret",
+            }
+        ]
         self.write_config(cfg)
-        (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
-            "password_config:\n  enabled: {{LOCAL_LOGIN_ENABLED}}\n"
-            "oidc_providers: {{OIDC_PROVIDERS_JSON}}\n"
-        )
         ctx = apply.ApplyContext(self.root)
 
         apply.apply_configuration(ctx, server_ip="9.8.7.6")
 
         synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
         self.assertIn("password_config:\n  enabled: false", synapse)
-        self.assertIn("oidc_providers: [{", synapse)
+        self.assertIn("oidc_providers: []", synapse)
+        self.assertIn("msc3861:", synapse)
+        self.assertIn("org.matrix.msc2965.authentication:", synapse)
+        mas_cfg = (self.root / "modules/mas/config.yaml").read_text()
+        self.assertIn("auth.example.com", mas_cfg)
+        self.assertIn("upstream_oauth2:", mas_cfg)
 
     def test_apply_configuration_strips_disabled_livekit_caddy_block(self):
         cfg = self.sample_config()
@@ -678,7 +697,7 @@ class ApplyTests(unittest.TestCase):
         apply.apply_configuration(ctx, server_ip="9.8.7.6")
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
-        self.assertEqual(caddy.count("example.com {"), 1)
+        self.assertEqual(len(re.findall(r"^example\.com \{", caddy, re.MULTILINE)), 1)
         self.assertIn("handle /_matrix/*", caddy)
         self.assertIn("handle /livekit/jwt*", caddy)
         self.assertIn("reverse_proxy matrix_element:80", caddy)

@@ -16,6 +16,7 @@ info "Starting Caddy…"
 info "Starting core services…"
 # Load .env if it exists so POSTGRES_PASSWORD and INSTALL_ELEMENT are available
 INSTALL_ELEMENT="true"  # default: assume Element is present if .env is missing
+MAS_ENABLED="false"
 HOOKSHOT_ENABLED="false"
 WHATSAPP_BRIDGE_ENABLED="false"
 SLACK_BRIDGE_ENABLED="false"
@@ -30,6 +31,13 @@ load_runtime_desired_state "${SCRIPT_DIR}"
 
 build_core_compose_start_profiles
 (cd "${SCRIPT_DIR}/modules/core" && "${DOCKER_COMPOSE[@]}" "${CORE_COMPOSE_PROFILES[@]}" up -d)
+
+if [[ "${MAS_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/mas/config.yaml" ]]; then
+    info "Starting Matrix Authentication Service (MAS)…"
+    (cd "${SCRIPT_DIR}/modules/mas" && "${DOCKER_COMPOSE[@]}" up -d)
+elif [[ "${MAS_ENABLED:-false}" == "true" ]]; then
+    warn "MAS is enabled in deploy.yaml but config file is missing. Run 'bash apply.sh' first."
+fi
 
 info "Starting calls services (coturn + LiveKit)…"
 (cd "${SCRIPT_DIR}/modules/calls" && "${DOCKER_COMPOSE[@]}" up -d)

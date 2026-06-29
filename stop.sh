@@ -6,6 +6,7 @@ source "${SCRIPT_DIR}/scripts/lib.sh"
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 
 # Load .env so Docker Compose can substitute variables (e.g. POSTGRES_PASSWORD)
+MAS_ENABLED="false"
 HOOKSHOT_ENABLED="false"
 WHATSAPP_BRIDGE_ENABLED="false"
 SLACK_BRIDGE_ENABLED="false"
@@ -17,6 +18,12 @@ if [[ -f "${SCRIPT_DIR}/.env" ]]; then
 fi
 
 load_runtime_desired_state "${SCRIPT_DIR}"
+
+# Stop MAS when it was previously installed
+if [[ -f "${SCRIPT_DIR}/modules/mas/config.yaml" ]]; then
+    info "Stopping Matrix Authentication Service (MAS)…"
+    (cd "${SCRIPT_DIR}/modules/mas" && "${DOCKER_COMPOSE[@]}" down)
+fi
 
 build_core_compose_stop_profiles
 

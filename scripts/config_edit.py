@@ -37,10 +37,14 @@ def load_or_init(path: Path) -> dict:
             "features": {
                 "registration_enabled": False,
                 "federation_enabled": True,
-                "local_login_enabled": True,
                 "element": {"enabled": True, "domain": "element.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
-                "sso": {"enabled": False, "providers": []},
+                "mas": {
+                    "enabled": True,
+                    "domain": "auth.example.com",
+                    "local_login_enabled": True,
+                    "upstream_providers": [],
+                },
                 "auto_join": {
                     "rooms": [],
                     "synapse": {"rooms_for_guests": True},
@@ -155,6 +159,9 @@ def update_core_config(
     element_domain: str,
     calls_enabled: bool,
     livekit_domain: str,
+    mas_enabled: bool | None = None,
+    mas_domain: str | None = None,
+    mas_local_login_enabled: bool | None = None,
 ) -> None:
     matrix = config.setdefault("matrix", {})
     if not isinstance(matrix, dict):
@@ -172,7 +179,24 @@ def update_core_config(
 
     features["registration_enabled"] = bool(registration_enabled)
     features["federation_enabled"] = bool(federation_enabled)
-    features.setdefault("local_login_enabled", True)
+
+    mas = features.setdefault("mas", {})
+    if not isinstance(mas, dict):
+        mas = {}
+        features["mas"] = mas
+    if mas_enabled is not None:
+        mas["enabled"] = bool(mas_enabled) and normalize_server_implementation(server_implementation) == "synapse"
+    elif "enabled" not in mas:
+        mas["enabled"] = normalize_server_implementation(server_implementation) == "synapse"
+    if mas_domain is not None:
+        mas["domain"] = mas_domain
+    elif not mas.get("domain"):
+        mas["domain"] = f"auth.{server_name}"
+    if mas_local_login_enabled is not None:
+        mas["local_login_enabled"] = bool(mas_local_login_enabled)
+    elif "local_login_enabled" not in mas:
+        mas["local_login_enabled"] = True
+    mas.setdefault("upstream_providers", [])
 
     element = features.setdefault("element", {})
     if not isinstance(element, dict):
@@ -254,6 +278,7 @@ def emit_wizard_defaults(config: dict) -> str:
 
     element = features.get("element", {}) if isinstance(features.get("element", {}), dict) else {}
     calls = features.get("calls", {}) if isinstance(features.get("calls", {}), dict) else {}
+    mas = features.get("mas", {}) if isinstance(features.get("mas", {}), dict) else {}
 
     matrix_domain = matrix.get("domain", "matrix.example.com")
     server_name = matrix.get("server_name", "example.com")
@@ -282,6 +307,13 @@ def emit_wizard_defaults(config: dict) -> str:
             to_bool(calls.get("enabled", True)), yes_default="y", no_default="n"
         ),
         "config_livekit_domain": calls.get("livekit_domain", ""),
+        "config_mas_default": shell_bool_default(
+            to_bool(mas.get("enabled", True)), yes_default="y", no_default="n"
+        ),
+        "config_mas_domain": mas.get("domain", ""),
+        "config_mas_local_login_default": shell_bool_default(
+            to_bool(mas.get("local_login_enabled", True)), yes_default="y", no_default="n"
+        ),
     }
 
     lines = []
@@ -365,6 +397,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--calls-enabled")
     parser.add_argument("--livekit-domain")
     parser.add_argument("--server-implementation")
+    parser.add_argument("--mas-enabled")
+    parser.add_argument("--mas-domain")
+    parser.add_argument("--mas-local-login-enabled")
 
     parser.add_argument("--module-enabled")
     parser.add_argument("--module-admin-username")
@@ -448,6 +483,11 @@ def main(argv: list[str] | None = None) -> int:
             element_domain=args.element_domain,
             calls_enabled=to_bool(args.calls_enabled),
             livekit_domain=args.livekit_domain,
+            mas_enabled=to_bool(args.mas_enabled) if args.mas_enabled is not None else None,
+            mas_domain=args.mas_domain,
+            mas_local_login_enabled=(
+                to_bool(args.mas_local_login_enabled) if args.mas_local_login_enabled is not None else None
+            ),
         )
         save(deploy_yaml, config)
         return 0

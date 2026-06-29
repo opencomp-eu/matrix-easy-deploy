@@ -1,0 +1,422 @@
+#!/usr/bin/env python3
+"""Matrix Authentication Service (MAS) config helpers for apply.py."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import secrets
+import subprocess
+import sys
+import time
+from typing import Any
+
+import yaml
+
+MAS_SYNAPSE_CLIENT_ID = "0000000000000000000SYNAPSE"
+_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def new_ulid() -> str:
+    """Generate a Crockford-base32 ULID (26 characters)."""
+    ms = int(time.time() * 1000)
+    ts = ms.to_bytes(6, byteorder="big")
+    rand = secrets.token_bytes(10)
+    combined = ts + rand
+    value = int.from_bytes(combined, byteorder="big")
+    chars: list[str] = []
+    for _ in range(26):
+        chars.append(_CROCKFORD[value & 0x1F])
+        value >>= 5
+    return "".join(reversed(chars))
+
+
+def stable_provider_ulid(name: str, issuer: str) -> str:
+    """Derive a stable ULID-like identifier for an upstream provider."""
+    explicit = hashlib.sha256(f"{name}\0{issuer}".encode()).digest()
+    ts = int(time.time() * 1000).to_bytes(6, byteorder="big")
+    combined = ts + explicit[:10]
+    value = int.from_bytes(combined, byteorder="big")
+    chars: list[str] = []
+    for _ in range(26):
+        chars.append(_CROCKFORD[value & 0x1F])
+        value >>= 5
+    return "".join(reversed(chars))
+
+
+def extract_base_domain(fqdn: str) -> str:
+    parts = fqdn.split(".")
+    if len(parts) >= 3:
+        return ".".join(parts[1:])
+    return fqdn
+
+
+def default_mas_config(server_name: str, *, synapse: bool = True) -> dict[str, Any]:
+    if not synapse:
+        return {
+            "enabled": False,
+            "domain": f"auth.{server_name}",
+            "local_login_enabled": True,
+            "upstream_providers": [],
+        }
+    return {
+        "enabled": True,
+        "domain": f"auth.{server_name}",
+        "local_login_enabled": True,
+        "upstream_providers": [],
+    }
+
+
+def migrate_legacy_auth_features(features: dict) -> list[str]:
+    """Map deprecated features.sso / features.local_login_enabled into features.mas."""
+    warnings: list[str] = []
+    if not isinstance(features, dict):
+        return warnings
+
+    has_sso = "sso" in features and features.get("sso") is not None
+    has_mas = "mas" in features and features.get("mas") is not None
+
+    if has_sso and has_mas:
+        raise ValueError(
+            "deploy.yaml contains both features.sso and features.mas; "
+            "remove features.sso and use features.mas.upstream_providers"
+        )
+
+    if has_sso:
+        sso = features.pop("sso")
+        if not isinstance(sso, dict):
+            sso = {}
+        warnings.append("features.sso is deprecated; use features.mas.upstream_providers")
+        mas = features.setdefault("mas", {})
+        if not isinstance(mas, dict):
+            mas = {}
+            features["mas"] = mas
+        if sso.get("providers") and not mas.get("upstream_providers"):
+            mas["upstream_providers"] = list(sso.get("providers") or [])
+        if bool(sso.get("enabled", False)):
+            mas["enabled"] = True
+
+    if "local_login_enabled" in features:
+        legacy = features.pop("local_login_enabled")
+        warnings.append("features.local_login_enabled is deprecated; use features.mas.local_login_enabled")
+        mas = features.setdefault("mas", {})
+        if not isinstance(mas, dict):
+            mas = {}
+            features["mas"] = mas
+        if isinstance(legacy, bool) and "local_login_enabled" not in mas:
+            mas["local_login_enabled"] = legacy
+
+    return warnings
+
+
+def get_mas_config(config: dict) -> dict[str, Any]:
+    features = config.get("features", {}) if isinstance(config.get("features", {}), dict) else {}
+    matrix = config.get("matrix", {}) if isinstance(config.get("matrix", {}), dict) else {}
+    matrix_domain = matrix.get("domain", "matrix.example.com")
+    server_name = matrix.get("server_name") or extract_base_domain(str(matrix_domain))
+
+    from scripts import homeserver
+
+    hs_impl = homeserver.normalize_implementation(matrix.get("server_implementation", "synapse"))
+    mas = features.get("mas", {}) if isinstance(features.get("mas", {}), dict) else {}
+    defaults = default_mas_config(server_name, synapse=hs_impl == "synapse")
+    merged = {**defaults, **mas}
+    if hs_impl != "synapse":
+        merged["enabled"] = False
+    return merged
+
+
+def validate_mas_config(config: dict, mas: dict) -> None:
+    from scripts import homeserver
+
+    matrix = config.get("matrix", {}) if isinstance(config.get("matrix", {}), dict) else {}
+    hs_impl = homeserver.normalize_implementation(matrix.get("server_implementation", "synapse"))
+    features = config.get("features", {}) if isinstance(config.get("features", {}), dict) else {}
+    mas_raw = features.get("mas", {}) if isinstance(features.get("mas", {}), dict) else {}
+
+    if "enabled" in mas_raw and not isinstance(mas_raw.get("enabled"), bool):
+        raise ValueError("features.mas.enabled must be true/false")
+    if hs_impl != "synapse" and bool(mas_raw.get("enabled", False)):
+        raise ValueError("features.mas.enabled=true requires matrix.server_implementation=synapse")
+
+    if "enabled" in mas and not isinstance(mas.get("enabled"), bool):
+        raise ValueError("features.mas.enabled must be true/false")
+    if "local_login_enabled" in mas and not isinstance(mas.get("local_login_enabled"), bool):
+        raise ValueError("features.mas.local_login_enabled must be true/false")
+    if "domain" in mas and mas.get("domain") not in (None, ""):
+        domain = mas.get("domain")
+        if not isinstance(domain, str) or not domain.strip():
+            raise ValueError("features.mas.domain must be a non-empty string")
+    if "upstream_providers" in mas and not isinstance(mas.get("upstream_providers"), list):
+        raise ValueError("features.mas.upstream_providers must be a list")
+
+    if not bool(mas.get("enabled", False)):
+        return
+
+    local_login = bool(mas.get("local_login_enabled", True))
+    providers = mas.get("upstream_providers", []) if isinstance(mas.get("upstream_providers", []), list) else []
+    if not local_login and not providers:
+        raise ValueError(
+            "features.mas.local_login_enabled=false requires at least one "
+            "features.mas.upstream_providers entry"
+        )
+
+    for index, provider in enumerate(providers):
+        path = f"features.mas.upstream_providers[{index}]"
+        if not isinstance(provider, dict):
+            raise ValueError(f"{path} must be an object")
+        for key in ("name", "issuer", "client_id", "client_secret"):
+            value = provider.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{path}.{key} must be a non-empty string")
+        if "allow_registration" in provider and not isinstance(provider.get("allow_registration"), bool):
+            raise ValueError(f"{path}.allow_registration must be true/false")
+        if "id" in provider and provider.get("id") not in (None, ""):
+            pid = provider.get("id")
+            if not isinstance(pid, str) or len(pid.strip()) != 26:
+                raise ValueError(f"{path}.id must be a 26-character ULID when set")
+
+
+def build_mas_upstream_oauth2_yaml(providers: list, mas_domain: str) -> str:
+    if not providers:
+        return "upstream_oauth2:\n  providers: []\n"
+
+    entries: list[dict[str, Any]] = []
+    for index, provider in enumerate(providers):
+        if not isinstance(provider, dict):
+            continue
+        name = provider.get("name", "OIDC")
+        issuer = provider.get("issuer", "")
+        provider_id = provider.get("id") or stable_provider_ulid(name, issuer)
+        entry: dict[str, Any] = {
+            "id": provider_id,
+            "issuer": issuer,
+            "human_name": name,
+            "client_id": provider.get("client_id", ""),
+            "client_secret": provider.get("client_secret", ""),
+            "token_endpoint_auth_method": "client_secret_basic",
+            "scope": provider.get("scopes", ["openid", "profile", "email"]),
+            "claims_imports": {
+                "localpart": {"action": "require", "template": "{{ user.preferred_username }}"},
+                "displayname": {"action": "suggest", "template": "{{ user.name }}"},
+                "email": {"action": "suggest", "template": "{{ user.email }}"},
+            },
+            "redirect_uri": f"https://{mas_domain}/upstream/callback/{provider_id}",
+        }
+        brand = provider.get("brand_name")
+        if isinstance(brand, str) and brand.strip():
+            entry["brand_name"] = brand.strip()
+        entries.append(entry)
+
+    payload = {"upstream_oauth2": {"providers": entries}}
+    return yaml.safe_dump(payload, sort_keys=False, default_flow_style=False)
+
+
+def build_mas_signing_keys_yaml(keys: list[dict[str, str]]) -> str:
+    lines = ["secrets:", f"  encryption: {keys[0]['encryption']}", "  keys:"]
+    for item in keys[0]["signing_keys"]:
+        lines.append(f"    - kid: \"{item['kid']}\"")
+        lines.append("      key: |")
+        for key_line in item["key"].strip().splitlines():
+            lines.append(f"        {key_line}")
+    return "\n".join(lines) + "\n"
+
+
+def _parse_generated_mas_config(raw: str) -> dict[str, Any]:
+    data = yaml.safe_load(raw)
+    if not isinstance(data, dict):
+        raise ValueError("mas-cli config generate returned invalid YAML")
+    return data
+
+
+def _normalize_signing_keys(keys: list) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for index, item in enumerate(keys):
+        if not isinstance(item, dict):
+            continue
+        key_material = item.get("key") or item.get("private_key")
+        if not key_material:
+            continue
+        normalized.append(
+            {
+                "kid": str(item.get("kid") or f"key{index + 1}"),
+                "key": str(key_material).strip(),
+            }
+        )
+    return normalized
+
+
+def generate_mas_signing_material() -> dict[str, Any]:
+    """Generate MAS encryption secret and signing keys via mas-cli or openssl."""
+    use_docker = os.environ.get("MED_MAS_USE_DOCKER_GENERATE", "").strip() == "1"
+    if use_docker:
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "ghcr.io/element-hq/matrix-authentication-service:latest",
+                    "config",
+                    "generate",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            )
+            generated = _parse_generated_mas_config(result.stdout)
+            secrets_block = generated.get("secrets", {})
+            if not isinstance(secrets_block, dict):
+                raise ValueError("generated config missing secrets block")
+            encryption = secrets_block.get("encryption")
+            keys = _normalize_signing_keys(secrets_block.get("keys", []))
+            if not encryption or not keys:
+                raise ValueError("generated config missing encryption or signing keys")
+            return {
+                "MAS_ENCRYPTION_SECRET": str(encryption),
+                "MAS_SIGNING_KEYS": keys,
+            }
+        except (subprocess.SubprocessError, ValueError, OSError):
+            pass
+    return _generate_mas_signing_material_openssl()
+
+
+def _generate_mas_signing_material_stub() -> dict[str, Any]:
+    return {
+        "MAS_ENCRYPTION_SECRET": secrets.token_hex(32),
+        "MAS_SIGNING_KEYS": [
+            {
+                "kid": "rsa1",
+                "key": (
+                    "-----BEGIN RSA PRIVATE KEY-----\n"
+                    "MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PRYMXC0xxF6KXP2R7YHkqxv\n"
+                    "x/placeholder-test-key-not-for-production-use-only\n"
+                    "-----END RSA PRIVATE KEY-----"
+                ),
+            },
+            {
+                "kid": "ec1",
+                "key": (
+                    "-----BEGIN EC PRIVATE KEY-----\n"
+                    "MHcCAQEEIE8yeUh111Npqu2e5wXxjC/GA5lbGe0j0KVXqZP12vqioAcGBSuBBAAK\n"
+                    "oUQDQgAESKfUtKaLqCfhK+p3z870W59yOYvd+kjGWe+tK16SmWzZJbRCgdHakHE5\n"
+                    "MC6tJRnvedsYoKTrYoDv/XZIBI9zlA==\n"
+                    "-----END EC PRIVATE KEY-----"
+                ),
+            },
+        ],
+    }
+
+
+def _generate_mas_signing_material_openssl() -> dict[str, Any]:
+    try:
+        rsa = subprocess.run(
+            ["openssl", "genrsa", "2048"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        ec = subprocess.run(
+            ["openssl", "ecparam", "-name", "prime256v1", "-genkey"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if not rsa.stdout or not ec.stdout:
+            raise RuntimeError("openssl produced no output")
+        return {
+            "MAS_ENCRYPTION_SECRET": secrets.token_hex(32),
+            "MAS_SIGNING_KEYS": [
+                {"kid": "rsa1", "key": rsa.stdout.strip()},
+                {"kid": "ec1", "key": ec.stdout.strip()},
+            ],
+        }
+    except (subprocess.SubprocessError, OSError, RuntimeError):
+        return _generate_mas_signing_material_stub()
+
+
+def ensure_mas_secrets(state: dict, *, rotate: bool = False, mas_enabled: bool = False) -> dict:
+    updated = dict(state)
+    for key in ("MAS_DB_PASSWORD", "MAS_HOMESERVER_SECRET", "MAS_SYNAPSE_CLIENT_SECRET"):
+        if rotate or not updated.get(key):
+            updated[key] = secrets.token_hex(32)
+
+    needs_keys = rotate or not updated.get("MAS_ENCRYPTION_SECRET") or not updated.get("MAS_SIGNING_KEYS")
+    if mas_enabled and needs_keys:
+        material = generate_mas_signing_material()
+        updated["MAS_ENCRYPTION_SECRET"] = material["MAS_ENCRYPTION_SECRET"]
+        updated["MAS_SIGNING_KEYS"] = material["MAS_SIGNING_KEYS"]
+    return updated
+
+
+def build_mas_signing_keys_yaml_from_state(state: dict) -> str:
+    keys = state.get("MAS_SIGNING_KEYS")
+    encryption = state.get("MAS_ENCRYPTION_SECRET", "")
+    if not isinstance(keys, list) or not encryption:
+        return "secrets:\n  encryption: \"\"\n  keys: []\n"
+    payload = {
+        "encryption": encryption,
+        "signing_keys": _normalize_signing_keys(keys),
+    }
+    return build_mas_signing_keys_yaml([payload])
+
+
+def build_synapse_mas_sections(*, enabled: bool, server_name: str, mas_domain: str, secrets: dict) -> dict[str, str]:
+    if not enabled:
+        return {
+            "SYNAPSE_MAS_EXPERIMENTAL_SECTION": "",
+            "SYNAPSE_MAS_WELL_KNOWN_SECTION": "",
+            "SYNAPSE_OIDC_PROVIDERS": "[]",
+        }
+
+    client_secret = secrets.get("MAS_SYNAPSE_CLIENT_SECRET", "")
+    admin_token = secrets.get("MAS_HOMESERVER_SECRET", "")
+    experimental = "\n".join(
+        [
+            "  msc3861:",
+            "    enabled: true",
+            f"    issuer: https://{server_name}/",
+            f"    client_id: {MAS_SYNAPSE_CLIENT_ID}",
+            "    client_auth_method: client_secret_basic",
+            f'    client_secret: "{client_secret}"',
+            f'    admin_token: "{admin_token}"',
+            f'    account_management_url: "https://{mas_domain}/account"',
+            "  msc4108_enabled: true",
+            "  msc4190_enabled: true",
+        ]
+    )
+    well_known = "\n".join(
+        [
+            "  org.matrix.msc2965.authentication:",
+            f"    issuer: https://{server_name}/",
+            f"    account: https://{mas_domain}/account",
+        ]
+    )
+    return {
+        "SYNAPSE_MAS_EXPERIMENTAL_SECTION": experimental,
+        "SYNAPSE_MAS_WELL_KNOWN_SECTION": well_known,
+        "SYNAPSE_OIDC_PROVIDERS": "[]",
+    }
+
+
+def normalize_mas_for_homeserver(config: dict) -> None:
+    """Disable MAS automatically for homeservers that do not support it."""
+    from scripts import homeserver
+
+    matrix = config.get("matrix", {}) if isinstance(config.get("matrix", {}), dict) else {}
+    features = config.get("features", {}) if isinstance(config.get("features", {}), dict) else {}
+    hs_impl = homeserver.normalize_implementation(matrix.get("server_implementation", "synapse"))
+    if hs_impl == "synapse":
+        return
+
+    mas = features.setdefault("mas", {})
+    if not isinstance(mas, dict):
+        mas = {}
+        features["mas"] = mas
+    mas["enabled"] = False
+
+
+def emit_migration_warnings(warnings: list[str]) -> None:
+    for message in warnings:
+        print(f"Warning: {message}", file=sys.stderr)

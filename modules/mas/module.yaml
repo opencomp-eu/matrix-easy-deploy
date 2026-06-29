@@ -1,0 +1,6 @@
+name: mas
+config_key: mas
+generated_files:
+  - modules/mas/config.yaml
+runtime:
+  config_exists: modules/mas/config.yaml

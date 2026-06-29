@@ -25,6 +25,8 @@ source "${SCRIPT_DIR}/scripts/setup/runtime.sh"
 source "${SCRIPT_DIR}/scripts/setup/summary.sh"
 # shellcheck source=scripts/setup/modules.sh
 source "${SCRIPT_DIR}/scripts/setup/modules.sh"
+# shellcheck source=scripts/mas.sh
+source "${SCRIPT_DIR}/scripts/mas.sh"
 
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 DEPLOY_ENV="${SCRIPT_DIR}/.env"
@@ -46,6 +48,9 @@ edit_deploy_config() {
     local config_element_domain=""
     local config_calls_default="y"
     local config_livekit_domain=""
+    local config_mas_default="y"
+    local config_mas_domain=""
+    local config_mas_local_login_default="y"
     local config_server_implementation="synapse"
 
     if [[ -f "$DEPLOY_YAML" ]]; then
@@ -102,8 +107,14 @@ edit_deploy_config() {
         "$config_federation_default"
     ENABLE_FEDERATION="$([ "$ENABLE_FEDERATION_INPUT" == "y" ] && echo "true" || echo "false")"
 
-    # SSO placeholder
-    ENABLE_SSO="false"
+    if [[ "$SERVER_IMPLEMENTATION" == "synapse" ]]; then
+        gather_mas_config
+        ENABLE_MAS="$([ "$ENABLE_MAS" == "true" ] && echo "true" || echo "false")"
+    else
+        ENABLE_MAS="false"
+        MAS_DOMAIN=""
+        MAS_LOCAL_LOGIN_ENABLED="true"
+    fi
 
     ask_yn INSTALL_ELEMENT_INPUT \
         "Install Element web client? (skip if you already have a client)" \
@@ -152,7 +163,15 @@ edit_deploy_config() {
     echo -e "  Homeserver      : ${CYAN}${SERVER_IMPLEMENTATION}${RESET}"
     echo -e "  Public reg.     : ${CYAN}${ENABLE_REGISTRATION}${RESET}"
     echo -e "  Federation      : ${CYAN}${ENABLE_FEDERATION_INPUT}${RESET}"
-    echo -e "  SSO (OIDC)      : ${CYAN}disabled${RESET}"
+    if [[ "$ENABLE_MAS" == "true" ]]; then
+        echo -e "  MAS (auth)      : ${CYAN}enabled${RESET} (${MAS_DOMAIN})"
+        echo -e "  MAS passwords   : ${CYAN}${MAS_LOCAL_LOGIN_ENABLED}${RESET}"
+        if [[ "${MAS_UPSTREAM_PROVIDER_COUNT:-0}" != "0" ]]; then
+            echo -e "  Upstream IdPs   : ${CYAN}${MAS_UPSTREAM_PROVIDER_NAMES}${RESET}"
+        fi
+    else
+        echo -e "  MAS (auth)      : ${CYAN}disabled${RESET}"
+    fi
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         echo -e "  Element client  : ${CYAN}${ELEMENT_DOMAIN}${RESET}"
     else
@@ -171,6 +190,9 @@ edit_deploy_config() {
     fi
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         echo -e "    ${CYAN}${ELEMENT_DOMAIN}${RESET}  →  <this server's IP>"
+    fi
+    if [[ "$ENABLE_MAS" == "true" ]]; then
+        echo -e "    ${CYAN}${MAS_DOMAIN}${RESET}  →  <this server's IP>"
     fi
     if [[ "$ENABLE_CALLS" == "true" ]]; then
         echo -e "    ${CYAN}${LIVEKIT_DOMAIN}${RESET}  →  <this server's IP>"
@@ -197,7 +219,10 @@ edit_deploy_config() {
         --install-element "$INSTALL_ELEMENT" \
         --element-domain "$ELEMENT_DOMAIN" \
         --calls-enabled "$ENABLE_CALLS" \
-        --livekit-domain "$LIVEKIT_DOMAIN"
+        --livekit-domain "$LIVEKIT_DOMAIN" \
+        --mas-enabled "$ENABLE_MAS" \
+        --mas-domain "$MAS_DOMAIN" \
+        --mas-local-login-enabled "$MAS_LOCAL_LOGIN_ENABLED"
     success "Configuration saved to deploy.yaml"
 
     echo

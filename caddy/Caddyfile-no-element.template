@@ -33,6 +33,22 @@
     log
 }
 
+# Matrix Authentication Service — OIDC-native login (QR code, upstream IdPs)
+{{MAS_DOMAIN}} {
+    reverse_proxy matrix_mas:8080
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "interest-cohort=()"
+        -Server
+    }
+
+    encode gzip
+    log
+}
+
 # MatrixRTC backend — JWT auth service and LiveKit SFU for group calls
 {{LIVEKIT_DOMAIN}} {
     handle_path /livekit/jwt* {

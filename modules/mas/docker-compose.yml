@@ -1,0 +1,27 @@
+services:
+  mas:
+    image: ghcr.io/element-hq/matrix-authentication-service:latest
+    container_name: matrix_mas
+    restart: unless-stopped
+    environment:
+      MAS_CONFIG: /config/config.yaml
+    command: ["server", "-c", "/config/config.yaml"]
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+    networks:
+      - matrix_internal
+      - caddy_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/health >/dev/null 2>&1 || curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+networks:
+  matrix_internal:
+    external: true
+    name: core_matrix_internal
+  caddy_net:
+    external: true
+    name: caddy_net

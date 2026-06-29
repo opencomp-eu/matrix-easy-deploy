@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -22,6 +23,7 @@ try:
     from scripts import hookshot_caddy
     from scripts import backup_schedule
     from scripts import homeserver
+    from scripts import mas_config
 except ModuleNotFoundError:
     # When run as scripts/apply.py, Python may not include project root in sys.path.
     project_root = Path(__file__).resolve().parent.parent
@@ -32,6 +34,7 @@ except ModuleNotFoundError:
     from scripts import hookshot_caddy
     from scripts import backup_schedule
     from scripts import homeserver
+    from scripts import mas_config
 
 
 DEFAULT_SECRET_KEYS = [
@@ -43,6 +46,9 @@ DEFAULT_SECRET_KEYS = [
     "LIVEKIT_SECRET",
     "WA_DB_PASSWORD",
     "SL_DB_PASSWORD",
+    "MAS_DB_PASSWORD",
+    "MAS_HOMESERVER_SECRET",
+    "MAS_SYNAPSE_CLIENT_SECRET",
 ]
 
 # Operator-managed keys written by tooling outside apply's env_vars; never drop on re-apply.
@@ -173,6 +179,12 @@ def load_config(ctx: ApplyContext) -> dict:
 
     if not isinstance(config, dict):
         raise ValueError("deploy.yaml must contain a YAML object at the root")
+
+    features = config.get("features")
+    if isinstance(features, dict):
+        warnings = mas_config.migrate_legacy_auth_features(features)
+        mas_config.emit_migration_warnings(warnings)
+        mas_config.normalize_mas_for_homeserver(config)
 
     return config
 
@@ -514,11 +526,13 @@ def validate_config(config: dict) -> None:
         raise ValueError("backup must be an object when provided")
 
     if isinstance(features, dict):
-        for key in ("registration_enabled", "federation_enabled", "local_login_enabled"):
+        mas_config.normalize_mas_for_homeserver(config)
+
+        for key in ("registration_enabled", "federation_enabled"):
             if key in features and not isinstance(features[key], bool):
                 raise ValueError(f"features.{key} must be true/false")
 
-        for section in ("element", "calls", "sso", "auto_join"):
+        for section in ("element", "calls", "mas", "auto_join"):
             if section in features and not isinstance(features.get(section), dict):
                 raise ValueError(f"features.{section} must be an object")
 
@@ -530,20 +544,8 @@ def validate_config(config: dict) -> None:
         if auto_join:
             validate_auto_join_config(auto_join)
 
-        sso = features.get("sso", {}) if isinstance(features.get("sso", {}), dict) else {}
-        if "providers" in sso and not isinstance(sso.get("providers"), list):
-            raise ValueError("features.sso.providers must be a list")
-
-        local_login_enabled = bool(features.get("local_login_enabled", True))
-        if not local_login_enabled:
-            if not bool(sso.get("enabled", False)):
-                raise ValueError("features.local_login_enabled=false requires features.sso.enabled=true")
-
-            providers = sso.get("providers", []) if isinstance(sso.get("providers", []), list) else []
-            if not providers:
-                raise ValueError(
-                    "features.local_login_enabled=false requires at least one features.sso.providers entry"
-                )
+        mas = mas_config.get_mas_config(config)
+        mas_config.validate_mas_config(config, mas)
 
     if isinstance(modules, dict):
         for key, value in modules.items():
@@ -675,8 +677,47 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     # registration_token secret gates who can register (not open public signup).
     derived["TUWUNEL_ALLOW_REGISTRATION"] = "true"
 
-    local_login_enabled = bool(features.get("local_login_enabled", True))
-    derived["LOCAL_LOGIN_ENABLED"] = "true" if local_login_enabled else "false"
+    mas = mas_config.get_mas_config(config)
+    mas_enabled = bool(mas.get("enabled", False)) and hs_spec.implementation == "synapse"
+    mas_local_login = bool(mas.get("local_login_enabled", True))
+    derived["MAS_ENABLED"] = "true" if mas_enabled else "false"
+    derived["MAS_LOCAL_LOGIN_ENABLED"] = "true" if mas_local_login else "false"
+    if mas_enabled:
+        derived["MAS_DOMAIN"] = mas.get("domain") or f"auth.{server_name}"
+        derived["LOCAL_LOGIN_ENABLED"] = "false"
+        mas_sections = mas_config.build_synapse_mas_sections(
+            enabled=True,
+            server_name=server_name,
+            mas_domain=derived["MAS_DOMAIN"],
+            secrets={},
+        )
+        derived.update(mas_sections)
+        derived["OIDC_PROVIDERS_JSON"] = "[]"
+        derived["ENABLE_SSO"] = "false"
+        derived["OIDC_PROVIDER_COUNT"] = "0"
+        derived["OIDC_PROVIDER_NAMES"] = ""
+        providers = mas.get("upstream_providers", []) if isinstance(mas.get("upstream_providers", []), list) else []
+        derived["MAS_UPSTREAM_PROVIDER_COUNT"] = str(len(providers))
+        derived["MAS_UPSTREAM_PROVIDER_NAMES"] = ",".join(
+            p.get("name", "") for p in providers if isinstance(p, dict)
+        )
+    else:
+        derived["MAS_DOMAIN"] = ""
+        derived["LOCAL_LOGIN_ENABLED"] = "true" if mas_local_login else "false"
+        derived.update(
+            mas_config.build_synapse_mas_sections(
+                enabled=False,
+                server_name=server_name,
+                mas_domain="",
+                secrets={},
+            )
+        )
+        derived["OIDC_PROVIDERS_JSON"] = "[]"
+        derived["ENABLE_SSO"] = "false"
+        derived["OIDC_PROVIDER_COUNT"] = "0"
+        derived["OIDC_PROVIDER_NAMES"] = ""
+        derived["MAS_UPSTREAM_PROVIDER_COUNT"] = "0"
+        derived["MAS_UPSTREAM_PROVIDER_NAMES"] = ""
 
     derived["SYNAPSE_AUTO_JOIN_SECTION"] = build_synapse_auto_join_section(
         get_auto_join_config(features),
@@ -706,21 +747,6 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     if server_name != matrix_domain:
         hosts.append(server_name)
     derived["CADDY_MATRIX_HOSTS"] = ", ".join(hosts)
-
-    sso = features.get("sso", {}) if isinstance(features.get("sso", {}), dict) else {}
-    if bool(sso.get("enabled", False)):
-        providers = sso.get("providers", []) if isinstance(sso.get("providers", []), list) else []
-        derived["ENABLE_SSO"] = "true"
-        derived["OIDC_PROVIDER_COUNT"] = str(len(providers))
-        derived["OIDC_PROVIDER_NAMES"] = ",".join(
-            p.get("name", "") for p in providers if isinstance(p, dict)
-        )
-        derived["OIDC_PROVIDERS_JSON"] = build_oidc_providers_json(providers)
-    else:
-        derived["ENABLE_SSO"] = "false"
-        derived["OIDC_PROVIDERS_JSON"] = "[]"
-        derived["OIDC_PROVIDER_COUNT"] = "0"
-        derived["OIDC_PROVIDER_NAMES"] = ""
 
     derived["SHARED_REDIS_HOST"] = "matrix_redis"
     derived["SHARED_REDIS_PORT"] = "6379"
@@ -757,12 +783,14 @@ def generate_secret() -> str:
     return secrets.token_hex(32)
 
 
-def create_or_update_secrets(ctx: ApplyContext, existing: dict, rotate: bool = False) -> dict:
+def create_or_update_secrets(ctx: ApplyContext, existing: dict, rotate: bool = False, *, mas_enabled: bool = False) -> dict:
     state = dict(existing)
 
     for key in DEFAULT_SECRET_KEYS:
         if rotate or not state.get(key):
             state[key] = generate_secret()
+
+    state = mas_config.ensure_mas_secrets(state, rotate=rotate, mas_enabled=mas_enabled)
 
     # Static key kept for compatibility with current templates.
     state["LIVEKIT_KEY"] = "matrix"
@@ -811,8 +839,36 @@ def build_env_vars(config: dict, derived: dict, state_secrets: dict) -> dict:
         slack.get("admin_username", config["matrix"].get("admin_username", "admin"))
     )
 
+    mas_db_name = "mas"
+    mas_db_user = "mas"
+    mas_db_password = state_secrets.get("MAS_DB_PASSWORD", "")
+    env_vars["MAS_DB_NAME"] = mas_db_name
+    env_vars["MAS_DB_USER"] = mas_db_user
+    env_vars["MAS_DB_PASSWORD"] = mas_db_password
+    env_vars["MAS_DB_URI"] = (
+        f"postgresql://{mas_db_user}:{mas_db_password}@matrix_postgres:5432/{mas_db_name}?sslmode=disable"
+    )
+
     env_vars.update(derived)
     env_vars.update(state_secrets)
+
+    if env_vars.get("MAS_ENABLED") == "true":
+        mas = mas_config.get_mas_config(config)
+        mas_domain = env_vars.get("MAS_DOMAIN", "")
+        providers = mas.get("upstream_providers", []) if isinstance(mas.get("upstream_providers", []), list) else []
+        env_vars["MAS_UPSTREAM_OAUTH2_YAML"] = mas_config.build_mas_upstream_oauth2_yaml(providers, mas_domain)
+        env_vars["MAS_SIGNING_KEYS_YAML"] = mas_config.build_mas_signing_keys_yaml_from_state(state_secrets)
+        mas_sections = mas_config.build_synapse_mas_sections(
+            enabled=True,
+            server_name=derived["SERVER_NAME"],
+            mas_domain=mas_domain,
+            secrets=state_secrets,
+        )
+        env_vars.update(mas_sections)
+    else:
+        env_vars["MAS_UPSTREAM_OAUTH2_YAML"] = "upstream_oauth2:\n  providers: []\n"
+        env_vars["MAS_SIGNING_KEYS_YAML"] = ""
+
     return env_vars
 
 
@@ -1167,7 +1223,7 @@ def finalize_caddyfile(path: Path) -> None:
 
 def fail_if_unresolved_placeholder(path: Path) -> None:
     content = path.read_text()
-    if "{{" in content:
+    if re.search(r"\{\{[A-Z_][A-Z0-9_]*\}\}", content):
         raise ValueError(f"{path} still contains unresolved template placeholders")
 
 
@@ -1208,6 +1264,12 @@ def render_templates(ctx: ApplyContext, config: dict, env_vars: dict) -> None:
     livekit_dest = ctx.project_root / "modules" / "calls" / "livekit" / "livekit.yaml"
     render_template(livekit_template, livekit_dest, env_vars)
     fail_if_unresolved_placeholder(livekit_dest)
+
+    if env_vars.get("MAS_ENABLED") == "true":
+        mas_template = ctx.project_root / "modules" / "mas" / "config.yaml.template"
+        mas_dest = ctx.project_root / "modules" / "mas" / "config.yaml"
+        render_template(mas_template, mas_dest, env_vars)
+        fail_if_unresolved_placeholder(mas_dest)
 
 
 def load_module_manifest(ctx: ApplyContext, module_dir_name: str) -> dict:
@@ -1338,6 +1400,37 @@ def reconcile_module_bootstrap(ctx: ApplyContext, config: dict) -> None:
         raise RuntimeError("One or more enabled modules failed to converge")
 
 
+def reconcile_mas_bootstrap(ctx: ApplyContext, config: dict, env_vars: dict) -> None:
+    if env_vars.get("MAS_ENABLED") != "true":
+        return
+
+    if os.environ.get("MED_SKIP_EXTERNAL_BOOTSTRAP") == "1":
+        print("MAS bootstrap: skipped (MED_SKIP_EXTERNAL_BOOTSTRAP=1)")
+        return
+
+    mas_config_path = ctx.project_root / "modules" / "mas" / "config.yaml"
+    if not mas_config_path.exists():
+        raise RuntimeError("MAS is enabled but modules/mas/config.yaml was not rendered")
+
+    setup_script = ctx.project_root / "modules" / "mas" / "setup.sh"
+    if not setup_script.exists():
+        raise RuntimeError(f"MAS setup script missing: {setup_script}")
+
+    env = dict(os.environ)
+    env["MED_NON_INTERACTIVE"] = "1"
+    for key, value in env_vars.items():
+        if key in env or "\n" in str(value):
+            continue
+        env[key] = str(value)
+
+    try:
+        subprocess.run(["bash", str(setup_script)], check=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"MAS database bootstrap failed with exit code {exc.returncode}") from exc
+
+    print("MAS bootstrap: database ready")
+
+
 def reconcile_bridge_appservices(ctx: ApplyContext, config: dict) -> None:
     modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
     hs_spec = homeserver.get_spec(config)
@@ -1450,14 +1543,16 @@ def apply_configuration(
     config = load_config(ctx)
     validate_config(config)
     derived = derive_values(config, server_ip=server_ip)
+    mas_enabled = derived.get("MAS_ENABLED") == "true"
     existing = load_secrets(ctx)
-    saved = create_or_update_secrets(ctx, existing, rotate=rotate_secrets)
+    saved = create_or_update_secrets(ctx, existing, rotate=rotate_secrets, mas_enabled=mas_enabled)
     env_vars = build_env_vars(config, derived, saved)
     write_env_file(ctx, env_vars)
     render_templates(ctx, config, env_vars)
     reconcile_module_state(ctx, config)
     if reconcile_modules:
         reconcile_module_bootstrap(ctx, config)
+        reconcile_mas_bootstrap(ctx, config, env_vars)
     reconcile_bridge_appservices(ctx, config)
     reconcile_hookshot_caddy(ctx, config, derived)
     schedule_status = backup_schedule.reconcile(ctx.project_root, config)
