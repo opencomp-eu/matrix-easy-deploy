@@ -409,6 +409,33 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("MED_ADMIN_PASSWORD=secret123456789", env_text)
         self.assertNotIn("OLD_KEY=keep-me", env_text)
 
+    def test_write_env_file_excludes_mas_signing_keys_and_templates(self):
+        ctx = apply.ApplyContext(self.root)
+        apply.write_env_file(
+            ctx,
+            {
+                "MATRIX_DOMAIN": "matrix.example.com",
+                "MAS_SIGNING_KEYS": [
+                    {
+                        "kid": "rsa1",
+                        "key": (
+                            "-----BEGIN RSA PRIVATE KEY-----\n"
+                            "MIIE\n"
+                            "-----END RSA PRIVATE KEY-----"
+                        ),
+                    }
+                ],
+                "MAS_SIGNING_KEYS_YAML": "secrets:\n  keys:\n    - kid: rsa1\n",
+                "SYNAPSE_MAS_EXPERIMENTAL_SECTION": "experimental:\n  mas:\n",
+            },
+        )
+        env_text = ctx.env_file.read_text()
+        self.assertIn("MATRIX_DOMAIN=matrix.example.com", env_text)
+        self.assertNotIn("MAS_SIGNING_KEYS=", env_text)
+        self.assertNotIn("MAS_SIGNING_KEYS_YAML=", env_text)
+        self.assertNotIn("SYNAPSE_MAS_EXPERIMENTAL_SECTION=", env_text)
+        self.assertNotIn("BEGIN", env_text)
+
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
         first = apply.create_or_update_secrets(ctx, {})

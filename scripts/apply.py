@@ -59,6 +59,19 @@ PRESERVED_ENV_KEYS = frozenset(
     }
 )
 
+# Template-only or secrets.yaml-backed values — never persist in shell-sourced .env.
+ENV_FILE_EXCLUDED_KEYS = frozenset(
+    {
+        "MAS_SIGNING_KEYS",
+        "MAS_SIGNING_KEYS_YAML",
+        "MAS_UPSTREAM_OAUTH2_YAML",
+        "SYNAPSE_MAS_EXPERIMENTAL_SECTION",
+        "SYNAPSE_MAS_WELL_KNOWN_SECTION",
+        "SYNAPSE_AUTO_JOIN_SECTION",
+        "TUWUNEL_AUTO_JOIN_SECTION",
+    }
+)
+
 SCALAR_INTEGRATIONS_UI_URL = "https://scalar.vector.im/"
 SCALAR_INTEGRATIONS_REST_URL = "https://scalar.vector.im/api"
 SCALAR_INTEGRATIONS_WIDGETS_URLS = [
@@ -1033,6 +1046,15 @@ def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=4) + "\n")
 
 
+def _env_file_scalar(value: Any) -> str | None:
+    if isinstance(value, (dict, list)):
+        return None
+    text = str(value)
+    if "\n" in text or "\r" in text:
+        return None
+    return text
+
+
 def write_env_file(ctx: ApplyContext, env_vars: dict) -> None:
     existing = load_env_map(ctx.env_file)
     merged = dict(env_vars)
@@ -1048,11 +1070,10 @@ def write_env_file(ctx: ApplyContext, env_vars: dict) -> None:
         "",
     ]
     for key in sorted(merged.keys()):
-        value = str(merged[key])
-        # .env is shell-sourced by helper scripts; multiline values break parsing.
-        # Keep multiline placeholders available for template rendering, but do not
-        # persist them in the environment file.
-        if "\n" in value:
+        if key in ENV_FILE_EXCLUDED_KEYS:
+            continue
+        value = _env_file_scalar(merged[key])
+        if value is None:
             continue
         lines.append(f"{key}={value}")
     lines.append("")

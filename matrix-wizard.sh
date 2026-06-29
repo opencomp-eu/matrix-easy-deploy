@@ -259,14 +259,11 @@ run_full_setup() {
 
     echo
     echo -e "${BOLD}  Step 2 of 5 — Applying configuration${RESET}"
-    bash "${SCRIPT_DIR}/apply.sh"
+    bash "${SCRIPT_DIR}/apply.sh" --no-reconcile-runtime
 
     # Load the generated .env for runtime
     if [[ -f "$DEPLOY_ENV" ]]; then
-        set -o allexport
-        # shellcheck disable=SC1090
-        source "$DEPLOY_ENV"
-        set +o allexport
+        load_deploy_env "$DEPLOY_ENV"
     fi
 
     echo
@@ -395,10 +392,7 @@ run_create_admin_wizard() {
         die "No .env found at ${DEPLOY_ENV}. Run first setup first."
     fi
 
-    set -o allexport
-    # shellcheck disable=SC1090
-    source "$DEPLOY_ENV"
-    set +o allexport
+    load_deploy_env "$DEPLOY_ENV"
 
     if [[ -z "${MATRIX_DOMAIN:-}" || -z "${REGISTRATION_SHARED_SECRET:-}" ]]; then
         die ".env is missing MATRIX_DOMAIN and/or REGISTRATION_SHARED_SECRET."

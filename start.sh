@@ -22,10 +22,7 @@ HOOKSHOT_ENABLED="false"
 WHATSAPP_BRIDGE_ENABLED="false"
 SLACK_BRIDGE_ENABLED="false"
 if [[ -f "${SCRIPT_DIR}/.env" ]]; then
-    set -o allexport
-    # shellcheck disable=SC1090
-    source "${SCRIPT_DIR}/.env"
-    set +o allexport
+    load_deploy_env "${SCRIPT_DIR}/.env"
 fi
 
 load_runtime_desired_state "${SCRIPT_DIR}"
