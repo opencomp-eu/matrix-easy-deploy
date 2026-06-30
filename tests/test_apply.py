@@ -161,6 +161,7 @@ class ApplyTests(unittest.TestCase):
             "enabled": True,
             "providers": [
                 {
+                    "id": "01HFVBY12TMNTYTBV8W921M5FA",
                     "name": "Google",
                     "issuer": "https://accounts.google.com/",
                     "client_id": "a",
@@ -662,6 +663,14 @@ class ApplyTests(unittest.TestCase):
         self.assertIn(mas_config.MAS_DOCKER_ASSETS_PATH, mas_cfg)
         self.assertNotIn("/usr/local/share/assets/", mas_cfg)
         self.assertIn("upstream_oauth2:", mas_cfg)
+
+        saved = yaml.safe_load((self.root / "deploy.yaml").read_text())
+        provider_id = saved["features"]["sso"]["providers"][0]["id"]
+        self.assertEqual(len(provider_id), 26)
+        self.assertIn(
+            f"/auth/upstream/callback/{provider_id}",
+            mas_cfg,
+        )
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
         self.assertIn("handle_path /auth/*", caddy)

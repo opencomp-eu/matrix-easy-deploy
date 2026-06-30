@@ -67,7 +67,8 @@ features:
     enabled: false
     providers: []
     # Example provider (Google):
-    # - name: Google
+    # - id: 01HFVBY12TMNTYTBV8W921M5FA  # assigned by apply.sh if omitted
+    #   name: Google
     #   issuer: https://accounts.google.com/
     #   client_id: your-client-id
     #   client_secret: your-client-secret

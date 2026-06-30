@@ -201,6 +201,11 @@ def load_config(ctx: ApplyContext) -> dict:
     return config
 
 
+def save_config(ctx: ApplyContext, config: dict) -> None:
+    with ctx.config_file.open("w") as f:
+        yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+
+
 def _require_bool(value, path: str) -> None:
     if not isinstance(value, bool):
         raise ValueError(f"{path} must be true/false")
@@ -1599,6 +1604,9 @@ def apply_configuration(
     reconcile_modules: bool = True,
 ) -> None:
     config = load_config(ctx)
+    if mas_config.ensure_sso_provider_ids(config):
+        save_config(ctx, config)
+        print("Assigned stable upstream SSO provider IDs in deploy.yaml")
     validate_config(config)
     derived = derive_values(config, server_ip=server_ip)
     mas_enabled = derived.get("MAS_ENABLED") == "true"

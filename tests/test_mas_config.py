@@ -61,9 +61,58 @@ class MasConfigSigningKeyTests(unittest.TestCase):
 
 
 class MasConfigUpstreamOauth2Tests(unittest.TestCase):
+    def test_stable_provider_ulid_is_deterministic(self):
+        first = mas_config.stable_provider_ulid("Google", "https://accounts.google.com/")
+        second = mas_config.stable_provider_ulid("Google", "https://accounts.google.com/")
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 26)
+
+    def test_ensure_sso_provider_ids_assigns_and_preserves(self):
+        config = {
+            "features": {
+                "sso": {
+                    "enabled": True,
+                    "providers": [
+                        {
+                            "name": "Google",
+                            "issuer": "https://accounts.google.com/",
+                            "client_id": "id",
+                            "client_secret": "secret",
+                        },
+                        {
+                            "id": "01AAAAAAAAAAAAAAAAAAAAAAAA",
+                            "name": "Microsoft",
+                            "issuer": "https://login.microsoftonline.com/common/v2.0",
+                            "client_id": "id2",
+                            "client_secret": "secret2",
+                        },
+                    ],
+                }
+            }
+        }
+        self.assertTrue(mas_config.ensure_sso_provider_ids(config))
+        google_id = config["features"]["sso"]["providers"][0]["id"]
+        self.assertEqual(len(google_id), 26)
+        self.assertEqual(
+            config["features"]["sso"]["providers"][1]["id"],
+            "01AAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+        self.assertFalse(mas_config.ensure_sso_provider_ids(config))
+
+    def test_mas_upstream_redirect_uri(self):
+        uri = mas_config.mas_upstream_redirect_uri(
+            "https://matrix.example.com/auth/",
+            "01HFVBY12TMNTYTBV8W921M5FA",
+        )
+        self.assertEqual(
+            uri,
+            "https://matrix.example.com/auth/upstream/callback/01HFVBY12TMNTYTBV8W921M5FA",
+        )
+
     def test_build_mas_upstream_oauth2_yaml_uses_string_scope(self):
         providers = [
             {
+                "id": "01HFVBY12TMNTYTBV8W921M5FA",
                 "name": "Google",
                 "issuer": "https://accounts.google.com/",
                 "client_id": "id",
@@ -76,6 +125,10 @@ class MasConfigUpstreamOauth2Tests(unittest.TestCase):
         )
         self.assertIn('scope: openid profile email', yaml_text)
         self.assertNotIn("- openid\n", yaml_text)
+        self.assertIn(
+            "redirect_uri: https://matrix.example.com/auth/upstream/callback/01HFVBY12TMNTYTBV8W921M5FA",
+            yaml_text,
+        )
 
     def test_oauth_scope_string_accepts_list_or_string(self):
         self.assertEqual(

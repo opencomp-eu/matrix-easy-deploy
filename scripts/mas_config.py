@@ -35,15 +35,67 @@ def new_ulid() -> str:
 
 def stable_provider_ulid(name: str, issuer: str) -> str:
     """Derive a stable ULID-like identifier for an upstream provider."""
-    explicit = hashlib.sha256(f"{name}\0{issuer}".encode()).digest()
-    ts = int(time.time() * 1000).to_bytes(6, byteorder="big")
-    combined = ts + explicit[:10]
-    value = int.from_bytes(combined, byteorder="big")
+    digest = hashlib.sha256(f"{name}\0{issuer}".encode()).digest()
+    value = int.from_bytes(digest[:16], byteorder="big")
     chars: list[str] = []
     for _ in range(26):
         chars.append(_CROCKFORD[value & 0x1F])
         value >>= 5
     return "".join(reversed(chars))
+
+
+def mas_upstream_redirect_uri(mas_public_base: str, provider_id: str) -> str:
+    """OAuth redirect URI registered with the upstream IdP."""
+    base = mas_public_base.rstrip("/")
+    return f"{base}/upstream/callback/{provider_id}"
+
+
+def ensure_sso_provider_ids(config: dict) -> bool:
+    """Assign stable ULIDs to SSO providers missing an id; persist via apply."""
+    features = config.get("features")
+    if not isinstance(features, dict):
+        return False
+
+    sso = features.get("sso")
+    if not isinstance(sso, dict):
+        return False
+
+    providers = sso.get("providers")
+    if not isinstance(providers, list):
+        return False
+
+    changed = False
+    seen_ids: set[str] = set()
+    for index, provider in enumerate(providers):
+        if not isinstance(provider, dict):
+            continue
+
+        path = f"features.sso.providers[{index}]"
+        raw_id = provider.get("id")
+        if isinstance(raw_id, str) and raw_id.strip():
+            provider_id = raw_id.strip()
+            if len(provider_id) != 26:
+                raise ValueError(f"{path}.id must be a 26-character ULID when set")
+            if provider_id in seen_ids:
+                raise ValueError(f"duplicate features.sso.providers id: {provider_id}")
+            seen_ids.add(provider_id)
+            if raw_id != provider_id:
+                provider["id"] = provider_id
+                changed = True
+            continue
+
+        name = str(provider.get("name", "OIDC"))
+        issuer = str(provider.get("issuer", ""))
+        provider_id = stable_provider_ulid(name, issuer)
+        if provider_id in seen_ids:
+            provider_id = stable_provider_ulid(f"{name}\0{index}", issuer)
+        if provider_id in seen_ids:
+            raise ValueError(f"could not assign a unique id for {path}")
+        provider["id"] = provider_id
+        seen_ids.add(provider_id)
+        changed = True
+
+    return changed
 
 
 def mas_public_base(matrix_domain: str, path_prefix: str = MAS_PATH_PREFIX) -> str:
@@ -248,6 +300,7 @@ def validate_sso_config(config: dict) -> None:
     if hs_impl != "synapse" and sso_enabled and providers:
         raise ValueError("features.sso is only supported with matrix.server_implementation=synapse")
 
+    seen_ids: set[str] = set()
     for index, provider in enumerate(providers):
         path = f"features.sso.providers[{index}]"
         if not isinstance(provider, dict):
@@ -262,6 +315,12 @@ def validate_sso_config(config: dict) -> None:
             pid = provider.get("id")
             if not isinstance(pid, str) or len(pid.strip()) != 26:
                 raise ValueError(f"{path}.id must be a 26-character ULID when set")
+            pid = pid.strip()
+            if pid in seen_ids:
+                raise ValueError(f"duplicate features.sso.providers id: {pid}")
+            seen_ids.add(pid)
+        elif sso_enabled:
+            raise ValueError(f"{path}.id is required when features.sso.enabled=true; run apply.sh to assign provider IDs")
 
 
 def _oauth_scope_string(scopes: Any) -> str:
@@ -286,7 +345,12 @@ def build_mas_upstream_oauth2_yaml(providers: list, mas_public_base: str) -> str
             continue
         name = provider.get("name", "OIDC")
         issuer = provider.get("issuer", "")
-        provider_id = provider.get("id") or stable_provider_ulid(name, issuer)
+        provider_id = provider.get("id")
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            raise ValueError(
+                f"features.sso.providers[{index}] is missing id; run apply.sh to assign stable provider IDs"
+            )
+        provider_id = provider_id.strip()
         entry: dict[str, Any] = {
             "id": provider_id,
             "issuer": issuer,
@@ -300,7 +364,7 @@ def build_mas_upstream_oauth2_yaml(providers: list, mas_public_base: str) -> str
                 "displayname": {"action": "suggest", "template": "{{ user.name }}"},
                 "email": {"action": "suggest", "template": "{{ user.email }}"},
             },
-            "redirect_uri": f"{base}/upstream/callback/{provider_id}",
+            "redirect_uri": mas_upstream_redirect_uri(base, provider_id),
         }
         brand = provider.get("brand_name")
         if isinstance(brand, str) and brand.strip():

@@ -3,18 +3,14 @@
 # Source this file from setup scripts; do not execute directly.
 
 generate_upstream_provider_id() {
-    python3 - <<'PY'
-import hashlib
-import time
+    MAS_PROVIDER_NAME="$1" MAS_PROVIDER_ISSUER="$2" python3 - <<'PY'
+import os
+import sys
 
-CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-combined = int(time.time() * 1000).to_bytes(6, "big") + hashlib.sha256(b"wizard").digest()[:10]
-value = int.from_bytes(combined, "big")
-chars = []
-for _ in range(26):
-    chars.append(CROCKFORD[value & 0x1F])
-    value >>= 5
-print("".join(reversed(chars)))
+sys.path.insert(0, "scripts")
+from mas_config import stable_provider_ulid
+
+print(stable_provider_ulid(os.environ["MAS_PROVIDER_NAME"], os.environ["MAS_PROVIDER_ISSUER"]))
 PY
 }
 
@@ -66,7 +62,7 @@ gather_mas_upstream_providers() {
             ask_secret client_secret "OIDC client secret"
         done
 
-        provider_id="$(generate_upstream_provider_id)"
+        provider_id="$(generate_upstream_provider_id "$provider_name" "$issuer_url")"
 
         ask_yn auto_registration_input \
             "Allow NEW users to auto-register via this provider?" \
