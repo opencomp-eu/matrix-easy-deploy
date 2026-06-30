@@ -1,0 +1,25 @@
+services:
+  mas:
+    image: ghcr.io/element-hq/matrix-authentication-service:latest
+    container_name: matrix_mas
+    restart: unless-stopped
+    environment:
+      MAS_CONFIG: /config/config.yaml
+    command: ["server", "-c", "/config/config.yaml"]
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+    networks:
+      - matrix_internal
+      - caddy_net
+    # No Docker healthcheck: the official image is distroless (no curl/wget) and
+    # mas-cli config check does not hit the HTTP /health endpoint. Use
+    # scripts/mas_health.sh or wait_for_mas_http in setup scripts instead.
+    # See: https://github.com/element-hq/matrix-authentication-service/issues/3741
+
+networks:
+  matrix_internal:
+    external: true
+    name: core_matrix_internal
+  caddy_net:
+    external: true
+    name: caddy_net

@@ -25,6 +25,8 @@ source "${SCRIPT_DIR}/scripts/setup/runtime.sh"
 source "${SCRIPT_DIR}/scripts/setup/summary.sh"
 # shellcheck source=scripts/setup/modules.sh
 source "${SCRIPT_DIR}/scripts/setup/modules.sh"
+# shellcheck source=scripts/sso.sh
+source "${SCRIPT_DIR}/scripts/sso.sh"
 
 IFS=' ' read -ra DOCKER_COMPOSE <<< "$(docker_compose_cmd)"
 DEPLOY_ENV="${SCRIPT_DIR}/.env"
@@ -46,6 +48,8 @@ edit_deploy_config() {
     local config_element_domain=""
     local config_calls_default="y"
     local config_livekit_domain=""
+    local config_local_login_default="y"
+    local config_sso_default="n"
     local config_server_implementation="synapse"
 
     if [[ -f "$DEPLOY_YAML" ]]; then
@@ -102,8 +106,21 @@ edit_deploy_config() {
         "$config_federation_default"
     ENABLE_FEDERATION="$([ "$ENABLE_FEDERATION_INPUT" == "y" ] && echo "true" || echo "false")"
 
-    # SSO placeholder
-    ENABLE_SSO="false"
+    if [[ "$SERVER_IMPLEMENTATION" == "synapse" ]]; then
+        ask_yn LOCAL_LOGIN_INPUT \
+            "Allow password login on the auth service?" \
+            "$config_local_login_default"
+        LOCAL_LOGIN_ENABLED="$([ "$LOCAL_LOGIN_INPUT" == "y" ] && echo "true" || echo "false")"
+        gather_sso_config
+        AUTH_DOMAIN="${MATRIX_DOMAIN}/auth"
+    else
+        LOCAL_LOGIN_ENABLED="true"
+        ENABLE_SSO="false"
+        OIDC_PROVIDERS_JSON="[]"
+        OIDC_PROVIDER_COUNT="0"
+        OIDC_PROVIDER_NAMES=""
+        AUTH_DOMAIN=""
+    fi
 
     ask_yn INSTALL_ELEMENT_INPUT \
         "Install Element web client? (skip if you already have a client)" \
@@ -152,7 +169,18 @@ edit_deploy_config() {
     echo -e "  Homeserver      : ${CYAN}${SERVER_IMPLEMENTATION}${RESET}"
     echo -e "  Public reg.     : ${CYAN}${ENABLE_REGISTRATION}${RESET}"
     echo -e "  Federation      : ${CYAN}${ENABLE_FEDERATION_INPUT}${RESET}"
-    echo -e "  SSO (OIDC)      : ${CYAN}disabled${RESET}"
+    if [[ "$SERVER_IMPLEMENTATION" == "synapse" ]]; then
+        echo -e "  Auth service    : ${CYAN}https://${MATRIX_DOMAIN}/auth${RESET}"
+        echo -e "  Password login  : ${CYAN}${LOCAL_LOGIN_ENABLED}${RESET}"
+        if [[ "$ENABLE_SSO" == "true" ]]; then
+            echo -e "  SSO (OIDC)      : ${CYAN}enabled${RESET}"
+            if [[ "${OIDC_PROVIDER_COUNT:-0}" != "0" ]]; then
+                echo -e "  SSO providers   : ${CYAN}${OIDC_PROVIDER_NAMES}${RESET}"
+            fi
+        else
+            echo -e "  SSO (OIDC)      : ${CYAN}disabled${RESET}"
+        fi
+    fi
     if [[ "$INSTALL_ELEMENT" == "true" ]]; then
         echo -e "  Element client  : ${CYAN}${ELEMENT_DOMAIN}${RESET}"
     else
@@ -197,7 +225,15 @@ edit_deploy_config() {
         --install-element "$INSTALL_ELEMENT" \
         --element-domain "$ELEMENT_DOMAIN" \
         --calls-enabled "$ENABLE_CALLS" \
-        --livekit-domain "$LIVEKIT_DOMAIN"
+        --livekit-domain "$LIVEKIT_DOMAIN" \
+        --local-login-enabled "$LOCAL_LOGIN_ENABLED"
+    if [[ "$SERVER_IMPLEMENTATION" == "synapse" ]]; then
+        python3 "${SCRIPT_DIR}/scripts/config_edit.py" \
+            --deploy-yaml "$DEPLOY_YAML" \
+            --set-sso \
+            --sso-enabled "$ENABLE_SSO" \
+            --sso-providers-json "$OIDC_PROVIDERS_JSON"
+    fi
     success "Configuration saved to deploy.yaml"
 
     echo
@@ -223,14 +259,11 @@ run_full_setup() {
 
     echo
     echo -e "${BOLD}  Step 2 of 5 — Applying configuration${RESET}"
-    bash "${SCRIPT_DIR}/apply.sh"
+    bash "${SCRIPT_DIR}/apply.sh" --no-reconcile-runtime
 
     # Load the generated .env for runtime
     if [[ -f "$DEPLOY_ENV" ]]; then
-        set -o allexport
-        # shellcheck disable=SC1090
-        source "$DEPLOY_ENV"
-        set +o allexport
+        load_deploy_env "$DEPLOY_ENV"
     fi
 
     echo
@@ -359,10 +392,7 @@ run_create_admin_wizard() {
         die "No .env found at ${DEPLOY_ENV}. Run first setup first."
     fi
 
-    set -o allexport
-    # shellcheck disable=SC1090
-    source "$DEPLOY_ENV"
-    set +o allexport
+    load_deploy_env "$DEPLOY_ENV"
 
     if [[ -z "${MATRIX_DOMAIN:-}" || -z "${REGISTRATION_SHARED_SECRET:-}" ]]; then
         die ".env is missing MATRIX_DOMAIN and/or REGISTRATION_SHARED_SECRET."

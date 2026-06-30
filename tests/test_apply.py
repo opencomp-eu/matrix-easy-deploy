@@ -1,13 +1,15 @@
 import json
+import os
+import re
 import tempfile
 import unittest
 from io import StringIO
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from pathlib import Path
 
 import yaml
 
-from scripts import apply
+from scripts import apply, mas_config
 from tests.helpers.project_tree import (
     build_minimal_project,
     default_deploy_config,
@@ -20,8 +22,20 @@ class ApplyTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         build_minimal_project(self.root, preset="full")
+        self._prev_skip_bootstrap = os.environ.get("MED_SKIP_EXTERNAL_BOOTSTRAP")
+        os.environ["MED_SKIP_EXTERNAL_BOOTSTRAP"] = "1"
+        self._prev_mas_docker_generate = os.environ.get("MED_MAS_USE_DOCKER_GENERATE")
+        os.environ["MED_MAS_USE_DOCKER_GENERATE"] = "0"
 
     def tearDown(self):
+        if self._prev_mas_docker_generate is None:
+            os.environ.pop("MED_MAS_USE_DOCKER_GENERATE", None)
+        else:
+            os.environ["MED_MAS_USE_DOCKER_GENERATE"] = self._prev_mas_docker_generate
+        if self._prev_skip_bootstrap is None:
+            os.environ.pop("MED_SKIP_EXTERNAL_BOOTSTRAP", None)
+        else:
+            os.environ["MED_SKIP_EXTERNAL_BOOTSTRAP"] = self._prev_skip_bootstrap
         self.tmp.cleanup()
 
     def sample_config(self):
@@ -64,21 +78,33 @@ class ApplyTests(unittest.TestCase):
 
         derived = apply.derive_values(cfg, server_ip="1.2.3.4")
 
+        self.assertEqual(derived["MAS_ENABLED"], "true")
         self.assertEqual(derived["ENABLE_SSO"], "true")
         self.assertEqual(derived["OIDC_PROVIDER_COUNT"], "1")
         self.assertEqual(derived["OIDC_PROVIDER_NAMES"], "Google")
-        self.assertIn('"idp_name":"Google"', derived["OIDC_PROVIDERS_JSON"])
+        self.assertEqual(derived["MAS_UPSTREAM_PROVIDER_COUNT"], "1")
+        self.assertEqual(derived["MAS_UPSTREAM_PROVIDER_NAMES"], "Google")
+        self.assertEqual(derived["LOCAL_LOGIN_ENABLED"], "false")
+        self.assertIn("msc3861:", derived["SYNAPSE_MAS_EXPERIMENTAL_SECTION"])
 
-    def test_derive_values_password_login_disabled(self):
+    def test_derive_values_sso_only(self):
         cfg = self.sample_config()
         cfg["features"]["local_login_enabled"] = False
         cfg["features"]["sso"] = {
             "enabled": True,
-            "providers": [{"name": "Google", "issuer": "https://accounts.google.com/"}],
+            "providers": [
+                {
+                    "name": "Google",
+                    "issuer": "https://accounts.google.com/",
+                    "client_id": "a",
+                    "client_secret": "b",
+                }
+            ],
         }
 
         derived = apply.derive_values(cfg, server_ip="1.2.3.4")
 
+        self.assertEqual(derived["MAS_LOCAL_LOGIN_ENABLED"], "false")
         self.assertEqual(derived["LOCAL_LOGIN_ENABLED"], "false")
 
     def test_validate_config_rejects_invalid_modules_shape(self):
@@ -121,16 +147,28 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
-    def test_validate_config_rejects_password_login_disabled_without_sso(self):
-        cfg = self.sample_config()
-        cfg["features"]["local_login_enabled"] = False
-        with self.assertRaises(ValueError):
-            apply.validate_config(cfg)
-
-    def test_validate_config_rejects_password_login_disabled_without_sso_providers(self):
+    def test_validate_config_rejects_sso_only_without_providers(self):
         cfg = self.sample_config()
         cfg["features"]["local_login_enabled"] = False
         cfg["features"]["sso"] = {"enabled": True, "providers": []}
+        with self.assertRaises(ValueError):
+            apply.validate_config(cfg)
+
+    def test_validate_config_rejects_sso_on_tuwunel(self):
+        cfg = self.sample_config()
+        cfg["matrix"]["server_implementation"] = "tuwunel"
+        cfg["features"]["sso"] = {
+            "enabled": True,
+            "providers": [
+                {
+                    "id": "01HFVBY12TMNTYTBV8W921M5FA",
+                    "name": "Google",
+                    "issuer": "https://accounts.google.com/",
+                    "client_id": "a",
+                    "client_secret": "b",
+                }
+            ],
+        }
         with self.assertRaises(ValueError):
             apply.validate_config(cfg)
 
@@ -378,6 +416,33 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("MED_ADMIN_PASSWORD=secret123456789", env_text)
         self.assertNotIn("OLD_KEY=keep-me", env_text)
 
+    def test_write_env_file_excludes_mas_signing_keys_and_templates(self):
+        ctx = apply.ApplyContext(self.root)
+        apply.write_env_file(
+            ctx,
+            {
+                "MATRIX_DOMAIN": "matrix.example.com",
+                "MAS_SIGNING_KEYS": [
+                    {
+                        "kid": "rsa1",
+                        "key": (
+                            "-----BEGIN RSA PRIVATE KEY-----\n"
+                            "MIIE\n"
+                            "-----END RSA PRIVATE KEY-----"
+                        ),
+                    }
+                ],
+                "MAS_SIGNING_KEYS_YAML": "secrets:\n  keys:\n    - kid: rsa1\n",
+                "SYNAPSE_MAS_EXPERIMENTAL_SECTION": "experimental:\n  mas:\n",
+            },
+        )
+        env_text = ctx.env_file.read_text()
+        self.assertIn("MATRIX_DOMAIN=matrix.example.com", env_text)
+        self.assertNotIn("MAS_SIGNING_KEYS=", env_text)
+        self.assertNotIn("MAS_SIGNING_KEYS_YAML=", env_text)
+        self.assertNotIn("SYNAPSE_MAS_EXPERIMENTAL_SECTION=", env_text)
+        self.assertNotIn("BEGIN", env_text)
+
     def test_secrets_are_idempotent(self):
         ctx = apply.ApplyContext(self.root)
         first = apply.create_or_update_secrets(ctx, {})
@@ -568,25 +633,82 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(element["integrations_rest_url"], "https://scalar.example.com/api")
         self.assertEqual(element["integrations_widgets_urls"], ["https://scalar.example.com/widgets"])
 
-    def test_apply_configuration_renders_sso_only_password_setting(self):
+    def test_apply_configuration_renders_mas_enabled_synapse(self):
         cfg = self.sample_config()
         cfg["features"]["local_login_enabled"] = False
         cfg["features"]["sso"] = {
             "enabled": True,
-            "providers": [{"name": "Google", "issuer": "https://accounts.google.com/"}],
+            "providers": [
+                {
+                    "name": "Google",
+                    "issuer": "https://accounts.google.com/",
+                    "client_id": "id",
+                    "client_secret": "secret",
+                }
+            ],
         }
         self.write_config(cfg)
-        (self.root / "modules/core/synapse/homeserver.yaml.template").write_text(
-            "password_config:\n  enabled: {{LOCAL_LOGIN_ENABLED}}\n"
-            "oidc_providers: {{OIDC_PROVIDERS_JSON}}\n"
-        )
         ctx = apply.ApplyContext(self.root)
 
         apply.apply_configuration(ctx, server_ip="9.8.7.6")
 
         synapse = (self.root / "modules/core/synapse/homeserver.yaml").read_text()
         self.assertIn("password_config:\n  enabled: false", synapse)
-        self.assertIn("oidc_providers: [{", synapse)
+        self.assertIn("login_via_existing_session:\n  enabled: false", synapse)
+        self.assertIn("oidc_providers: []", synapse)
+        self.assertIn("msc3861:", synapse)
+        self.assertIn("org.matrix.msc2965.authentication:", synapse)
+        mas_cfg = (self.root / "modules/mas/config.yaml").read_text()
+        self.assertIn("matrix.example.com/auth/", mas_cfg)
+        self.assertIn(mas_config.MAS_DOCKER_ASSETS_PATH, mas_cfg)
+        self.assertNotIn("/usr/local/share/assets/", mas_cfg)
+        self.assertIn("upstream_oauth2:", mas_cfg)
+
+        saved = yaml.safe_load((self.root / "deploy.yaml").read_text())
+        provider_id = saved["features"]["sso"]["providers"][0]["id"]
+        self.assertEqual(len(provider_id), 26)
+        self.assertIn(
+            f"/auth/upstream/callback/{provider_id}",
+            mas_cfg,
+        )
+
+        caddy = (self.root / "caddy/Caddyfile").read_text()
+        self.assertIn("handle_path /auth/*", caddy)
+        self.assertIn("handle /.well-known/openid-configuration", caddy)
+        self.assertIn("reverse_proxy matrix_mas:8080", caddy)
+
+    def test_reconcile_mas_bootstrap_defers_without_postgres(self):
+        cfg = self.sample_config()
+        cfg["features"]["sso"] = {
+            "enabled": True,
+            "providers": [
+                {
+                    "name": "Google",
+                    "issuer": "https://accounts.google.com/",
+                    "client_id": "id",
+                    "client_secret": "secret",
+                }
+            ],
+        }
+        self.write_config(cfg)
+        (self.root / "modules/mas/config.yaml").write_text("http:\n  public_base: https://matrix.example.com/auth/\n")
+        ctx = apply.ApplyContext(self.root)
+        env_vars = {"MAS_ENABLED": "true", "MAS_DB_PASSWORD": "secret"}
+
+        with patch("scripts.apply.subprocess.run") as mock_run:
+            mock_run.return_value = Mock(
+                returncode=0,
+                stdout="matrix_synapse\n",
+                stderr="",
+            )
+            apply.reconcile_mas_bootstrap(ctx, cfg, env_vars)
+
+        setup_calls = [
+            call
+            for call in mock_run.call_args_list
+            if call.args and "setup.sh" in str(call.args[0])
+        ]
+        self.assertEqual(setup_calls, [])
 
     def test_apply_configuration_strips_disabled_livekit_caddy_block(self):
         cfg = self.sample_config()
@@ -678,10 +800,13 @@ class ApplyTests(unittest.TestCase):
         apply.apply_configuration(ctx, server_ip="9.8.7.6")
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
-        self.assertEqual(caddy.count("example.com {"), 1)
+        self.assertEqual(len(re.findall(r"^example\.com \{", caddy, re.MULTILINE)), 1)
         self.assertIn("handle /_matrix/*", caddy)
+        self.assertIn("handle_path /auth/*", caddy)
         self.assertIn("handle /livekit/jwt*", caddy)
-        self.assertIn("reverse_proxy matrix_element:80", caddy)
+        self.assertIn("handle {\n        reverse_proxy matrix_element:80", caddy)
+        self.assertNotIn("handle /auth*", caddy)
+        self.assertEqual(caddy.count("handle_path /auth/*"), 1)
         self.assertNotIn("{{", caddy)
 
     def test_apply_configuration_writes_bridge_env_values(self):

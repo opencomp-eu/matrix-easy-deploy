@@ -76,6 +76,18 @@ start_services() {
     )
     success "Core services started."
 
+    if [[ "${MAS_ENABLED:-false}" == "true" && -f "${SCRIPT_DIR}/modules/mas/config.yaml" ]]; then
+        echo
+        local _med_scripts_dir
+        _med_scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        # shellcheck source=../module_common.sh
+        source "${_med_scripts_dir}/module_common.sh"
+        bootstrap_mas_database "${SCRIPT_DIR}"
+        info "Starting Matrix Authentication Service (MAS)…"
+        (cd "${SCRIPT_DIR}/modules/mas" && "${DOCKER_COMPOSE[@]}" up -d --pull always)
+        success "MAS started."
+    fi
+
     echo
     info "Starting calls services (coturn + LiveKit)…"
     (cd "${SCRIPT_DIR}/modules/calls" && "${DOCKER_COMPOSE[@]}" up -d --pull always)
@@ -114,6 +126,14 @@ setup_admin() {
     echo
     success "${_hs_name} is responding."
 
+    if [[ "${MAS_ENABLED:-false}" == "true" ]]; then
+        wait_for_mas_http "${_hs_container}" "$max" 5 || {
+            warn "MAS hasn't responded after $((max * 5))s."
+            warn "You can create the admin user later with 'bash scripts/create-account.sh'."
+            return 0
+        }
+    fi
+
     echo
     local _admin_password=""
     if [[ -n "${ADMIN_PASSWORD:-}" ]]; then
@@ -140,13 +160,17 @@ setup_admin() {
     fi
 
     info "Creating admin user '@${ADMIN_USERNAME}:${SERVER_NAME}'…"
-    bash "${SCRIPT_DIR}/scripts/create-account.sh" \
-        --base-url "https://${MATRIX_DOMAIN}" \
-        --shared-secret "${REGISTRATION_SHARED_SECRET}" \
-        --username "${ADMIN_USERNAME}" \
-        --password "${_admin_password}" \
-        --admin \
+    local _create_args=(
+        --base-url "https://${MATRIX_DOMAIN}"
+        --username "${ADMIN_USERNAME}"
+        --password "${_admin_password}"
+        --admin
         --yes
+    )
+    if [[ "${MAS_ENABLED:-false}" != "true" ]]; then
+        _create_args+=(--shared-secret "${REGISTRATION_SHARED_SECRET}")
+    fi
+    bash "${SCRIPT_DIR}/scripts/create-account.sh" "${_create_args[@]}"
 
     unset _admin_password
 }

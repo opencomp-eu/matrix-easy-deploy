@@ -1,4 +1,6 @@
+import subprocess
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,8 +17,20 @@ class SmokeWorkflowTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         build_minimal_project(self.root, preset="core_only")
+        self._prev_skip_bootstrap = os.environ.get("MED_SKIP_EXTERNAL_BOOTSTRAP")
+        os.environ["MED_SKIP_EXTERNAL_BOOTSTRAP"] = "1"
+        self._prev_mas_docker_generate = os.environ.get("MED_MAS_USE_DOCKER_GENERATE")
+        os.environ["MED_MAS_USE_DOCKER_GENERATE"] = "0"
 
     def tearDown(self):
+        if self._prev_mas_docker_generate is None:
+            os.environ.pop("MED_MAS_USE_DOCKER_GENERATE", None)
+        else:
+            os.environ["MED_MAS_USE_DOCKER_GENERATE"] = self._prev_mas_docker_generate
+        if self._prev_skip_bootstrap is None:
+            os.environ.pop("MED_SKIP_EXTERNAL_BOOTSTRAP", None)
+        else:
+            os.environ["MED_SKIP_EXTERNAL_BOOTSTRAP"] = self._prev_skip_bootstrap
         self.tmp.cleanup()
 
     def _write_config(self, modules=None):
@@ -64,18 +78,29 @@ class SmokeWorkflowTests(unittest.TestCase):
         self._write_config(modules={"hookshot": {"enabled": True, "domain": "hookshot.example.com"}})
         ctx = apply.ApplyContext(self.root)
 
-        def _mock_setup(*args, **kwargs):
+        real_subprocess_run = subprocess.run
+
+        def _mock_setup(cmd, *args, **kwargs):
+            cmd_str = " ".join(str(part) for part in cmd)
+            if "modules/hookshot/setup.sh" not in cmd_str:
+                return real_subprocess_run(cmd, *args, **kwargs)
             hookshot_dir = self.root / "modules/hookshot/hookshot"
             hookshot_dir.mkdir(parents=True, exist_ok=True)
             (hookshot_dir / "config.yml").write_text("ok\n")
             (hookshot_dir / "registration.yml").write_text("ok\n")
+            return subprocess.CompletedProcess(cmd, 0)
 
         with patch("scripts.apply.subprocess.run") as mock_run:
             mock_run.side_effect = _mock_setup
             apply.apply_configuration(ctx, server_ip="9.9.9.9")
             apply.apply_configuration(ctx, server_ip="9.9.9.9")
 
-        self.assertEqual(mock_run.call_count, 1)
+        hookshot_calls = [
+            call
+            for call in mock_run.call_args_list
+            if "modules/hookshot/setup.sh" in " ".join(str(part) for part in call.args[0])
+        ]
+        self.assertEqual(len(hookshot_calls), 1)
 
 
 if __name__ == "__main__":

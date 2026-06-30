@@ -5,6 +5,7 @@
 
 # Matrix homeserver API
 {{CADDY_MATRIX_HOSTS}} {
+{{CADDY_MAS_BLOCK}}
     # Client & federation API
     handle /_matrix/* {
         reverse_proxy {{HOMESERVER_UPSTREAM}}

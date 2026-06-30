@@ -10,8 +10,7 @@ HOOKSHOT_ENABLED="false"
 WHATSAPP_BRIDGE_ENABLED="false"
 SLACK_BRIDGE_ENABLED="false"
 if [[ -f "${SCRIPT_DIR}/.env" ]]; then
-    # shellcheck disable=SC1090
-    source "${SCRIPT_DIR}/.env"
+    load_deploy_env "${SCRIPT_DIR}/.env"
 fi
 
 load_runtime_desired_state "${SCRIPT_DIR}"

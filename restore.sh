@@ -72,10 +72,7 @@ require_command() {
 
 load_runtime_env() {
     if [[ -f "${SCRIPT_DIR}/.env" ]]; then
-        set -o allexport
-        # shellcheck disable=SC1090
-        source "${SCRIPT_DIR}/.env"
-        set +o allexport
+        load_deploy_env "${SCRIPT_DIR}/.env"
     fi
 }
 

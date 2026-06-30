@@ -29,9 +29,9 @@ def default_deploy_config(**overrides: Any) -> dict[str, Any]:
         "features": {
             "registration_enabled": False,
             "federation_enabled": True,
-            "local_login_enabled": True,
             "element": {"enabled": True, "domain": "element.example.com"},
             "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
+            "local_login_enabled": True,
             "sso": {"enabled": False, "providers": []},
         },
         "modules": default_modules_config(),
@@ -103,6 +103,7 @@ def _write_core_templates(root: Path, *, full: bool) -> None:
     if full:
         (root / "caddy/Caddyfile.template").write_text(
             "{{CADDY_MATRIX_HOSTS}} {\n"
+            "{{CADDY_MAS_BLOCK}}"
             "    reverse_proxy {{HOMESERVER_UPSTREAM}}\n"
             "{{CADDY_SYNAPSE_ADMIN_BLOCK}}"
             "}\n\n"
@@ -118,11 +119,18 @@ def _write_core_templates(root: Path, *, full: bool) -> None:
         (root / "modules/core/synapse/homeserver.yaml.template").write_text(
             "server_name: {{SERVER_NAME}}\n"
             "public_baseurl: https://{{MATRIX_DOMAIN}}\n"
+            "login_via_existing_session:\n"
+            "  enabled: {{LOGIN_VIA_EXISTING_SESSION_ENABLED}}\n"
             "password_config:\n  enabled: {{LOCAL_LOGIN_ENABLED}}\n"
+            "oidc_providers: {{OIDC_PROVIDERS_JSON}}\n"
             "extra_well_known_client_content:\n"
             "  org.matrix.msc4143.rtc_foci:\n"
             "    - type: livekit\n"
             "      livekit_service_url: \"https://{{LIVEKIT_DOMAIN}}/livekit/jwt\"\n"
+            "{{SYNAPSE_MAS_WELL_KNOWN_SECTION}}\n"
+            "experimental_features:\n"
+            "  msc3266_enabled: true\n"
+            "{{SYNAPSE_MAS_EXPERIMENTAL_SECTION}}\n"
             "matrix_rtc:\n"
             "  transports:\n"
             "    - type: livekit\n"
@@ -133,6 +141,21 @@ def _write_core_templates(root: Path, *, full: bool) -> None:
         (root / "modules/core/synapse/homeserver.yaml.template").write_text(
             "server_name: {{SERVER_NAME}}\npublic_baseurl: https://{{MATRIX_DOMAIN}}\n"
         )
+
+    (root / "modules/mas").mkdir(parents=True, exist_ok=True)
+    (root / "modules/mas/config.yaml.template").write_text(
+        "http:\n"
+        "  public_base: {{MAS_PUBLIC_BASE}}\n"
+        "  listeners:\n"
+        "    - name: web\n"
+        "      resources:\n"
+        "        - name: assets\n"
+        "          path: {{MAS_DOCKER_ASSETS_PATH}}\n"
+        "passwords:\n  enabled: {{MAS_LOCAL_LOGIN_ENABLED}}\n"
+        "{{MAS_SIGNING_KEYS_YAML}}"
+        "{{MAS_UPSTREAM_OAUTH2_YAML}}"
+    )
+    (root / "modules/mas/setup.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
 
     (root / "caddy/Caddyfile-no-element.template").write_text(
         "no-element {{MATRIX_DOMAIN}}" if full else "no-element {{MATRIX_DOMAIN}}\n"

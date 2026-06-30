@@ -66,7 +66,7 @@ class ConfigEditTests(unittest.TestCase):
                 "federation_enabled": True,
                 "element": {"enabled": True, "domain": "element.example.com"},
                 "calls": {"enabled": True, "livekit_domain": "livekit.example.com"},
-                "sso": {"enabled": True, "providers": [{"name": "Google"}]},
+                "sso": {"enabled": True, "providers": [{"name": "Google", "issuer": "https://x/", "client_id": "a", "client_secret": "b"}]},
             },
             "modules": {
                 "hookshot": {"enabled": True, "domain": "hookshot.example.com"},
@@ -111,7 +111,9 @@ class ConfigEditTests(unittest.TestCase):
         self.assertFalse(updated["features"]["element"]["enabled"])
         self.assertFalse(updated["features"]["calls"]["enabled"])
         self.assertTrue(updated["modules"]["hookshot"]["enabled"])
+        self.assertNotIn("mas", updated["features"])
         self.assertTrue(updated["features"]["sso"]["enabled"])
+        self.assertEqual(updated["features"]["sso"]["providers"][0]["name"], "Google")
 
     def test_set_module_config_updates_whatsapp_fields(self):
         with tempfile.TemporaryDirectory() as tmp:

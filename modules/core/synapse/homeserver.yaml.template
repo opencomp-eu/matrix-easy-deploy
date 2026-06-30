@@ -70,9 +70,9 @@ report_stats: false
 # Allow logging in on a new device via an existing signed-in session
 # (used by QR code device linking flows in Matrix clients).
 login_via_existing_session:
-  enabled: true
+  enabled: {{LOGIN_VIA_EXISTING_SESSION_ENABLED}}
 
-# Allow local Matrix password login. Set false for SSO-only login.
+# Allow local Matrix password login. Disabled when MAS handles authentication.
 password_config:
   enabled: {{LOCAL_LOGIN_ENABLED}}
 
@@ -89,9 +89,7 @@ enable_registration: {{ENABLE_REGISTRATION}}
 #   smtp_port: 587
 #   notif_from: "Matrix <matrix@example.com>"
 
-# Single Sign-On (OIDC/OAuth2): supports Google and other compatible providers.
-# setup.sh renders this as [] when SSO is disabled.
-# Provider redirect URI to configure upstream: https://<matrix-domain>/_synapse/client/oidc/callback
+# Legacy Synapse OIDC — unused when MAS is enabled (upstream IdPs are configured in MAS).
 oidc_providers: {{OIDC_PROVIDERS_JSON}}
 
 # ----------------------------------------------------------------------------
@@ -150,6 +148,7 @@ extra_well_known_client_content:
   org.matrix.msc4143.rtc_foci:
     - type: livekit
       livekit_service_url: "https://{{LIVEKIT_DOMAIN}}/livekit/jwt"
+{{SYNAPSE_MAS_WELL_KNOWN_SECTION}}
 
 experimental_features:
   msc3266_enabled: true  # room summary API, required by Element Call
@@ -158,6 +157,7 @@ experimental_features:
   msc3202_device_masquerading: true
   msc3202_transaction_extensions: true
   msc2409_to_device_messages_enabled: true
+{{SYNAPSE_MAS_EXPERIMENTAL_SECTION}}
 
 matrix_rtc:
   transports:

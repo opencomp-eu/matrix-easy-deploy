@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import shlex
 from pathlib import Path
 
@@ -155,6 +156,7 @@ def update_core_config(
     element_domain: str,
     calls_enabled: bool,
     livekit_domain: str,
+    local_login_enabled: bool | None = None,
 ) -> None:
     matrix = config.setdefault("matrix", {})
     if not isinstance(matrix, dict):
@@ -172,7 +174,18 @@ def update_core_config(
 
     features["registration_enabled"] = bool(registration_enabled)
     features["federation_enabled"] = bool(federation_enabled)
-    features.setdefault("local_login_enabled", True)
+    if local_login_enabled is not None:
+        features["local_login_enabled"] = bool(local_login_enabled)
+    elif "local_login_enabled" not in features:
+        features["local_login_enabled"] = True
+
+    sso = features.setdefault("sso", {})
+    if not isinstance(sso, dict):
+        sso = {}
+        features["sso"] = sso
+    sso.setdefault("enabled", False)
+    sso.setdefault("providers", [])
+    features.pop("mas", None)
 
     element = features.setdefault("element", {})
     if not isinstance(element, dict):
@@ -187,6 +200,51 @@ def update_core_config(
         features["calls"] = calls
     calls["enabled"] = bool(calls_enabled)
     calls["livekit_domain"] = livekit_domain if calls_enabled else ""
+
+
+def oidc_json_to_deploy_providers(providers_json: str) -> list:
+    raw = json.loads(providers_json or "[]")
+    if not isinstance(raw, list):
+        raise ValueError("sso providers JSON must be a list")
+
+    providers: list[dict] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"sso providers[{index}] must be an object")
+        provider = {
+            "name": item.get("idp_name") or item.get("name") or "OIDC",
+            "issuer": item.get("issuer", ""),
+            "client_id": item.get("client_id", ""),
+            "client_secret": item.get("client_secret", ""),
+        }
+        if "enable_registration" in item:
+            provider["allow_registration"] = bool(item["enable_registration"])
+        if item.get("attribute_requirements"):
+            provider["attribute_requirements"] = item["attribute_requirements"]
+        providers.append(provider)
+    return providers
+
+
+def update_sso_config(
+    config: dict,
+    enabled: bool,
+    providers: list | None = None,
+) -> None:
+    features = config.setdefault("features", {})
+    if not isinstance(features, dict):
+        features = {}
+        config["features"] = features
+
+    sso = features.setdefault("sso", {})
+    if not isinstance(sso, dict):
+        sso = {}
+        features["sso"] = sso
+
+    sso["enabled"] = bool(enabled)
+    if providers is not None:
+        sso["providers"] = providers
+    elif "providers" not in sso:
+        sso["providers"] = []
 
 
 def update_backup_config(
@@ -254,6 +312,7 @@ def emit_wizard_defaults(config: dict) -> str:
 
     element = features.get("element", {}) if isinstance(features.get("element", {}), dict) else {}
     calls = features.get("calls", {}) if isinstance(features.get("calls", {}), dict) else {}
+    sso = features.get("sso", {}) if isinstance(features.get("sso", {}), dict) else {}
 
     matrix_domain = matrix.get("domain", "matrix.example.com")
     server_name = matrix.get("server_name", "example.com")
@@ -282,6 +341,12 @@ def emit_wizard_defaults(config: dict) -> str:
             to_bool(calls.get("enabled", True)), yes_default="y", no_default="n"
         ),
         "config_livekit_domain": calls.get("livekit_domain", ""),
+        "config_local_login_default": shell_bool_default(
+            to_bool(features.get("local_login_enabled", True)), yes_default="y", no_default="n"
+        ),
+        "config_sso_default": shell_bool_default(
+            to_bool(sso.get("enabled", False)), yes_default="y", no_default="n"
+        ),
     }
 
     lines = []
@@ -350,6 +415,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     action.add_argument("--enable-module")
     action.add_argument("--set-module-config")
     action.add_argument("--set-core", action="store_true")
+    action.add_argument("--set-sso", action="store_true")
     action.add_argument("--set-backup-config", action="store_true")
     action.add_argument("--print-wizard-defaults", action="store_true")
     action.add_argument("--print-module-defaults")
@@ -365,6 +431,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--calls-enabled")
     parser.add_argument("--livekit-domain")
     parser.add_argument("--server-implementation")
+    parser.add_argument("--local-login-enabled")
+    parser.add_argument("--sso-enabled")
+    parser.add_argument("--sso-providers-json")
 
     parser.add_argument("--module-enabled")
     parser.add_argument("--module-admin-username")
@@ -448,6 +517,23 @@ def main(argv: list[str] | None = None) -> int:
             element_domain=args.element_domain,
             calls_enabled=to_bool(args.calls_enabled),
             livekit_domain=args.livekit_domain,
+            local_login_enabled=(
+                to_bool(args.local_login_enabled) if args.local_login_enabled is not None else None
+            ),
+        )
+        save(deploy_yaml, config)
+        return 0
+
+    if args.set_sso:
+        if args.sso_enabled is None:
+            raise ValueError("Missing required --set-sso argument: --sso-enabled")
+        providers = None
+        if args.sso_providers_json is not None:
+            providers = oidc_json_to_deploy_providers(args.sso_providers_json)
+        update_sso_config(
+            config,
+            enabled=to_bool(args.sso_enabled),
+            providers=providers,
         )
         save(deploy_yaml, config)
         return 0

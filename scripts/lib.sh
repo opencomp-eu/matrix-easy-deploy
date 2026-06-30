@@ -13,6 +13,25 @@ BOLD='\033[1m'
 RESET='\033[0m'
 
 # ---------------------------------------------------------------------------
+# Environment file loading
+# ---------------------------------------------------------------------------
+
+# load_deploy_env PATH
+# Export simple KEY=value pairs from .env without shell-evaluating file contents.
+load_deploy_env() {
+    local deploy_env="$1"
+    [[ -f "$deploy_env" ]] || return 0
+
+    while IFS='=' read -r key value || [[ -n "$key" ]]; do
+        [[ -z "$key" || "$key" == \#* ]] && continue
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        value="${value%%#*}"
+        value="${value%"${value##*[![:space:]]}"}"
+        export "${key}=${value}"
+    done < "$deploy_env"
+}
+
+# ---------------------------------------------------------------------------
 # Logging helpers
 # ---------------------------------------------------------------------------
 info()    { echo -e "${CYAN}  -->${RESET} $*"; }
@@ -183,6 +202,30 @@ wait_for_url() {
     done
     echo
     success "${label} is up."
+}
+
+# wait_for_mas_http [HOMESERVER_CONTAINER] [MAX_ATTEMPTS] [SLEEP_SECS]
+# Probe MAS /health over the Docker internal network via the homeserver container.
+wait_for_mas_http() {
+    local homeserver_container="${1:-matrix_synapse}"
+    local max_attempts="${2:-30}"
+    local sleep_secs="${3:-5}"
+
+    info "Waiting for MAS to be ready…"
+    local attempt=0
+    until docker exec "$homeserver_container" python3 -c \
+        'import urllib.request; urllib.request.urlopen("http://matrix_mas:8080/health", timeout=5)' \
+        2>/dev/null; do
+        attempt=$((attempt + 1))
+        if [[ $attempt -ge $max_attempts ]]; then
+            error "Timed out waiting for MAS HTTP health at http://matrix_mas:8080/health"
+            return 1
+        fi
+        echo -ne "    attempt ${attempt}/${max_attempts}…\r"
+        sleep "$sleep_secs"
+    done
+    echo
+    success "MAS is ready."
 }
 
 # ---------------------------------------------------------------------------

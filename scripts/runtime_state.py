@@ -61,11 +61,14 @@ def resolve_runtime_state(project_root: Path) -> dict[str, str]:
     if server_implementation not in {"synapse", "tuwunel"}:
         server_implementation = "synapse"
 
+    mas_on = server_implementation == "synapse"
+
     compose_profile = "tuwunel" if server_implementation == "tuwunel" else "synapse"
     container = "matrix_tuwunel" if server_implementation == "tuwunel" else "matrix_synapse"
 
     return {
         "INSTALL_ELEMENT": "true" if install_element else "false",
+        "MAS_ENABLED": "true" if mas_on else "false",
         "HOOKSHOT_ENABLED": "true" if module_enabled("hookshot") else "false",
         "WHATSAPP_BRIDGE_ENABLED": "true" if module_enabled("whatsapp_bridge") else "false",
         "SLACK_BRIDGE_ENABLED": "true" if module_enabled("slack_bridge") else "false",

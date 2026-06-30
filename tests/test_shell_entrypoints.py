@@ -34,6 +34,25 @@ class ShellEntrypointTests(unittest.TestCase):
         dest.write_text(src.read_text())
         dest.chmod(0o755)
 
+    def _write_fake_docker_mas(self, path: Path, *, exec_body: str = "") -> None:
+        """Fake docker for MAS create-account tests (health probe + optional exec logic)."""
+        script = (
+            "#!/usr/bin/env bash\n"
+            'echo docker:$* >> "$EVENTS"\n'
+            'if [[ "$1" == inspect ]]; then\n'
+            '  if [[ "${2:-}" == --format=* ]]; then\n'
+            '    echo healthy\n'
+            "  fi\n"
+            "  exit 0\n"
+            "fi\n"
+            'if [[ "$1" == exec && "$3" == python3 ]]; then\n'
+            "  exit 0\n"
+            "fi\n"
+            f"{exec_body}"
+            "exit 1\n"
+        )
+        self._write_executable(path, script)
+
     def _install_med_admin(self, root: Path) -> None:
         self._copy_executable(self.med_admin_script, root / "scripts/med-admin.sh")
         self._copy_executable(self.med_admin_py, root / "scripts/med_admin.py")
@@ -316,6 +335,7 @@ class ShellEntrypointTests(unittest.TestCase):
                 "SERVER_NAME=example.com\n"
                 "MATRIX_DOMAIN=matrix.example.com\n"
                 "REGISTRATION_SHARED_SECRET=sharedsecret\n"
+                "MAS_ENABLED=false\n"
             )
 
             fake_bin = root / "bin"
@@ -376,6 +396,175 @@ class ShellEntrypointTests(unittest.TestCase):
             payload = payload_file.read_text()
             self.assertIn('"nonce": "abc123"', payload)
             self.assertNotIn("Fetching registration nonce", payload)
+
+    def test_create_account_mas_path_registers_and_promotes_admin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "events.log"
+
+            self._copy_executable(self.create_account_script, root / "scripts/create-account.sh")
+            self._copy_executable(self.lib_script, root / "scripts/lib.sh")
+            (root / ".env").write_text(
+                "SERVER_NAME=example.com\n"
+                "MATRIX_DOMAIN=matrix.example.com\n"
+                "MAS_ENABLED=true\n"
+                "MAS_LOCAL_LOGIN_ENABLED=true\n"
+                "MAS_HOMESERVER_SECRET=mas-admin-token\n"
+            )
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            self._write_fake_docker_mas(
+                fake_bin / "docker",
+                exec_body=(
+                    'if [[ "$1" == exec && "$3" == mas-cli ]]; then\n'
+                    "  exit 0\n"
+                    "fi\n"
+                ),
+            )
+            self._write_executable(
+                fake_bin / "curl",
+                "#!/usr/bin/env bash\n"
+                "echo curl:$* >> \"$EVENTS\"\n"
+                "outfile=''\n"
+                "write_status='false'\n"
+                "url=''\n"
+                "method=''\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  case \"$1\" in\n"
+                "    -o) outfile=\"$2\"; shift 2 ;;\n"
+                "    -w) write_status='true'; shift 2 ;;\n"
+                "    -X) method=\"$2\"; shift 2 ;;\n"
+                "    http*://*|https*://*) url=\"$1\"; shift ;;\n"
+                "    *) shift ;;\n"
+                "  esac\n"
+                "done\n"
+                "if [[ \"$method\" == PUT && \"$url\" == *\"/_synapse/admin/v2/users/\"* ]]; then\n"
+                "  printf '200' > \"$outfile\"\n"
+                "  printf '200'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["EVENTS"] = str(events)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/create-account.sh",
+                    "--username",
+                    "alice",
+                    "--password",
+                    "averylongsecret",
+                    "--admin",
+                    "--yes",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+            self.assertIn("Account '@alice:example.com' created successfully.", result.stdout)
+            events_text = events.read_text()
+            self.assertIn("manage register-user", events_text)
+            self.assertIn("/_synapse/admin/v2/users/", events_text)
+            self.assertNotIn("Fetching registration nonce", result.stderr)
+
+    def test_create_account_mas_existing_user_updates_password_only_when_local_login_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "events.log"
+
+            self._copy_executable(self.create_account_script, root / "scripts/create-account.sh")
+            self._copy_executable(self.lib_script, root / "scripts/lib.sh")
+            (root / ".env").write_text(
+                "SERVER_NAME=example.com\n"
+                "MATRIX_DOMAIN=matrix.example.com\n"
+                "MAS_ENABLED=true\n"
+                "MAS_LOCAL_LOGIN_ENABLED=true\n"
+            )
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            self._write_fake_docker_mas(
+                fake_bin / "docker",
+                exec_body=(
+                    'if [[ "$1" == exec && "$3" == mas-cli ]]; then\n'
+                    '  if [[ "$*" == *register-user* ]]; then\n'
+                    "    echo User already exists >&2\n"
+                    "    exit 1\n"
+                    "  fi\n"
+                    '  if [[ "$*" == *set-password* ]]; then\n'
+                    "    exit 0\n"
+                    "  fi\n"
+                    "fi\n"
+                ),
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["EVENTS"] = str(events)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/create-account.sh",
+                    "--username",
+                    "alice",
+                    "--password",
+                    "averylongsecret",
+                    "--yes",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+            combined = result.stdout + result.stderr
+            self.assertIn("Updating password (local login is enabled)", combined)
+            events_text = events.read_text()
+            self.assertIn("manage register-user", events_text)
+            self.assertIn("manage set-password", events_text)
+
+    def test_create_account_mas_rejects_sso_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._copy_executable(self.create_account_script, root / "scripts/create-account.sh")
+            self._copy_executable(self.lib_script, root / "scripts/lib.sh")
+            (root / ".env").write_text(
+                "SERVER_NAME=example.com\n"
+                "MATRIX_DOMAIN=matrix.example.com\n"
+                "MAS_ENABLED=true\n"
+                "MAS_LOCAL_LOGIN_ENABLED=false\n"
+            )
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/create-account.sh",
+                    "--username",
+                    "alice",
+                    "--password",
+                    "averylongsecret",
+                    "--yes",
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("local_login_enabled=true", result.stderr)
 
     def test_med_admin_bootstrap_delegates_to_create_account(self):
         with tempfile.TemporaryDirectory() as tmp:
