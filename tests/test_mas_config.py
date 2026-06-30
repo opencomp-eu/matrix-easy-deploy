@@ -60,6 +60,34 @@ class MasConfigSigningKeyTests(unittest.TestCase):
         self.assertNotEqual(updated["MAS_SIGNING_KEYS"], invalid["MAS_SIGNING_KEYS"])
 
 
+class MasConfigUpstreamOauth2Tests(unittest.TestCase):
+    def test_build_mas_upstream_oauth2_yaml_uses_string_scope(self):
+        providers = [
+            {
+                "name": "Google",
+                "issuer": "https://accounts.google.com/",
+                "client_id": "id",
+                "client_secret": "secret",
+            }
+        ]
+        yaml_text = mas_config.build_mas_upstream_oauth2_yaml(
+            providers,
+            "https://matrix.example.com/auth/",
+        )
+        self.assertIn('scope: openid profile email', yaml_text)
+        self.assertNotIn("- openid\n", yaml_text)
+
+    def test_oauth_scope_string_accepts_list_or_string(self):
+        self.assertEqual(
+            mas_config._oauth_scope_string(["openid", "profile", "email"]),
+            "openid profile email",
+        )
+        self.assertEqual(
+            mas_config._oauth_scope_string("openid email"),
+            "openid email",
+        )
+
+
 class MasConfigCaddyTests(unittest.TestCase):
     def test_caddy_mas_block_routes_oidc_discovery(self):
         block = mas_config.caddy_mas_block()

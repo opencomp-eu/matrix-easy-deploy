@@ -264,6 +264,17 @@ def validate_sso_config(config: dict) -> None:
                 raise ValueError(f"{path}.id must be a 26-character ULID when set")
 
 
+def _oauth_scope_string(scopes: Any) -> str:
+    """MAS expects scope as a space-separated string, not a YAML sequence."""
+    default = "openid profile email"
+    if isinstance(scopes, str):
+        return scopes.strip() or default
+    if isinstance(scopes, (list, tuple)):
+        parts = [str(item).strip() for item in scopes if str(item).strip()]
+        return " ".join(parts) if parts else default
+    return default
+
+
 def build_mas_upstream_oauth2_yaml(providers: list, mas_public_base: str) -> str:
     if not providers:
         return "upstream_oauth2:\n  providers: []\n"
@@ -283,7 +294,7 @@ def build_mas_upstream_oauth2_yaml(providers: list, mas_public_base: str) -> str
             "client_id": provider.get("client_id", ""),
             "client_secret": provider.get("client_secret", ""),
             "token_endpoint_auth_method": "client_secret_basic",
-            "scope": provider.get("scopes", ["openid", "profile", "email"]),
+            "scope": _oauth_scope_string(provider.get("scopes", ["openid", "profile", "email"])),
             "claims_imports": {
                 "localpart": {"action": "require", "template": "{{ user.preferred_username }}"},
                 "displayname": {"action": "suggest", "template": "{{ user.name }}"},
