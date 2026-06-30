@@ -13,7 +13,7 @@
     handle /.well-known/matrix/* {
         reverse_proxy {{HOMESERVER_UPSTREAM}}
     }
-
+{{CADDY_ELEMENT_MATRIX_FALLBACK}}
     # Security headers
     header {
         X-Content-Type-Options nosniff
@@ -46,19 +46,4 @@
 
     log
 }
-
-# Element web client — served on its own domain
-{{ELEMENT_DOMAIN}} {
-    reverse_proxy matrix_element:80
-
-    header {
-        X-Content-Type-Options nosniff
-        X-Frame-Options SAMEORIGIN
-        Referrer-Policy strict-origin-when-cross-origin
-        Permissions-Policy "interest-cohort=()"
-        -Server
-    }
-
-    encode gzip
-    log
-}
+{{CADDY_ELEMENT_SITE_BLOCK}}

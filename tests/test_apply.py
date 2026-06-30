@@ -662,7 +662,7 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("upstream_oauth2:", mas_cfg)
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
-        self.assertIn("handle /auth*", caddy)
+        self.assertIn("@mas_prefixed path /auth /auth/*", caddy)
         self.assertIn("handle /.well-known/openid-configuration", caddy)
         self.assertIn("reverse_proxy matrix_mas:8080", caddy)
 
@@ -791,10 +791,35 @@ class ApplyTests(unittest.TestCase):
         caddy = (self.root / "caddy/Caddyfile").read_text()
         self.assertEqual(len(re.findall(r"^example\.com \{", caddy, re.MULTILINE)), 1)
         self.assertIn("handle /_matrix/*", caddy)
-        self.assertIn("handle /auth*", caddy)
+        self.assertIn("@mas_prefixed path /auth /auth/*", caddy)
         self.assertIn("handle /livekit/jwt*", caddy)
-        self.assertIn("reverse_proxy matrix_element:80", caddy)
+        self.assertIn("handle {\n        reverse_proxy matrix_element:80", caddy)
+        self.assertNotIn("handle /auth*", caddy)
+        self.assertEqual(caddy.count("@mas_prefixed path /auth /auth/*"), 1)
         self.assertNotIn("{{", caddy)
+
+    def test_build_caddy_element_routing_unified_host(self):
+        routing = apply.build_caddy_element_routing(
+            matrix_domain="example.com",
+            server_name="example.com",
+            element_enabled=True,
+            element_domain="example.com",
+            mas_block="    # mas\n",
+        )
+        self.assertIn("reverse_proxy matrix_element:80", routing["CADDY_ELEMENT_MATRIX_FALLBACK"])
+        self.assertEqual(routing["CADDY_ELEMENT_SITE_BLOCK"], "")
+
+    def test_build_caddy_element_routing_separate_host(self):
+        routing = apply.build_caddy_element_routing(
+            matrix_domain="matrix.example.com",
+            server_name="example.com",
+            element_enabled=True,
+            element_domain="element.example.com",
+            mas_block="    # mas\n",
+        )
+        self.assertEqual(routing["CADDY_ELEMENT_MATRIX_FALLBACK"], "")
+        self.assertIn("element.example.com {", routing["CADDY_ELEMENT_SITE_BLOCK"])
+        self.assertIn("# mas", routing["CADDY_ELEMENT_SITE_BLOCK"])
 
     def test_apply_configuration_writes_bridge_env_values(self):
         cfg = self.sample_config()
