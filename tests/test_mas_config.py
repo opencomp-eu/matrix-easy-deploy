@@ -64,5 +64,5 @@ class MasConfigCaddyTests(unittest.TestCase):
     def test_caddy_mas_block_routes_oidc_discovery(self):
         block = mas_config.caddy_mas_block()
         self.assertIn("handle /.well-known/openid-configuration", block)
-        self.assertIn("@mas_prefixed path /auth /auth/*", block)
+        self.assertIn("handle_path /auth/*", block)
         self.assertIn("reverse_proxy matrix_mas:8080", block)

@@ -68,8 +68,9 @@ def caddy_mas_block(path_prefix: str = MAS_PATH_PREFIX) -> str:
         "    handle /.well-known/openid-configuration {\n"
         "        reverse_proxy matrix_mas:8080\n"
         "    }\n"
-        f"\n    @mas_prefixed path {prefix} {prefix}/*\n"
-        "    handle @mas_prefixed {\n"
+        f"\n    # public_base includes {prefix}/ but MAS mounts routes at the listener root;\n"
+        f"    # strip {prefix} before proxying so /auth/oauth2/keys.json -> /oauth2/keys.json.\n"
+        f"    handle_path {prefix}/* {{\n"
         "        reverse_proxy matrix_mas:8080\n"
         "    }\n"
     )

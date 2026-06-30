@@ -662,7 +662,7 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("upstream_oauth2:", mas_cfg)
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
-        self.assertIn("@mas_prefixed path /auth /auth/*", caddy)
+        self.assertIn("handle_path /auth/*", caddy)
         self.assertIn("handle /.well-known/openid-configuration", caddy)
         self.assertIn("reverse_proxy matrix_mas:8080", caddy)
 
@@ -791,11 +791,11 @@ class ApplyTests(unittest.TestCase):
         caddy = (self.root / "caddy/Caddyfile").read_text()
         self.assertEqual(len(re.findall(r"^example\.com \{", caddy, re.MULTILINE)), 1)
         self.assertIn("handle /_matrix/*", caddy)
-        self.assertIn("@mas_prefixed path /auth /auth/*", caddy)
+        self.assertIn("handle_path /auth/*", caddy)
         self.assertIn("handle /livekit/jwt*", caddy)
         self.assertIn("handle {\n        reverse_proxy matrix_element:80", caddy)
         self.assertNotIn("handle /auth*", caddy)
-        self.assertEqual(caddy.count("@mas_prefixed path /auth /auth/*"), 1)
+        self.assertEqual(caddy.count("handle_path /auth/*"), 1)
         self.assertNotIn("{{", caddy)
 
     def test_build_caddy_element_routing_unified_host(self):
