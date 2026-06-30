@@ -660,62 +660,6 @@ def build_oidc_providers_json(providers: list) -> str:
     return json.dumps(normalized, separators=(",", ":"))
 
 
-def build_caddy_element_routing(
-    *,
-    matrix_domain: str,
-    server_name: str,
-    element_enabled: bool,
-    element_domain: str,
-    mas_block: str,
-) -> dict[str, str]:
-    """Split Element routing between the Matrix site block and a dedicated site."""
-    if not element_enabled or not element_domain:
-        return {
-            "CADDY_ELEMENT_MATRIX_FALLBACK": "",
-            "CADDY_ELEMENT_SITE_BLOCK": "",
-        }
-
-    matrix_hosts = {matrix_domain}
-    if server_name != matrix_domain:
-        matrix_hosts.add(server_name)
-
-    element_fallback = (
-        "\n    # Element web client (same host as Matrix API)\n"
-        "    handle {\n"
-        "        reverse_proxy matrix_element:80\n"
-        "    }\n"
-    )
-
-    if element_domain in matrix_hosts:
-        return {
-            "CADDY_ELEMENT_MATRIX_FALLBACK": element_fallback,
-            "CADDY_ELEMENT_SITE_BLOCK": "",
-        }
-
-    element_site = (
-        f"\n# Element web client — served on its own domain\n"
-        f"{element_domain} {{\n"
-        f"{mas_block}"
-        "    handle {\n"
-        "        reverse_proxy matrix_element:80\n"
-        "    }\n\n"
-        "    header {\n"
-        "        X-Content-Type-Options nosniff\n"
-        "        X-Frame-Options SAMEORIGIN\n"
-        "        Referrer-Policy strict-origin-when-cross-origin\n"
-        '        Permissions-Policy "interest-cohort=()"\n'
-        "        -Server\n"
-        "    }\n\n"
-        "    encode gzip\n"
-        "    log\n"
-        "}\n"
-    )
-    return {
-        "CADDY_ELEMENT_MATRIX_FALLBACK": "",
-        "CADDY_ELEMENT_SITE_BLOCK": element_site,
-    }
-
-
 def derive_values(config: dict, server_ip: str | None = None) -> dict:
     derived = {}
 
@@ -727,6 +671,7 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     matrix_domain = matrix["domain"]
     server_name = matrix.get("server_name") or extract_base_domain(matrix_domain)
     derived["SERVER_NAME"] = server_name
+    derived["MAS_DOCKER_ASSETS_PATH"] = mas_config.MAS_DOCKER_ASSETS_PATH
     derived.update(homeserver.spec_env_overrides(hs_spec))
     derived["CADDY_SYNAPSE_ADMIN_BLOCK"] = homeserver.caddy_synapse_admin_block(hs_spec)
 
@@ -825,12 +770,11 @@ def derive_values(config: dict, server_ip: str | None = None) -> dict:
     derived["CADDY_MATRIX_HOSTS"] = ", ".join(hosts)
 
     derived.update(
-        build_caddy_element_routing(
+        mas_config.build_caddy_element_routing(
             matrix_domain=matrix_domain,
             server_name=server_name,
             element_enabled=element_enabled,
             element_domain=derived.get("ELEMENT_DOMAIN", ""),
-            mas_block=derived.get("CADDY_MAS_BLOCK", ""),
         )
     )
 

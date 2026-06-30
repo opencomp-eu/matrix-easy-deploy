@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from scripts import apply
+from scripts import apply, mas_config
 from tests.helpers.project_tree import (
     build_minimal_project,
     default_deploy_config,
@@ -659,7 +659,7 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("org.matrix.msc2965.authentication:", synapse)
         mas_cfg = (self.root / "modules/mas/config.yaml").read_text()
         self.assertIn("matrix.example.com/auth/", mas_cfg)
-        self.assertIn("/usr/local/share/mas-cli/assets/", mas_cfg)
+        self.assertIn(mas_config.MAS_DOCKER_ASSETS_PATH, mas_cfg)
         self.assertNotIn("/usr/local/share/assets/", mas_cfg)
         self.assertIn("upstream_oauth2:", mas_cfg)
 
@@ -799,29 +799,6 @@ class ApplyTests(unittest.TestCase):
         self.assertNotIn("handle /auth*", caddy)
         self.assertEqual(caddy.count("handle_path /auth/*"), 1)
         self.assertNotIn("{{", caddy)
-
-    def test_build_caddy_element_routing_unified_host(self):
-        routing = apply.build_caddy_element_routing(
-            matrix_domain="example.com",
-            server_name="example.com",
-            element_enabled=True,
-            element_domain="example.com",
-            mas_block="    # mas\n",
-        )
-        self.assertIn("reverse_proxy matrix_element:80", routing["CADDY_ELEMENT_MATRIX_FALLBACK"])
-        self.assertEqual(routing["CADDY_ELEMENT_SITE_BLOCK"], "")
-
-    def test_build_caddy_element_routing_separate_host(self):
-        routing = apply.build_caddy_element_routing(
-            matrix_domain="matrix.example.com",
-            server_name="example.com",
-            element_enabled=True,
-            element_domain="element.example.com",
-            mas_block="    # mas\n",
-        )
-        self.assertEqual(routing["CADDY_ELEMENT_MATRIX_FALLBACK"], "")
-        self.assertIn("element.example.com {", routing["CADDY_ELEMENT_SITE_BLOCK"])
-        self.assertIn("# mas", routing["CADDY_ELEMENT_SITE_BLOCK"])
 
     def test_apply_configuration_writes_bridge_env_values(self):
         cfg = self.sample_config()

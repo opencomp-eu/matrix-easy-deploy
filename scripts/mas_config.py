@@ -15,6 +15,7 @@ import yaml
 
 MAS_SYNAPSE_CLIENT_ID = "0000000000000000000SYNAPSE"
 MAS_PATH_PREFIX = "/auth"
+MAS_DOCKER_ASSETS_PATH = "/usr/local/share/mas-cli/assets/"
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -55,7 +56,12 @@ def mas_public_base(matrix_domain: str, path_prefix: str = MAS_PATH_PREFIX) -> s
 
 
 def caddy_mas_block(path_prefix: str = MAS_PATH_PREFIX) -> str:
-    """Caddy routes for MAS (compat login, path prefix, issuer OIDC discovery)."""
+    """Caddy routes for MAS on the Matrix vhost.
+
+    MAS advertises URLs under public_base (/auth/…) but serves routes at the
+    listener root, so /auth/* requests are path-stripped before proxying.
+    OIDC discovery stays at /.well-known/openid-configuration on SERVER_NAME.
+    """
     prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
     prefix = prefix.rstrip("/") or MAS_PATH_PREFIX
     return (
@@ -64,16 +70,67 @@ def caddy_mas_block(path_prefix: str = MAS_PATH_PREFIX) -> str:
         "    handle @mas_compat {\n"
         "        reverse_proxy matrix_mas:8080\n"
         "    }\n"
-        "\n    # Issuer lives on SERVER_NAME; MAS serves OIDC discovery at this path.\n"
         "    handle /.well-known/openid-configuration {\n"
         "        reverse_proxy matrix_mas:8080\n"
         "    }\n"
-        f"\n    # public_base includes {prefix}/ but MAS mounts routes at the listener root;\n"
-        f"    # strip {prefix} before proxying so /auth/oauth2/keys.json -> /oauth2/keys.json.\n"
         f"    handle_path {prefix}/* {{\n"
         "        reverse_proxy matrix_mas:8080\n"
         "    }\n"
     )
+
+
+def build_caddy_element_routing(
+    *,
+    matrix_domain: str,
+    server_name: str,
+    element_enabled: bool,
+    element_domain: str,
+) -> dict[str, str]:
+    """Place Element in the Matrix site block when it shares a hostname."""
+    if not element_enabled or not element_domain:
+        return {
+            "CADDY_ELEMENT_MATRIX_FALLBACK": "",
+            "CADDY_ELEMENT_SITE_BLOCK": "",
+        }
+
+    matrix_hosts = {matrix_domain}
+    if server_name != matrix_domain:
+        matrix_hosts.add(server_name)
+
+    element_fallback = (
+        "\n    # Element web client (same host as Matrix API)\n"
+        "    handle {\n"
+        "        reverse_proxy matrix_element:80\n"
+        "    }\n"
+    )
+
+    if element_domain in matrix_hosts:
+        return {
+            "CADDY_ELEMENT_MATRIX_FALLBACK": element_fallback,
+            "CADDY_ELEMENT_SITE_BLOCK": "",
+        }
+
+    element_site = (
+        f"\n# Element web client — served on its own domain\n"
+        f"{element_domain} {{\n"
+        "    handle {\n"
+        "        reverse_proxy matrix_element:80\n"
+        "    }\n\n"
+        "    header {\n"
+        "        X-Content-Type-Options nosniff\n"
+        "        X-Frame-Options SAMEORIGIN\n"
+        "        Referrer-Policy strict-origin-when-cross-origin\n"
+        '        Permissions-Policy "interest-cohort=()"\n'
+        "        -Server\n"
+        "    }\n\n"
+        "    encode gzip\n"
+        "    log\n"
+        "}\n"
+    )
+    return {
+        "CADDY_ELEMENT_MATRIX_FALLBACK": "",
+        "CADDY_ELEMENT_SITE_BLOCK": element_site,
+    }
 
 
 def extract_base_domain(fqdn: str) -> str:
@@ -151,11 +208,6 @@ def resolve_mas_runtime_config(config: dict) -> dict[str, Any]:
         "local_login_enabled": local_login_enabled,
         "upstream_providers": list(sso["providers"]) if sso["enabled"] else [],
     }
-
-
-def normalize_mas_for_homeserver(config: dict) -> None:
-    """No-op retained for compatibility; auth backend selection is derived at apply time."""
-    _ = config
 
 
 def validate_sso_config(config: dict) -> None:
@@ -497,8 +549,3 @@ def build_synapse_mas_sections(*, enabled: bool, server_name: str, mas_public_ba
 def emit_migration_warnings(warnings: list[str]) -> None:
     for message in warnings:
         print(f"Warning: {message}", file=sys.stderr)
-
-
-# Backwards compatibility for callers/tests during transition.
-get_mas_config = resolve_mas_runtime_config
-validate_mas_config = validate_sso_config

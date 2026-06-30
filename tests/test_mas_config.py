@@ -66,3 +66,24 @@ class MasConfigCaddyTests(unittest.TestCase):
         self.assertIn("handle /.well-known/openid-configuration", block)
         self.assertIn("handle_path /auth/*", block)
         self.assertIn("reverse_proxy matrix_mas:8080", block)
+
+    def test_build_caddy_element_routing_unified_host(self):
+        routing = mas_config.build_caddy_element_routing(
+            matrix_domain="example.com",
+            server_name="example.com",
+            element_enabled=True,
+            element_domain="example.com",
+        )
+        self.assertIn("reverse_proxy matrix_element:80", routing["CADDY_ELEMENT_MATRIX_FALLBACK"])
+        self.assertEqual(routing["CADDY_ELEMENT_SITE_BLOCK"], "")
+
+    def test_build_caddy_element_routing_separate_host(self):
+        routing = mas_config.build_caddy_element_routing(
+            matrix_domain="matrix.example.com",
+            server_name="example.com",
+            element_enabled=True,
+            element_domain="element.example.com",
+        )
+        self.assertEqual(routing["CADDY_ELEMENT_MATRIX_FALLBACK"], "")
+        self.assertIn("element.example.com {", routing["CADDY_ELEMENT_SITE_BLOCK"])
+        self.assertNotIn("matrix_mas", routing["CADDY_ELEMENT_SITE_BLOCK"])

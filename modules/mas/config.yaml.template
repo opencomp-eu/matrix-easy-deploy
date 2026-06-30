@@ -15,7 +15,7 @@ http:
         - name: graphql
           playground: false
         - name: assets
-          path: /usr/local/share/mas-cli/assets/
+          path: {{MAS_DOCKER_ASSETS_PATH}}
       binds:
         - address: "0.0.0.0:8080"
       proxy_protocol: false

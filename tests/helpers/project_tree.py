@@ -144,7 +144,13 @@ def _write_core_templates(root: Path, *, full: bool) -> None:
 
     (root / "modules/mas").mkdir(parents=True, exist_ok=True)
     (root / "modules/mas/config.yaml.template").write_text(
-        "public_base: {{MAS_PUBLIC_BASE}}\n"
+        "http:\n"
+        "  public_base: {{MAS_PUBLIC_BASE}}\n"
+        "  listeners:\n"
+        "    - name: web\n"
+        "      resources:\n"
+        "        - name: assets\n"
+        "          path: {{MAS_DOCKER_ASSETS_PATH}}\n"
         "passwords:\n  enabled: {{MAS_LOCAL_LOGIN_ENABLED}}\n"
         "{{MAS_SIGNING_KEYS_YAML}}"
         "{{MAS_UPSTREAM_OAUTH2_YAML}}"
