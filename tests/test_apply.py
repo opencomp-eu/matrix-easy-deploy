@@ -659,6 +659,8 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("org.matrix.msc2965.authentication:", synapse)
         mas_cfg = (self.root / "modules/mas/config.yaml").read_text()
         self.assertIn("matrix.example.com/auth/", mas_cfg)
+        self.assertIn("/usr/local/share/mas-cli/assets/", mas_cfg)
+        self.assertNotIn("/usr/local/share/assets/", mas_cfg)
         self.assertIn("upstream_oauth2:", mas_cfg)
 
         caddy = (self.root / "caddy/Caddyfile").read_text()
