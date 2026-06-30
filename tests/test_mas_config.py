@@ -129,6 +129,9 @@ class MasConfigUpstreamOauth2Tests(unittest.TestCase):
             "redirect_uri: https://matrix.example.com/auth/upstream/callback/01HFVBY12TMNTYTBV8W921M5FA",
             yaml_text,
         )
+        self.assertIn("localpart:\n        action: ignore", yaml_text)
+        self.assertNotIn("preferred_username", yaml_text)
+        self.assertIn("account_name:\n        template: '{{ user.email }}'", yaml_text)
 
     def test_oauth_scope_string_accepts_list_or_string(self):
         self.assertEqual(

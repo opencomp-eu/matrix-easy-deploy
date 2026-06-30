@@ -360,9 +360,10 @@ def build_mas_upstream_oauth2_yaml(providers: list, mas_public_base: str) -> str
             "token_endpoint_auth_method": "client_secret_basic",
             "scope": _oauth_scope_string(provider.get("scopes", ["openid", "profile", "email"])),
             "claims_imports": {
-                "localpart": {"action": "require", "template": "{{ user.preferred_username }}"},
+                "localpart": {"action": "ignore"},
                 "displayname": {"action": "suggest", "template": "{{ user.name }}"},
                 "email": {"action": "suggest", "template": "{{ user.email }}"},
+                "account_name": {"template": "{{ user.email }}"},
             },
             "redirect_uri": mas_upstream_redirect_uri(base, provider_id),
         }
