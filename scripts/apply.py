@@ -1364,6 +1364,12 @@ def module_bootstrap_needs_postgres(ctx: ApplyContext, config: dict) -> bool:
 
 
 def ensure_postgres_prerequisite(ctx: ApplyContext) -> None:
+    env = dict(os.environ)
+    env_map = load_env_map(ctx.env_file)
+    postgres_password = env_map.get("POSTGRES_PASSWORD", "").strip()
+    if postgres_password:
+        env["POSTGRES_PASSWORD"] = postgres_password
+
     subprocess.run(
         [
             "bash",
@@ -1376,6 +1382,7 @@ def ensure_postgres_prerequisite(ctx: ApplyContext) -> None:
         ],
         check=True,
         cwd=str(ctx.project_root),
+        env=env,
     )
 
 

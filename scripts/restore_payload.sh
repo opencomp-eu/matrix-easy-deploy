@@ -84,6 +84,9 @@ restore_payload_import_volume_if_present() {
 
 restore_payload_start_postgres_prerequisite() {
     info "Starting PostgreSQL prerequisite for restore..."
+    POSTGRES_PASSWORD="$(restore_payload_postgres_password)"
+    [[ -n "${POSTGRES_PASSWORD}" ]] || die "POSTGRES_PASSWORD not available in .env or .matrix-easy-deploy/secrets.yaml"
+    export POSTGRES_PASSWORD
     ensure_postgres_prerequisite "${SCRIPT_DIR}"
 }
 

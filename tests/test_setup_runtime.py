@@ -377,6 +377,10 @@ class SetupRuntimeTests(unittest.TestCase):
                         echo "matrix_postgres"
                         return 0
                     fi
+                    if [[ "$1" == "inspect" ]]; then
+                        echo "healthy"
+                        return 0
+                    fi
                     if [[ "$1" == "exec" ]]; then
                         return 0
                     fi

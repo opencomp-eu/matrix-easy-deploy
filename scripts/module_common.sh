@@ -102,7 +102,25 @@ wait_for_matrix_postgres() {
     done
 
     attempt=0
-    while ! docker exec matrix_postgres pg_isready -U synapse -q 2>/dev/null; do
+    while true; do
+        local inspect_status
+        inspect_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' matrix_postgres 2>/dev/null || true)"
+        case "${inspect_status}" in
+            healthy)
+                return 0
+                ;;
+            running|starting)
+                if docker exec matrix_postgres pg_isready -U synapse -q 2>/dev/null; then
+                    return 0
+                fi
+                ;;
+            *)
+                if docker exec matrix_postgres pg_isready -U synapse -q 2>/dev/null; then
+                    return 0
+                fi
+                ;;
+        esac
+
         attempt=$((attempt + 1))
         if [[ $attempt -ge $max ]]; then
             die "matrix_postgres is not ready to accept connections."
@@ -111,14 +129,48 @@ wait_for_matrix_postgres() {
     done
 }
 
+verify_postgres_password() {
+    local postgres_password="$1"
+
+    if [[ -z "$postgres_password" ]]; then
+        die "POSTGRES_PASSWORD is required."
+    fi
+
+    if docker exec -e PGPASSWORD="${postgres_password}" matrix_postgres \
+        psql -U synapse -d postgres -c 'SELECT 1' >/dev/null 2>&1; then
+        return 0
+    fi
+
+    die "PostgreSQL is running but rejects POSTGRES_PASSWORD from .env. If you saw a POSTGRES_PASSWORD warning during a previous run, reset the database volume and re-run apply: docker stop matrix_postgres && docker volume rm core_postgres_data && bash apply.sh"
+}
+
 ensure_postgres_prerequisite() {
     local project_root="${1:-}"
     if [[ -z "$project_root" ]]; then
         project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     fi
 
+    local deploy_env="${project_root}/.env"
+    if [[ -f "$deploy_env" ]]; then
+        load_deploy_env "$deploy_env"
+    fi
+
+    if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
+        local secrets_file="${project_root}/.matrix-easy-deploy/secrets.yaml"
+        if [[ -f "$secrets_file" ]]; then
+            POSTGRES_PASSWORD="$(python3 "${project_root}/scripts/state_secrets.py" \
+                --secrets-file "$secrets_file" --get POSTGRES_PASSWORD 2>/dev/null || true)"
+            export POSTGRES_PASSWORD
+        fi
+    fi
+
+    if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
+        die "POSTGRES_PASSWORD not found in .env or .matrix-easy-deploy/secrets.yaml. Please run bash apply.sh first."
+    fi
+
     if docker ps --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
         wait_for_matrix_postgres
+        verify_postgres_password "${POSTGRES_PASSWORD}"
         return 0
     fi
 
@@ -128,9 +180,14 @@ ensure_postgres_prerequisite() {
     IFS=' ' read -ra docker_compose <<< "$(docker_compose_cmd)"
 
     info "Starting PostgreSQL prerequisite..."
-    (cd "${project_root}/modules/core" && "${docker_compose[@]}" up -d postgres)
+    (
+        cd "${project_root}/modules/core"
+        POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            "${docker_compose[@]}" up -d postgres
+    )
 
     wait_for_matrix_postgres
+    verify_postgres_password "${POSTGRES_PASSWORD}"
     success "PostgreSQL prerequisite is ready."
 }
 

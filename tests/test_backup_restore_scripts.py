@@ -33,6 +33,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
             "scripts/backup_crypto.sh",
             "scripts/restore_payload.sh",
             "scripts/module_common.sh",
+            "scripts/state_secrets.py",
         ):
             src = self.repo_root / rel
             dest = root / rel
@@ -425,6 +426,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
             self.assertTrue(
                 any(line.startswith("docker:compose up -d postgres") for line in lines)
                 or any(line.startswith("docker:exec ") and "pg_isready" in line for line in lines)
+                or any(line.startswith("docker:exec ") and " psql " in line for line in lines)
             )
             self.assertTrue(any(line.startswith("docker:exec ") and "DROP DATABASE IF EXISTS synapse" in line for line in lines))
             self.assertTrue(any(line.startswith("docker:exec ") and "CREATE DATABASE synapse" in line for line in lines))
