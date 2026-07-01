@@ -129,6 +129,31 @@ wait_for_matrix_postgres() {
     done
 }
 
+postgres_accepts_password() {
+    local postgres_password="$1"
+    local attempt=0
+    local max=10
+    local output=""
+
+    if [[ -z "$postgres_password" ]]; then
+        return 1
+    fi
+
+    while [[ $attempt -lt $max ]]; do
+        output="$(docker exec -e PGPASSWORD="${postgres_password}" matrix_postgres \
+            psql -U synapse -d postgres -c 'SELECT 1' 2>&1)" && return 0
+
+        if [[ "$output" == *"password authentication failed"* ]]; then
+            return 1
+        fi
+
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+
+    return 1
+}
+
 verify_postgres_password() {
     local postgres_password="$1"
 
@@ -136,12 +161,36 @@ verify_postgres_password() {
         die "POSTGRES_PASSWORD is required."
     fi
 
-    if docker exec -e PGPASSWORD="${postgres_password}" matrix_postgres \
-        psql -U synapse -d postgres -c 'SELECT 1' >/dev/null 2>&1; then
+    if postgres_accepts_password "${postgres_password}"; then
         return 0
     fi
 
-    die "PostgreSQL is running but rejects POSTGRES_PASSWORD from .env. If you saw a POSTGRES_PASSWORD warning during a previous run, reset the database volume and re-run apply: docker stop matrix_postgres && docker volume rm core_postgres_data && bash apply.sh"
+    die "PostgreSQL is running but rejects POSTGRES_PASSWORD from .env. Reset the database and container, then re-run apply: docker rm -f matrix_postgres && docker volume rm core_postgres_data && bash apply.sh"
+}
+
+remove_stale_postgres_container() {
+    if docker ps -a --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
+        info "Removing stale matrix_postgres container before bootstrap..."
+        docker rm -f matrix_postgres
+    fi
+}
+
+start_postgres_container() {
+    local project_root="$1"
+    local deploy_env="$2"
+    local -a docker_compose
+    local -a compose_env_file=()
+
+    IFS=' ' read -ra docker_compose <<< "$(docker_compose_cmd)"
+    if [[ -f "$deploy_env" ]]; then
+        compose_env_file=(--env-file "$deploy_env")
+    fi
+
+    (
+        cd "${project_root}/modules/core"
+        POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            "${docker_compose[@]}" "${compose_env_file[@]}" up -d --force-recreate postgres
+    )
 }
 
 ensure_postgres_prerequisite() {
@@ -170,21 +219,19 @@ ensure_postgres_prerequisite() {
 
     if docker ps --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
         wait_for_matrix_postgres
-        verify_postgres_password "${POSTGRES_PASSWORD}"
-        return 0
+        if postgres_accepts_password "${POSTGRES_PASSWORD}"; then
+            return 0
+        fi
+        warn "PostgreSQL is running but does not accept POSTGRES_PASSWORD from .env — recreating container..."
+        docker rm -f matrix_postgres
+    elif docker ps -a --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
+        remove_stale_postgres_container
     fi
 
     ensure_docker_network "caddy_net"
 
-    local -a docker_compose
-    IFS=' ' read -ra docker_compose <<< "$(docker_compose_cmd)"
-
     info "Starting PostgreSQL prerequisite..."
-    (
-        cd "${project_root}/modules/core"
-        POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-            "${docker_compose[@]}" up -d postgres
-    )
+    start_postgres_container "$project_root" "$deploy_env"
 
     wait_for_matrix_postgres
     verify_postgres_password "${POSTGRES_PASSWORD}"
