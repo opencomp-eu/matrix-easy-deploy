@@ -111,6 +111,29 @@ wait_for_matrix_postgres() {
     done
 }
 
+ensure_postgres_prerequisite() {
+    local project_root="${1:-}"
+    if [[ -z "$project_root" ]]; then
+        project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    fi
+
+    if docker ps --format '{{.Names}}' | grep -q '^matrix_postgres$'; then
+        wait_for_matrix_postgres
+        return 0
+    fi
+
+    ensure_docker_network "caddy_net"
+
+    local -a docker_compose
+    IFS=' ' read -ra docker_compose <<< "$(docker_compose_cmd)"
+
+    info "Starting PostgreSQL prerequisite..."
+    (cd "${project_root}/modules/core" && "${docker_compose[@]}" up -d postgres)
+
+    wait_for_matrix_postgres
+    success "PostgreSQL prerequisite is ready."
+}
+
 bootstrap_mas_database() {
     local project_root="$1"
     local deploy_env="${project_root}/.env"

@@ -128,6 +128,8 @@ MODULE_CONFIG_KEY_TO_DIR = {
     "slack_bridge": "slack-bridge",
 }
 
+MODULES_NEEDING_POSTGRES = frozenset({"whatsapp_bridge", "slack_bridge"})
+
 def bridge_appservice_specs(spec: homeserver.HomeserverSpec) -> dict[str, dict[str, str]]:
     appservice_data = spec.appservice_data_rel
     return {
@@ -1348,6 +1350,35 @@ def missing_module_files(ctx: ApplyContext, manifest: dict) -> list[Path]:
     return [path for path in required if not path.exists()]
 
 
+def module_bootstrap_needs_postgres(ctx: ApplyContext, config: dict) -> bool:
+    modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
+    for config_key in MODULES_NEEDING_POSTGRES:
+        desired = modules_cfg.get(config_key, {}) if isinstance(modules_cfg.get(config_key, {}), dict) else {}
+        if not bool(desired.get("enabled", False)):
+            continue
+        dir_name = MODULE_CONFIG_KEY_TO_DIR[config_key]
+        manifest = load_module_manifest(ctx, dir_name)
+        if missing_module_files(ctx, manifest):
+            return True
+    return False
+
+
+def ensure_postgres_prerequisite(ctx: ApplyContext) -> None:
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                f'source "{ctx.project_root}/scripts/lib.sh" && '
+                f'source "{ctx.project_root}/scripts/module_common.sh" && '
+                f'ensure_postgres_prerequisite "{ctx.project_root}"'
+            ),
+        ],
+        check=True,
+        cwd=str(ctx.project_root),
+    )
+
+
 def reconcile_module_state(ctx: ApplyContext, config: dict) -> None:
     modules_cfg = config.get("modules", {}) if isinstance(config.get("modules", {}), dict) else {}
     state = {}
@@ -1617,6 +1648,9 @@ def apply_configuration(
     render_templates(ctx, config, env_vars)
     reconcile_module_state(ctx, config)
     if reconcile_modules:
+        if module_bootstrap_needs_postgres(ctx, config):
+            print("Starting PostgreSQL prerequisite for module bootstrap…")
+            ensure_postgres_prerequisite(ctx)
         reconcile_module_bootstrap(ctx, config)
         reconcile_mas_bootstrap(ctx, config, env_vars)
     reconcile_bridge_appservices(ctx, config)

@@ -422,7 +422,10 @@ class BackupRestoreScriptTests(unittest.TestCase):
             self.assertIn("borg:extract /tmp", lines[2])
             self.assertIn("::debian-s-1vcpu-2gb-fra1-01-2026-04-25T09:30:59.487313", lines[2])
             self.assertEqual(lines[3], "apply")
-            self.assertTrue(any(line.startswith("docker:compose up -d postgres") for line in lines))
+            self.assertTrue(
+                any(line.startswith("docker:compose up -d postgres") for line in lines)
+                or any(line.startswith("docker:exec ") and "pg_isready" in line for line in lines)
+            )
             self.assertTrue(any(line.startswith("docker:exec ") and "DROP DATABASE IF EXISTS synapse" in line for line in lines))
             self.assertTrue(any(line.startswith("docker:exec ") and "CREATE DATABASE synapse" in line for line in lines))
             self.assertTrue(any(line.startswith("docker:exec ") and "pg_restore" in line for line in lines))

@@ -83,33 +83,8 @@ restore_payload_import_volume_if_present() {
 }
 
 restore_payload_start_postgres_prerequisite() {
-    local inspect_status
-    local attempt=0
-    local max_attempts=30
-
-    ensure_docker_network "caddy_net"
-
-    local docker_compose
-    IFS=' ' read -ra docker_compose <<< "$(docker_compose_cmd)"
-
     info "Starting PostgreSQL prerequisite for restore..."
-    (cd "${SCRIPT_DIR}/modules/core" && "${docker_compose[@]}" up -d postgres)
-
-    info "Waiting for PostgreSQL to become healthy..."
-    while true; do
-        inspect_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' matrix_postgres 2>/dev/null || true)"
-        if [[ "${inspect_status}" == "healthy" || "${inspect_status}" == "running" ]]; then
-            success "PostgreSQL restore prerequisite is ready."
-            return 0
-        fi
-
-        attempt=$((attempt + 1))
-        if [[ ${attempt} -ge ${max_attempts} ]]; then
-            die "Timed out waiting for matrix_postgres to become ready for restore."
-        fi
-
-        sleep 2
-    done
+    ensure_postgres_prerequisite "${SCRIPT_DIR}"
 }
 
 restore_payload_reset_synapse_database() {

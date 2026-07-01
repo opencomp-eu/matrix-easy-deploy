@@ -1165,6 +1165,50 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             apply.reconcile_module_bootstrap(ctx, cfg)
 
+    def test_module_bootstrap_needs_postgres_when_bridge_enabled_and_missing_files(self):
+        cfg = self.sample_config()
+        cfg["modules"]["whatsapp_bridge"] = {
+            "enabled": True,
+            "admin_username": "waadmin",
+            "db_name": "mautrix_whatsapp",
+        }
+        ctx = apply.ApplyContext(self.root)
+
+        self.assertTrue(apply.module_bootstrap_needs_postgres(ctx, cfg))
+
+    def test_module_bootstrap_needs_postgres_false_when_bridge_files_exist(self):
+        cfg = self.sample_config()
+        cfg["modules"]["whatsapp_bridge"] = {
+            "enabled": True,
+            "admin_username": "waadmin",
+            "db_name": "mautrix_whatsapp",
+        }
+        whatsapp_dir = self.root / "modules/whatsapp-bridge/whatsapp"
+        whatsapp_dir.mkdir(parents=True, exist_ok=True)
+        (whatsapp_dir / "config.yaml").write_text("ok\n")
+        (whatsapp_dir / "registration.yaml").write_text("ok\n")
+        ctx = apply.ApplyContext(self.root)
+
+        self.assertFalse(apply.module_bootstrap_needs_postgres(ctx, cfg))
+
+    def test_apply_configuration_starts_postgres_before_whatsapp_bootstrap(self):
+        cfg = self.sample_config()
+        cfg["modules"]["whatsapp_bridge"] = {
+            "enabled": True,
+            "admin_username": "waadmin",
+            "db_name": "mautrix_whatsapp",
+        }
+        self.write_config(cfg)
+        ctx = apply.ApplyContext(self.root)
+
+        with patch("scripts.apply.ensure_postgres_prerequisite") as mock_postgres, patch(
+            "scripts.apply.reconcile_module_bootstrap"
+        ) as mock_bootstrap, patch("scripts.apply.reconcile_bridge_appservices"):
+            apply.apply_configuration(ctx, server_ip="9.8.7.6", reconcile_modules=True)
+
+        mock_postgres.assert_called_once_with(ctx)
+        mock_bootstrap.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
