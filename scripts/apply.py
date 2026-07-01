@@ -24,6 +24,8 @@ try:
     from scripts import backup_schedule
     from scripts import homeserver
     from scripts import mas_config
+    from scripts import bridge_config_patch
+    from scripts import bridge_registration_patch
 except ModuleNotFoundError:
     # When run as scripts/apply.py, Python may not include project root in sys.path.
     project_root = Path(__file__).resolve().parent.parent
@@ -35,6 +37,8 @@ except ModuleNotFoundError:
     from scripts import backup_schedule
     from scripts import homeserver
     from scripts import mas_config
+    from scripts import bridge_config_patch
+    from scripts import bridge_registration_patch
 
 
 DEFAULT_SECRET_KEYS = [
@@ -129,6 +133,11 @@ MODULE_CONFIG_KEY_TO_DIR = {
 }
 
 MODULES_NEEDING_POSTGRES = frozenset({"whatsapp_bridge", "slack_bridge"})
+
+BRIDGE_CONFIG_PATHS = {
+    "whatsapp_bridge": "modules/whatsapp-bridge/whatsapp/config.yaml",
+    "slack_bridge": "modules/slack-bridge/slack/config.yaml",
+}
 
 def bridge_appservice_specs(spec: homeserver.HomeserverSpec) -> dict[str, dict[str, str]]:
     appservice_data = spec.appservice_data_rel
@@ -1557,6 +1566,15 @@ def reconcile_bridge_appservices(ctx: ApplyContext, config: dict) -> None:
                     f"{config_key}: missing registration source ({reg_src.relative_to(ctx.project_root)})"
                 )
                 continue
+
+            bridge_config_rel = BRIDGE_CONFIG_PATHS.get(config_key)
+            if bridge_config_rel:
+                bridge_config = ctx.project_root / bridge_config_rel
+                if bridge_config.exists():
+                    if bridge_config_patch.ensure_msc4190_for_e2ee(bridge_config):
+                        changes.append(f"{config_key}: enabled encryption.msc4190 for MAS-compatible E2EE")
+                    if bridge_registration_patch.patch_registration(bridge_config, reg_src):
+                        changes.append(f"{config_key}: patched registration for bridge E2EE compatibility")
 
             reg_dest.parent.mkdir(parents=True, exist_ok=True)
             needs_copy = not reg_dest.exists() or reg_src.read_bytes() != reg_dest.read_bytes()

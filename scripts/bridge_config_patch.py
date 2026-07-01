@@ -59,6 +59,35 @@ def patch_permissions(content: str, server_name: str, admin_user: str) -> str:
     return content + f"\nbridge:\n{new_block}"
 
 
+def ensure_encryption_field(content: str, key: str, value: str, *, quote: bool = False) -> str:
+    updated = replace_field(content, f"encryption.{key}", value, quote=quote)
+    if updated != content:
+        return updated
+
+    enc_match = re.search(r"^( *)encryption:\s*\n", content, re.MULTILINE)
+    if not enc_match:
+        return content
+
+    indent = enc_match.group(1)
+    child_indent = indent + "    "
+    rendered = f'"{value}"' if quote else value
+    line = f"{child_indent}{key}: {rendered}\n"
+
+    sec_start = enc_match.end()
+    body_end = len(content)
+    for match in re.finditer(r"^(" + re.escape(indent) + r"\S)", content[sec_start:], re.MULTILINE):
+        body_end = sec_start + match.start()
+        break
+
+    anchor = re.search(rf"^{re.escape(child_indent)}self_sign:.*\n", content[sec_start:body_end], re.MULTILINE)
+    if anchor:
+        insert_at = sec_start + anchor.end()
+    else:
+        insert_at = body_end
+
+    return content[:insert_at] + line + content[insert_at:]
+
+
 def patch_bridge_config(
     config_path: Path,
     server_name: str,
@@ -87,11 +116,29 @@ def patch_bridge_config(
         # default: false avoids auto-encrypting every portal; forcing encryption on all
         # bridged rooms makes Element warn that ghost senders use the bridge bot device.
         # self_sign: bridge cross-signs itself when encryption is used (recommended by mautrix).
+        # msc4190: required for E2EE with MAS/next-gen auth; avoids legacy /login on Synapse.
         content = replace_field(content, "encryption.allow", "true", quote=False)
         content = replace_field(content, "encryption.default", "false", quote=False)
         content = replace_field(content, "encryption.self_sign", "true", quote=False)
+        content = ensure_encryption_field(content, "msc4190", "true", quote=False)
 
     config_path.write_text(content)
+
+
+def ensure_msc4190_for_e2ee(config_path: Path) -> bool:
+    content = config_path.read_text()
+    if not re.search(r"^encryption:\s*$", content, re.MULTILINE):
+        return False
+    if not re.search(r"^\s+allow:\s*true\s*$", content, re.MULTILINE):
+        return False
+    if re.search(r"^\s+msc4190:\s*true\s*$", content, re.MULTILINE):
+        return False
+
+    updated = ensure_encryption_field(content, "msc4190", "true", quote=False)
+    if updated == content:
+        return False
+    config_path.write_text(updated)
+    return True
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

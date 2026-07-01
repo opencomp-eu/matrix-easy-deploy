@@ -44,6 +44,7 @@ class BridgeRegistrationPatchTests(unittest.TestCase):
             self.assertEqual(registration["url"], "http://mautrix-whatsapp:29318")
             self.assertTrue(registration["receive_ephemeral"])
             self.assertTrue(registration["org.matrix.msc3202"])
+            self.assertTrue(registration["io.element.msc4190"])
             self.assertNotEqual(registration["sender_localpart"], "whatsappbot")
 
 

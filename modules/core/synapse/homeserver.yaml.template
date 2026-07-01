@@ -157,6 +157,7 @@ experimental_features:
   msc3202_device_masquerading: true
   msc3202_transaction_extensions: true
   msc2409_to_device_messages_enabled: true
+  msc4190_enabled: true  # bridge E2EE (MSC4190); required when MAS handles auth
 {{SYNAPSE_MAS_EXPERIMENTAL_SECTION}}
 
 matrix_rtc:

@@ -49,6 +49,10 @@ def patch_registration(config_path: Path, registration_path: Path) -> bool:
             registration["org.matrix.msc3202"] = True
             changed = True
 
+    if encryption_enabled and not registration.get("io.element.msc4190"):
+        registration["io.element.msc4190"] = True
+        changed = True
+
     sender_localpart = str(registration.get("sender_localpart", "") or "")
     if not sender_localpart or sender_localpart == bot_username:
         registration["sender_localpart"] = secrets.token_hex(8)

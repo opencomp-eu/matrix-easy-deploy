@@ -128,6 +128,7 @@ class BridgeConfigPatchTests(unittest.TestCase):
             self.assertIn("allow: true", content)
             self.assertIn("default: false", content)
             self.assertIn("self_sign: true", content)
+            self.assertIn("msc4190: true", content)
             self.assertIn('domain: "example.com"', content)
             self.assertIn('"@admin:example.com": admin', content)
 
