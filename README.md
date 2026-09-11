@@ -295,7 +295,7 @@ bash uninstall.sh --yes
 
 This cleanup removes generated runtime files like `.env`, `.matrix-easy-deploy/`, rendered configs, and module data directories (`modules/core/synapse_data`, `modules/hookshot/hookshot`, `modules/whatsapp-bridge/whatsapp`, `modules/slack-bridge/slack`).
 
-### Backups and restore (borgmatic, local repository)
+### Backups and restore (borgmatic)
 
 Backups are configured in `deploy.yaml` under `backup`:
 
@@ -303,8 +303,15 @@ Backups are configured in `deploy.yaml` under `backup`:
 backup:
   enabled: true
   repository:
-    type: local
+    type: local              # local | sftp
     path: /var/backups/med-kit
+    # SFTP repositories use these additional fields:
+    # host: backup.example.com
+    # user: borg
+    # port: 22
+    # ssh_key_path: /root/.ssh/borg_backup
+    # host_key_check: true
+    encryption: repokey      # repokey (default) or none
   schedule:
     enabled: false
     calendar: '*-*-* 03:00:00'
@@ -378,7 +385,8 @@ Behavior notes:
 - Generated runtime files such as `.env` and rendered service configs are not treated as canonical backup inputs; restore rebuilds them from `deploy.yaml` and `.matrix-easy-deploy` state.
 - Existing logged-in sessions can keep showing rooms or messages that no longer exist on the restored server. Logging out and back in usually resolves that stale client state.
 - For encrypted history on a new login, users typically need another verified session or their recovery key/secret storage. Registration tokens are unrelated to restoring message access after a rollback.
-- This phase supports only local repository targets (`backup.repository.type: local`).
+- Local and SFTP repository targets are supported. For SFTP, port 22 is omitted from the Borg URL and host-key checking defaults to `accept-new`.
+- `--cold` stops the stack while staging file data, then starts it again; this is recommended for scheduled backups when strict file-store consistency is needed.
 
 #### Portable export and restore (single file)
 
@@ -415,7 +423,8 @@ bash bootstrap-from-backup.sh ~/med-kit-backup.tar.gz.age --encrypt --yes
 Encryption notes:
 
 - Interactive `--encrypt` uses `age` (passphrase prompt).
-- Set `MED_BACKUP_PASSPHRASE` for non-interactive export/restore (uses OpenSSL AES-256-CBC internally).
+- Set `EASYDEPLOY_BACKUP_PASSPHRASE` (or legacy `MED_BACKUP_PASSPHRASE`) for non-interactive export/restore (uses OpenSSL AES-256-CBC internally).
+- `bash apply.sh` generates and preserves `BORG_PASSPHRASE` in `.matrix-easy-deploy/secrets.yaml` when backups are enabled; keep that secret safe for encrypted Borg repositories.
 - Portable archives include Synapse DB dumps, bridge DB dumps when enabled, module state, Caddy volumes, and Tuwunel data when applicable.
 
 ### Run with Docker (single command)

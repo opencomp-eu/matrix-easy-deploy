@@ -112,8 +112,21 @@ modules:
 backup:
   enabled: false
   repository:
-    type: local
-    path: /var/backups/med-kit
+    type: local              # local | sftp
+    path: /var/backups/med-kit   # local: absolute dir on this host; sftp: dir on the remote host
+    # sftp only — fill these in when type: sftp:
+    # host: backup.example.com
+    # user: borg
+    # port: 22
+    # ssh_key_path: /root/.ssh/borg_backup   # must exist on this host
+    # host_key_check: true   # true -> accept-new, false -> no
+    # Borg repository encryption, applied only when the repo is first created:
+    #   repokey (default) — new repos are encrypted with the BORG_PASSPHRASE
+    #     secret that `bash apply.sh` generates in .matrix-easy-deploy/secrets.yaml.
+    #   none — unencrypted repos. Pre-rework MED_Backup repos are unencrypted:
+    #     set encryption: none so repo creation stays a silent no-op and those
+    #     archives keep restoring.
+    encryption: repokey
   schedule:
     enabled: false
     calendar: "*-*-* 03:00:00"

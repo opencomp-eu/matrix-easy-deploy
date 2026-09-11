@@ -22,7 +22,6 @@ try:
     from scripts import synapse_appservice
     from scripts import tuwunel_appservice
     from scripts import hookshot_caddy
-    from scripts import backup_schedule
     from scripts import homeserver
     from scripts import mas_config
     from scripts import bridge_config_patch
@@ -35,11 +34,16 @@ except ModuleNotFoundError:
     from scripts import synapse_appservice
     from scripts import tuwunel_appservice
     from scripts import hookshot_caddy
-    from scripts import backup_schedule
     from scripts import homeserver
     from scripts import mas_config
     from scripts import bridge_config_patch
     from scripts import bridge_registration_patch
+
+# Shared backup timer reconciliation lives in easydeploy-lib.
+_EASYDEPLOY_LIB_PYTHON = Path(__file__).resolve().parent.parent / "easydeploy-lib" / "python"
+if _EASYDEPLOY_LIB_PYTHON.is_dir() and str(_EASYDEPLOY_LIB_PYTHON) not in sys.path:
+    sys.path.insert(0, str(_EASYDEPLOY_LIB_PYTHON))
+import backup_schedule  # noqa: E402  (easydeploy-lib/python/backup_schedule.py)
 
 
 DEFAULT_SECRET_KEYS = [
@@ -1284,14 +1288,35 @@ def validate_config(config: dict) -> None:
                 raise ValueError("backup.repository must be an object when backup.enabled is true")
 
             repo_type = repository.get("type")
-            if repo_type != "local":
-                raise ValueError("backup.repository.type must be 'local' in phase 1")
+            if repo_type not in ("local", "sftp"):
+                raise ValueError("backup.repository.type must be 'local' or 'sftp'")
 
-            repo_path = repository.get("path")
-            if not isinstance(repo_path, str) or not repo_path.strip():
-                raise ValueError("backup.repository.path must be a non-empty string when backup.enabled is true")
-            if not repo_path.startswith("/"):
-                raise ValueError("backup.repository.path must be an absolute path")
+            encryption = repository.get("encryption", "repokey")
+            if encryption not in ("repokey", "none"):
+                raise ValueError("backup.repository.encryption must be 'repokey' or 'none'")
+            if "port" in repository and (
+                isinstance(repository["port"], bool)
+                or not isinstance(repository["port"], int)
+                or repository["port"] < 0
+            ):
+                raise ValueError("backup.repository.port must be a non-negative integer")
+            if "host_key_check" in repository and not isinstance(repository["host_key_check"], bool):
+                raise ValueError("backup.repository.host_key_check must be true/false")
+
+            if repo_type == "local":
+                repo_path = repository.get("path")
+                if not isinstance(repo_path, str) or not repo_path.strip():
+                    raise ValueError("backup.repository.path must be a non-empty string when backup.enabled is true")
+                if not repo_path.startswith("/"):
+                    raise ValueError("backup.repository.path must be an absolute path")
+            else:
+                for key in ("host", "user", "path", "ssh_key_path"):
+                    value = repository.get(key)
+                    if not isinstance(value, str) or not value.strip():
+                        raise ValueError(f"backup.repository.{key} is required for sftp repositories")
+                ssh_key_path = Path(repository["ssh_key_path"]).expanduser()
+                if not ssh_key_path.exists():
+                    raise ValueError(f"backup.repository.ssh_key_path not found: {ssh_key_path}")
 
 
 def detect_public_ip() -> str:
@@ -1551,12 +1576,24 @@ def generate_secret() -> str:
     return secrets.token_hex(32)
 
 
-def create_or_update_secrets(ctx: ApplyContext, existing: dict, rotate: bool = False, *, mas_enabled: bool = False) -> dict:
+def create_or_update_secrets(
+    ctx: ApplyContext,
+    existing: dict,
+    rotate: bool = False,
+    *,
+    mas_enabled: bool = False,
+    backup_enabled: bool = False,
+) -> dict:
     state = dict(existing)
 
     for key in DEFAULT_SECRET_KEYS:
         if rotate or not state.get(key):
             state[key] = generate_secret()
+
+    # Borg repo passphrase: generated once when backups are enabled; rotating it
+    # would lock out existing encrypted repositories, so it is never rotated.
+    if backup_enabled and not state.get("BORG_PASSPHRASE"):
+        state["BORG_PASSPHRASE"] = generate_secret()
 
     state = mas_config.ensure_mas_secrets(state, rotate=rotate, mas_enabled=mas_enabled)
 
@@ -2583,7 +2620,14 @@ def apply_configuration(
     derived = derive_values(config, server_ip=server_ip)
     mas_enabled = derived.get("MAS_ENABLED") == "true"
     existing = load_secrets(ctx)
-    saved = create_or_update_secrets(ctx, existing, rotate=rotate_secrets, mas_enabled=mas_enabled)
+    backup_cfg = config.get("backup") if isinstance(config.get("backup"), dict) else {}
+    saved = create_or_update_secrets(
+        ctx,
+        existing,
+        rotate=rotate_secrets,
+        mas_enabled=mas_enabled,
+        backup_enabled=bool(backup_cfg.get("enabled", False)),
+    )
     env_vars = build_env_vars(config, derived, saved)
     write_env_file(ctx, env_vars)
     link_calls_compose_env(ctx)
@@ -2598,7 +2642,9 @@ def apply_configuration(
     reconcile_bridge_appservices(ctx, config)
     reconcile_hookshot_caddy(ctx, config, derived)
     reconcile_proxy_integration(ctx, config, derived)
-    schedule_status = backup_schedule.reconcile(ctx.project_root, config)
+    schedule_status = backup_schedule.reconcile(
+        ctx.project_root, ctx.config_file, "matrix-easy-deploy-backup"
+    )
     if schedule_status:
         print(schedule_status)
 

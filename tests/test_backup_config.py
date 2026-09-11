@@ -1,10 +1,12 @@
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 
 import yaml
 
-from scripts import backup_config
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "easydeploy-lib" / "python"))
+import backup_config  # noqa: E402
 
 
 class BackupConfigTests(unittest.TestCase):
@@ -33,7 +35,7 @@ class BackupConfigTests(unittest.TestCase):
         cfg = backup_config.load_backup_settings(self.deploy_yaml)
         self.assertFalse(cfg["enabled"])
         self.assertEqual(cfg["repository"]["type"], "local")
-        self.assertEqual(cfg["repository"]["path"], "/var/backups/med-kit")
+        self.assertEqual(cfg["repository"]["path"], "")
 
     def test_load_backup_settings_requires_absolute_path_when_enabled(self):
         self._write(
@@ -78,7 +80,7 @@ class BackupConfigTests(unittest.TestCase):
         shell = backup_config._emit_shell(settings)
 
         self.assertIn("BACKUP_ENABLED=true", shell)
-        self.assertIn("BACKUP_REPOSITORY_PATH=/srv/backups", shell)
+        self.assertIn("BACKUP_REPO_PATH=/srv/backups", shell)
         self.assertIn("BACKUP_KEEP_DAILY=10", shell)
         self.assertIn("BACKUP_KEEP_WEEKLY=8", shell)
         self.assertIn("BACKUP_KEEP_MONTHLY=12", shell)

@@ -1441,7 +1441,7 @@ class ApplyTests(unittest.TestCase):
         with patch("scripts.apply.backup_schedule.reconcile", return_value="Automatic backup timer installed or updated.") as mock_reconcile:
             apply.apply_configuration(ctx, server_ip="9.8.7.6")
 
-        mock_reconcile.assert_called_once_with(ctx.project_root, cfg)
+        mock_reconcile.assert_called_once_with(ctx.project_root, ctx.config_file, "matrix-easy-deploy-backup")
 
     def test_run_runtime_reconcile_invokes_stop_then_start(self):
         ctx = apply.ApplyContext(self.root)

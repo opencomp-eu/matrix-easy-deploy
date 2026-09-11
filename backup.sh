@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
-# backup.sh — create/list local borgmatic backups for matrix-easy-deploy
+# backup.sh — create/list matrix-easy-deploy backups (shared easydeploy-lib engine)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/lib.sh"
-# shellcheck source=scripts/backup_payload.sh
-source "${SCRIPT_DIR}/scripts/backup_payload.sh"
-# shellcheck source=scripts/backup_crypto.sh
-source "${SCRIPT_DIR}/scripts/backup_crypto.sh"
 
 LIST_ONLY="false"
 EXPORT_PATH=""
 EXPORT_ONLY="false"
 EXPORT_FROM_ARCHIVE=""
 ENCRYPT_EXPORT="false"
+COLD="false"
+SCHEDULE_ONLY="false"
 
 BACKUP_STATE_DIR="${SCRIPT_DIR}/.matrix-easy-deploy/backup"
+SECRETS_FILE_PATH="${SCRIPT_DIR}/.matrix-easy-deploy/secrets.yaml"
 BACKUP_STAGING_ROOT="${BACKUP_STATE_DIR}/staging"
 BACKUP_STAGING_CURRENT="${BACKUP_STAGING_ROOT}/current"
 BORG_CONFIG_PATH="${BACKUP_STATE_DIR}/borgmatic.yaml"
@@ -24,8 +23,9 @@ print_help() {
     cat <<EOF
 Usage:
   bash backup.sh [--list]
-  bash backup.sh [--export PATH] [--export-only] [--encrypt]
+  bash backup.sh [--export PATH] [--export-only] [--encrypt] [--cold]
   bash backup.sh --export-from-archive ARCHIVE --export PATH [--encrypt]
+  bash backup.sh --schedule
 
 Options:
   --list                  List available archives in the configured repository.
@@ -33,6 +33,8 @@ Options:
   --export-only PATH      Stage payload and export without updating the Borg repository.
   --export-from-archive   Re-export an existing Borg archive to a portable file.
   --encrypt               Encrypt portable export with age (passphrase).
+  --cold                  Stop services before staging and start them afterwards.
+  --schedule              Reconcile the automatic backup systemd timer from deploy.yaml.
   -h, --help              Show this help message.
 EOF
 }
@@ -53,117 +55,69 @@ load_runtime_env() {
 }
 
 load_backup_settings() {
-    local exports
     local require_enabled="${1:-true}"
 
-    exports="$(python3 "${SCRIPT_DIR}/scripts/backup_config.py" --deploy-yaml "${SCRIPT_DIR}/deploy.yaml" --emit-shell)"
-    eval "$exports"
+    eval "$(easydeploy_backup_settings_shell "${SCRIPT_DIR}/deploy.yaml")"
 
     if [[ "${require_enabled}" == "true" && "${BACKUP_ENABLED}" != "true" ]]; then
         die "Backups are disabled. Set backup.enabled=true in deploy.yaml."
     fi
 }
 
-write_borgmatic_config() {
-    mkdir -p "${BACKUP_STATE_DIR}" "${BACKUP_STAGING_CURRENT}" "${BACKUP_REPOSITORY_PATH}"
+load_plan_json() {
+    PLAN_JSON="$(mktemp)"
+    easydeploy_backup_py "${EASYDEPLOY_LIB}/python/backup_plan.py" \
+        --project-root "${SCRIPT_DIR}" --emit-plan-json > "${PLAN_JSON}"
+}
 
-    cat > "${BORG_CONFIG_PATH}" <<EOF
-source_directories:
-  - payload
-repositories:
-  - path: ${BACKUP_REPOSITORY_PATH}
-archive_name_format: 'MED_Backup_{now:%Y-%m-%dT%H:%M:%S}'
-keep_daily: ${BACKUP_KEEP_DAILY}
-keep_weekly: ${BACKUP_KEEP_WEEKLY}
-keep_monthly: ${BACKUP_KEEP_MONTHLY}
-keep_yearly: ${BACKUP_KEEP_YEARLY}
-working_directory: ${BACKUP_STAGING_CURRENT}
-EOF
+plan_timer_name() {
+    "${EASYDEPLOY_BACKUP_PYTHON}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["timer_name"])' "${PLAN_JSON}"
+}
+
+write_borgmatic_config() {
+    mkdir -p "${BACKUP_STATE_DIR}" "${BACKUP_STAGING_CURRENT}"
+    easydeploy_backup_write_borgmatic_config \
+        "${BORG_CONFIG_PATH}" \
+        "${BACKUP_REPO_URL}" \
+        "${BACKUP_STAGING_CURRENT}" \
+        "MED_Backup"
+}
+
+run_stack_hooks() {
+    local phase="$1"
+    local hook
+    hook="$("${EASYDEPLOY_BACKUP_PYTHON}" -c \
+        'import json,sys
+print(json.load(open(sys.argv[1])).get("hooks", {}).get(sys.argv[2], ""))' \
+        "${PLAN_JSON}" "${phase}")"
+    [[ -n "${hook}" ]] || return 0
+    easydeploy_backup_run_hook "${SCRIPT_DIR}" "${hook}"
 }
 
 list_archives() {
-    info "Listing backup archive names from ${BACKUP_REPOSITORY_PATH}..."
-    borg list "${BACKUP_REPOSITORY_PATH}" | awk '{print $1}'
-}
-
-resolve_archive_name() {
-    local requested="$1"
-    local entries
-    local matches
-
-    entries="$(borg list "${BACKUP_REPOSITORY_PATH}")"
-
-    matches="$(printf '%s\n' "${entries}" | awk -v requested="${requested}" '
-        {
-            archive=$1
-            archive_id=$NF
-            gsub(/^\[/, "", archive_id)
-            gsub(/\]$/, "", archive_id)
-            if (archive == requested || index(archive_id, requested) == 1) {
-                print archive
-            }
-        }
-    ')"
-
-    if [[ -z "${matches}" ]]; then
-        die "Archive '${requested}' does not exist. Use 'bash backup.sh --list' and pass the full archive name or a unique ID prefix."
-    fi
-
-    if [[ "$(printf '%s\n' "${matches}" | wc -l)" -gt 1 ]]; then
-        error "Archive reference '${requested}' is ambiguous. Matching archive names:"
-        printf '%s\n' "${matches}" >&2
-        exit 1
-    fi
-
-    printf '%s\n' "${matches}"
-}
-
-export_portable_archive() {
-    local export_path="$1"
-    local staging_current="$2"
-
-    local export_dir
-    export_dir="$(dirname "${export_path}")"
-    mkdir -p "${export_dir}"
-
-    info "Writing portable archive to ${export_path}..."
-    if [[ "${ENCRYPT_EXPORT}" == "true" ]]; then
-        (
-            cd "${staging_current}"
-            tar -cf - payload
-        ) | med_backup_encrypt_stream "${export_path}"
-    else
-        tar -C "${staging_current}" -cf - payload | gzip -c > "${export_path}"
-    fi
-
-    success "Portable archive written to ${export_path}"
-}
-
-export_from_borg_archive() {
-    local archive_name="$1"
-    local export_path="$2"
-
-    info "Exporting Borg archive '${archive_name}' to portable format..."
-    if [[ "${ENCRYPT_EXPORT}" == "true" ]]; then
-        borg export-tar "${BACKUP_REPOSITORY_PATH}::${archive_name}" - | med_backup_encrypt_stream "${export_path}"
-    else
-        borg export-tar "${BACKUP_REPOSITORY_PATH}::${archive_name}" - | gzip -c > "${export_path}"
-    fi
-
-    success "Portable archive written to ${export_path}"
+    info "Listing backup archive names from ${BACKUP_REPO_URL}..."
+    easydeploy_backup_list_archives "${BACKUP_REPO_URL}" | awk '{print $1}'
 }
 
 create_backup() {
-    backup_payload_stage "${BACKUP_STAGING_CURRENT}" "${BACKUP_REPOSITORY_PATH}" "${ENCRYPT_EXPORT}"
+    # easydeploy_backup_stage_payload uses a RETURN trap that references this
+    # name after its local variable scope ends under `set -u`.
+    plan_json=""
+    if [[ "${COLD}" == "true" ]]; then
+        info "Cold backup: stopping services before staging..."
+        run_stack_hooks stop
+    fi
+
+    easydeploy_backup_stage_payload \
+        "${SCRIPT_DIR}" "${BACKUP_STAGING_CURRENT}" "" "${ENCRYPT_EXPORT}"
 
     if [[ "${EXPORT_ONLY}" == "true" ]]; then
         [[ -n "${EXPORT_PATH}" ]] || die "--export-only requires --export PATH"
-        export_portable_archive "${EXPORT_PATH}" "${BACKUP_STAGING_CURRENT}"
+        easydeploy_backup_export_portable "${EXPORT_PATH}" "${BACKUP_STAGING_CURRENT}" "${ENCRYPT_EXPORT}"
         return 0
     fi
 
-    info "Ensuring local borg repository exists..."
-    borgmatic --config "${BORG_CONFIG_PATH}" repo-create --encryption none
+    easydeploy_backup_repo_create "${BORG_CONFIG_PATH}"
 
     info "Creating backup archive..."
     borgmatic --config "${BORG_CONFIG_PATH}" create --verbosity 1 --stats
@@ -175,11 +129,21 @@ create_backup() {
     borgmatic --config "${BORG_CONFIG_PATH}" check
 
     if [[ -n "${EXPORT_PATH}" ]]; then
-        export_portable_archive "${EXPORT_PATH}" "${BACKUP_STAGING_CURRENT}"
+        easydeploy_backup_export_portable "${EXPORT_PATH}" "${BACKUP_STAGING_CURRENT}" "${ENCRYPT_EXPORT}"
     fi
 
     success "Backup completed successfully."
     list_archives
+}
+
+reconcile_schedule() {
+    load_runtime_env
+    load_backup_settings
+    load_plan_json
+    easydeploy_backup_py "${EASYDEPLOY_LIB}/python/backup_schedule.py" \
+        --project-root "${SCRIPT_DIR}" \
+        --deploy-yaml "${SCRIPT_DIR}/deploy.yaml" \
+        --unit-name "$(plan_timer_name)"
 }
 
 main() {
@@ -208,6 +172,12 @@ main() {
             --encrypt)
                 ENCRYPT_EXPORT="true"
                 ;;
+            --cold)
+                COLD="true"
+                ;;
+            --schedule)
+                SCHEDULE_ONLY="true"
+                ;;
             -h|--help)
                 print_help
                 exit 0
@@ -220,22 +190,32 @@ main() {
     done
 
     require_command python3
+
+    if [[ "${SCHEDULE_ONLY}" == "true" ]]; then
+        reconcile_schedule
+        exit 0
+    fi
+
     require_command docker
 
     if [[ -n "${EXPORT_FROM_ARCHIVE}" ]]; then
         require_command borg
         load_backup_settings
-        write_borgmatic_config
-        EXPORT_FROM_ARCHIVE="$(resolve_archive_name "${EXPORT_FROM_ARCHIVE}")"
+        easydeploy_backup_repo_env "${SECRETS_FILE_PATH}"
+        EXPORT_FROM_ARCHIVE="$(easydeploy_backup_resolve_archive "${BACKUP_REPO_URL}" "${EXPORT_FROM_ARCHIVE}")"
         [[ -n "${EXPORT_PATH}" ]] || die "--export-from-archive requires --export PATH"
-        export_from_borg_archive "${EXPORT_FROM_ARCHIVE}" "${EXPORT_PATH}"
+        easydeploy_backup_export_from_archive \
+            "${BACKUP_REPO_URL}" "${EXPORT_FROM_ARCHIVE}" "${EXPORT_PATH}" "${ENCRYPT_EXPORT}"
         exit 0
     fi
 
     if [[ "${EXPORT_ONLY}" == "true" ]]; then
         load_backup_settings "false"
-        [[ -n "${EXPORT_PATH}" ]] || die "--export-only requires --export PATH"
+        load_plan_json
         trap cleanup_staging EXIT
+        if [[ "${COLD}" == "true" ]]; then
+            trap 'run_stack_hooks start; cleanup_staging' EXIT
+        fi
         create_backup
         exit 0
     fi
@@ -245,6 +225,8 @@ main() {
 
     load_runtime_env
     load_backup_settings
+    load_plan_json
+    easydeploy_backup_repo_env "${SECRETS_FILE_PATH}"
     write_borgmatic_config
 
     if [[ "${LIST_ONLY}" == "true" ]]; then
@@ -253,6 +235,10 @@ main() {
     fi
 
     trap cleanup_staging EXIT
+
+    if [[ "${COLD}" == "true" ]]; then
+        trap 'run_stack_hooks start; cleanup_staging' EXIT
+    fi
 
     create_backup
 }

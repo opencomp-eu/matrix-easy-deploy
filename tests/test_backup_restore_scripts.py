@@ -17,7 +17,6 @@ class BackupRestoreScriptTests(unittest.TestCase):
     def setUp(self):
         self.repo_root = Path(__file__).resolve().parents[1]
         require_easydeploy_lib(self.repo_root)
-        self.backup_config_script = self.repo_root / "scripts/backup_config.py"
         self.backup_script = self.repo_root / "backup.sh"
         self.restore_script = self.repo_root / "restore.sh"
 
@@ -29,12 +28,9 @@ class BackupRestoreScriptTests(unittest.TestCase):
     def _copy_support_scripts(self, root: Path) -> None:
         stage_product_lib_scripts(self.repo_root, root)
         for rel in (
-            "scripts/backup_config.py",
-            "scripts/backup_payload.py",
-            "scripts/backup_payload.sh",
-            "scripts/backup_crypto.sh",
-            "scripts/restore_payload.sh",
+            "scripts/backup_plan.py",
             "scripts/module_common.sh",
+            "scripts/postgres_prerequisite.sh",
             "scripts/state_secrets.py",
         ):
             copy_executable_script(self.repo_root / rel, root / rel)
@@ -71,6 +67,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
             "  repository:\n"
             "    type: local\n"
             f"    path: {root}/backups\n"
+            "    encryption: none\n"
             "  retention:\n"
             "    keep_daily: 7\n"
             "    keep_weekly: 4\n"
@@ -177,7 +174,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
             )
             self.assertEqual(list_result.returncode, 0)
             self.assertIn("payload/manifest.json", list_result.stdout)
-            self.assertIn("payload/deploy.yaml", list_result.stdout)
+            self.assertIn("payload/files/deploy.yaml", list_result.stdout)
 
             manifest_result = subprocess.run(
                 ["tar", "-xOzf", str(export_path), "payload/manifest.json"],
@@ -187,7 +184,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
             )
             self.assertEqual(manifest_result.returncode, 0)
             manifest = json.loads(manifest_result.stdout)
-            self.assertEqual(manifest["format"], 2)
+            self.assertEqual(manifest["format"], 3)
 
     def test_restore_from_portable_file_without_backup_enabled(self):
         import tarfile
@@ -300,7 +297,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
                 [
                     "bash",
                     "-lc",
-                    f"source scripts/lib.sh && source scripts/backup_crypto.sh && med_backup_decrypt_stream '{export_path}' | tar -xf - -C '{extract_dir}'",
+                    f"source scripts/lib.sh && easydeploy_backup_decrypt_stream '{export_path}' | tar -xf - -C '{extract_dir}'",
                 ],
                 cwd=root,
                 env=env,
@@ -376,7 +373,7 @@ class BackupRestoreScriptTests(unittest.TestCase):
                 "fi\n"
                 "if [[ \"${1:-}\" == \"extract\" ]]; then\n"
                 "  mkdir -p payload/.matrix-easy-deploy payload/modules/core/synapse_data payload/database\n"
-                "  cat > payload/deploy.yaml <<'EOF'\n"
+                "  cat > payload/files/deploy.yaml <<'EOF'\n"
                 "matrix:\n"
                 "  domain: matrix.example.com\n"
                 "  server_name: example.com\n"
@@ -395,6 +392,9 @@ class BackupRestoreScriptTests(unittest.TestCase):
                 "  echo '{}' > payload/.matrix-easy-deploy/modules.yaml\n"
                 "  echo 'POSTGRES_PASSWORD: restored' > payload/.matrix-easy-deploy/secrets.yaml\n"
                 "  echo dump > payload/database/synapse.dump\n"
+                "  cat > payload/manifest.json <<'EOF'\n"
+                "{\"format\":2,\"database_dumps\":[{\"name\":\"synapse\",\"path\":\"database/synapse.dump\",\"db_user\":\"synapse\"}]}\n"
+                "EOF\n"
                 "fi\n"
                 "exit 0\n",
             )

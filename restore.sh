@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 # restore.sh — restore matrix-easy-deploy from a Borg archive or portable file
+# (shared easydeploy-lib engine; matrix-specific post-restore notes stay here)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/lib.sh"
-# shellcheck source=scripts/restore_payload.sh
-source "${SCRIPT_DIR}/scripts/restore_payload.sh"
-# shellcheck source=scripts/backup_crypto.sh
-source "${SCRIPT_DIR}/scripts/backup_crypto.sh"
 
 ARCHIVE_NAME=""
 PORTABLE_FILE=""
@@ -22,6 +19,7 @@ PASSPHRASE_FILE=""
 BACKUP_STATE_DIR="${SCRIPT_DIR}/.matrix-easy-deploy/backup"
 RESTORE_ROOT="${BACKUP_STATE_DIR}/restore"
 BORG_CONFIG_PATH="${BACKUP_STATE_DIR}/borgmatic.yaml"
+SECRETS_FILE_PATH="${SCRIPT_DIR}/.matrix-easy-deploy/secrets.yaml"
 
 print_help() {
     cat <<EOF
@@ -77,30 +75,26 @@ load_runtime_env() {
 }
 
 load_backup_settings() {
-    local exports
-    exports="$(python3 "${SCRIPT_DIR}/scripts/backup_config.py" --deploy-yaml "${SCRIPT_DIR}/deploy.yaml" --emit-shell)"
-    eval "$exports"
+    eval "$(easydeploy_backup_settings_shell "${SCRIPT_DIR}/deploy.yaml")"
 
     if [[ "${BACKUP_ENABLED}" != "true" ]]; then
         die "Backups are disabled. Set backup.enabled=true in deploy.yaml before restoring."
     fi
 }
 
-write_borgmatic_config() {
-    mkdir -p "${BACKUP_STATE_DIR}" "${BACKUP_REPOSITORY_PATH}"
+load_plan_json() {
+    PLAN_JSON="$(mktemp)"
+    easydeploy_backup_py "${EASYDEPLOY_LIB}/python/backup_plan.py" \
+        --project-root "${SCRIPT_DIR}" --emit-plan-json > "${PLAN_JSON}"
+}
 
-    cat > "${BORG_CONFIG_PATH}" <<EOF
-source_directories:
-  - payload
-repositories:
-  - path: ${BACKUP_REPOSITORY_PATH}
-archive_name_format: 'MED_Backup_{now:%Y-%m-%dT%H:%M:%S}'
-keep_daily: ${BACKUP_KEEP_DAILY}
-keep_weekly: ${BACKUP_KEEP_WEEKLY}
-keep_monthly: ${BACKUP_KEEP_MONTHLY}
-keep_yearly: ${BACKUP_KEEP_YEARLY}
-working_directory: ${BACKUP_STATE_DIR}
-EOF
+write_borgmatic_config() {
+    mkdir -p "${BACKUP_STATE_DIR}"
+    easydeploy_backup_write_borgmatic_config \
+        "${BORG_CONFIG_PATH}" \
+        "${BACKUP_REPO_URL}" \
+        "${BACKUP_STATE_DIR}" \
+        "MED_Backup"
 }
 
 confirm_restore() {
@@ -119,75 +113,31 @@ confirm_restore() {
 }
 
 list_archives() {
-    info "Listing backup archive names from ${BACKUP_REPOSITORY_PATH}..."
-    borg list "${BACKUP_REPOSITORY_PATH}" | awk '{print $1}'
-}
-
-resolve_archive_name() {
-    local requested="$1"
-    local entries
-    local matches
-
-    entries="$(borg list "${BACKUP_REPOSITORY_PATH}")"
-
-    matches="$(printf '%s\n' "${entries}" | awk -v requested="${requested}" '
-        {
-            archive=$1
-            archive_id=$NF
-            gsub(/^\[/, "", archive_id)
-            gsub(/\]$/, "", archive_id)
-            if (archive == requested || index(archive_id, requested) == 1) {
-                print archive
-            }
-        }
-    ')"
-
-    if [[ -z "${matches}" ]]; then
-        die "Archive '${requested}' does not exist. Use 'bash restore.sh --list' and pass the full archive name or a unique ID prefix."
-    fi
-
-    if [[ "$(printf '%s\n' "${matches}" | wc -l)" -gt 1 ]]; then
-        error "Archive reference '${requested}' is ambiguous. Matching archive names:"
-        printf '%s\n' "${matches}" >&2
-        exit 1
-    fi
-
-    printf '%s\n' "${matches}"
-}
-
-detect_encrypted_portable_file() {
-    local file_path="$1"
-
-    if [[ "${ENCRYPTED_FILE}" == "true" ]]; then
-        return 0
-    fi
-
-    if med_backup_is_encrypted_path "${file_path}"; then
-        return 0
-    fi
-
-    if med_backup_is_openssl_encrypted "${file_path}"; then
-        return 0
-    fi
-
-    return 1
+    info "Listing backup archive names from ${BACKUP_REPO_URL}..."
+    easydeploy_backup_list_archives "${BACKUP_REPO_URL}" | awk '{print $1}'
 }
 
 extract_portable_file() {
     local file_path="$1"
     local extract_dir="$2"
 
-    [[ -f "${file_path}" ]] || die "Portable archive not found: ${file_path}"
-
-    mkdir -p "${extract_dir}"
-
-    if detect_encrypted_portable_file "${file_path}"; then
+    if [[ "${ENCRYPTED_FILE}" == "true" ]]; then
+        [[ -f "${file_path}" ]] || die "Portable archive not found: ${file_path}"
+        mkdir -p "${extract_dir}"
         info "Decrypting and extracting portable archive..."
-        med_backup_decrypt_stream "${file_path}" | tar -xf - -C "${extract_dir}"
+        easydeploy_backup_decrypt_stream "${file_path}" | tar -xf - -C "${extract_dir}"
     else
-        info "Extracting portable archive..."
-        gzip -dc "${file_path}" | tar -xf - -C "${extract_dir}"
+        easydeploy_backup_extract_portable "${file_path}" "${extract_dir}"
     fi
+}
+
+run_restore_payload() {
+    local payload_root="${RESTORE_STAGE}/payload"
+    [[ -d "$payload_root" ]] || die "Restore payload does not contain expected payload/ directory"
+
+    load_plan_json
+    easydeploy_backup_restore_payload "${SCRIPT_DIR}" "${payload_root}" "${PLAN_JSON}"
+    rm -f "${PLAN_JSON}"
 }
 
 run_restore_from_borg() {
@@ -197,13 +147,10 @@ run_restore_from_borg() {
     info "Extracting archive '${ARCHIVE_NAME}'..."
     (
         cd "$RESTORE_STAGE"
-        borg extract "${BACKUP_REPOSITORY_PATH}::${ARCHIVE_NAME}" payload
+        borg extract "${BACKUP_REPO_URL}::${ARCHIVE_NAME}" payload
     )
 
-    local payload_root="${RESTORE_STAGE}/payload"
-    [[ -d "$payload_root" ]] || die "Archive '${ARCHIVE_NAME}' does not contain expected payload/ directory"
-
-    restore_payload_from_directory "${payload_root}"
+    run_restore_payload
 }
 
 run_restore_from_file() {
@@ -212,10 +159,7 @@ run_restore_from_file() {
 
     extract_portable_file "${PORTABLE_FILE}" "${RESTORE_STAGE}"
 
-    local payload_root="${RESTORE_STAGE}/payload"
-    [[ -d "$payload_root" ]] || die "Portable archive does not contain expected payload/ directory"
-
-    restore_payload_from_directory "${payload_root}"
+    run_restore_payload
 }
 
 main() {
@@ -265,17 +209,20 @@ main() {
     if [[ -n "${PORTABLE_FILE}" && -n "${ARCHIVE_NAME}" ]]; then
         die "Provide either --archive or --file, not both."
     fi
+    [[ -z "${PASSPHRASE_FILE}" ]] || export PASSPHRASE_FILE
 
     if [[ "${LIST_ONLY}" == "true" ]]; then
         require_command borg
         require_command borgmatic
         load_backup_settings
+        easydeploy_backup_repo_env "${SECRETS_FILE_PATH}"
         write_borgmatic_config
         list_archives
         exit 0
     fi
 
     if [[ -n "${PORTABLE_FILE}" ]]; then
+        load_runtime_env
         confirm_restore || {
             info "Restore cancelled."
             exit 0
@@ -299,14 +246,15 @@ main() {
 
     [[ -n "${ARCHIVE_NAME}" ]] || die "Provide --archive <archive-name>, --file <portable-archive>, or use --list"
 
-    require_command borgmatic
     require_command borg
+    require_command borgmatic
 
     load_runtime_env
     load_backup_settings
+    easydeploy_backup_repo_env "${SECRETS_FILE_PATH}"
     write_borgmatic_config
 
-    ARCHIVE_NAME="$(resolve_archive_name "${ARCHIVE_NAME}")"
+    ARCHIVE_NAME="$(easydeploy_backup_resolve_archive "${BACKUP_REPO_URL}" "${ARCHIVE_NAME}")"
 
     confirm_restore || {
         info "Restore cancelled."
