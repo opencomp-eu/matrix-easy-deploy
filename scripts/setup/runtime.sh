@@ -1,6 +1,27 @@
 # scripts/setup/runtime.sh
 # Docker infrastructure, startup, and admin user bootstrap.
 
+# The normal entrypoint sources scripts/lib_matrix.sh first. Keep this helper
+# self-contained as well because runtime.sh is also exercised directly by
+# setup tests and by operators troubleshooting a partial checkout.
+if ! declare -F load_runtime_desired_state >/dev/null 2>&1; then
+    load_runtime_desired_state() {
+        local project_root="$1"
+        local state_script="${project_root}/scripts/runtime_state.py"
+        [[ -f "${state_script}" ]] || return 0
+
+        local state_exports
+        if state_exports="$(python3 "${state_script}" --project-root "${project_root}" --emit-shell 2>/dev/null)"; then
+            [[ -n "${state_exports}" ]] && eval "${state_exports}"
+        fi
+    }
+fi
+if ! declare -F build_mas_compose_args >/dev/null 2>&1; then
+    build_mas_compose_args() {
+        MAS_COMPOSE_ARGS=(-f docker-compose.yml)
+    }
+fi
+
 setup_docker() {
     info "Setting up Docker infrastructure…"
 

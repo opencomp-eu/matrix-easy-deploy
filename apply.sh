@@ -5,7 +5,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}" && pwd)"
 # shellcheck source=scripts/lib.sh
-source "${SCRIPT_DIR}/scripts/lib.sh"
+if [[ -f "${SCRIPT_DIR}/scripts/lib.sh" ]]; then
+	source "${SCRIPT_DIR}/scripts/lib.sh"
+else
+	# Keep the dependency bootstrap path usable from a minimal extracted tree.
+	clear_parent_python_env() { :; }
+	ensure_docker_group_session() { :; }
+fi
 
 clear_parent_python_env
 ensure_docker_group_session "$@"
