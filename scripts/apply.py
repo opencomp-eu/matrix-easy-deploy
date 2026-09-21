@@ -2826,6 +2826,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.reconcile_runtime:
         run_runtime_reconcile(ctx)
         restarted = True
+        from scripts.update import record_current_lock
+
+        record_current_lock(project_root=ctx.project_root)
     if not args.skip_auto_join_provision:
         config = load_config(ctx)
         reconcile_auto_join_rooms(ctx, config, after_restart=restarted)

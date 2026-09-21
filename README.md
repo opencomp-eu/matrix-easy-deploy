@@ -869,7 +869,7 @@ matrix-easy-deploy/
 ├── matrix-wizard.sh                      # Wizard implementation
 ├── start.sh                      # Bring everything back up
 ├── stop.sh                       # Bring everything down (data is preserved)
-├── update.sh                     # Pull latest images and restart
+├── update.sh                     # Pull git + images; skip if update.lock matches
 │
 ├── caddy/
 │   ├── docker-compose.yml        # Caddy service definition
@@ -1089,7 +1089,7 @@ bash stop.sh
 bash start.sh
 ```
 
-**Update images to the latest release**
+**Update images (skips restarts when nothing changed)**
 ```bash
 bash update.sh
 ```
