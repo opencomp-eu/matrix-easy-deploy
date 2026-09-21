@@ -44,6 +44,7 @@ _EASYDEPLOY_LIB_PYTHON = Path(__file__).resolve().parent.parent / "easydeploy-li
 if _EASYDEPLOY_LIB_PYTHON.is_dir() and str(_EASYDEPLOY_LIB_PYTHON) not in sys.path:
     sys.path.insert(0, str(_EASYDEPLOY_LIB_PYTHON))
 import backup_schedule  # noqa: E402  (easydeploy-lib/python/backup_schedule.py)
+import edlog  # noqa: E402
 
 
 DEFAULT_SECRET_KEYS = [
@@ -2828,10 +2829,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_auto_join_provision:
         config = load_config(ctx)
         reconcile_auto_join_rooms(ctx, config, after_restart=restarted)
-    print("Configuration applied successfully.")
-    print("Generated .env file and rendered templates.")
-    if args.reconcile_runtime:
-        print("Runtime reconciled via stop/start.")
+    if not edlog.is_quiet():
+        print("Configuration applied successfully.")
+        print("Generated .env file and rendered templates.")
+        if args.reconcile_runtime:
+            print("Runtime reconciled via stop/start.")
     return 0
 
 
