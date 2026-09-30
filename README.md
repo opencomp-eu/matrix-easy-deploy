@@ -611,6 +611,8 @@ Bulwark can show Element inline. Element (and Caddy) default to `frame-ancestors
 
 On a same-VPS engine install, re-run `bash apply.sh` in easydeploy-engine. It writes `.matrix-easy-deploy/integration/embed.yaml` from `bulwark.domain` (whatever hostname you gave webmail). This kit then lets that origin embed Element, including when Element is on a separate host such as `chat.example.com`.
 
+Element sign-in then redirects that iframe to Kanidm. Bulwark's `frame-src` only lists the embedded app origins, so the login page is blocked until Stalwart's Caddy adds the IdP origin and Kanidm allows the webmail origin to frame it. After sign-in, Element refreshes the session by opening Kanidm in a second, nested iframe. That frame's ancestors are both webmail and Element, so Kanidm's `frame-ancestors` must list both or Element restarts login and the iframe reloads continuously. Engine apply writes those origins. Re-apply if the iframe refreshes right after a successful sign-in.
+
 Standalone, or for extra parents:
 
 ```yaml

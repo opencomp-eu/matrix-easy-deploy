@@ -1602,7 +1602,10 @@ def create_or_update_secrets(
     state["LIVEKIT_KEY"] = "matrix"
 
     ctx.state_dir.mkdir(parents=True, exist_ok=True)
-    with (ctx.state_dir / "secrets.yaml").open("w") as f:
+    secrets_path = ctx.state_dir / "secrets.yaml"
+    secrets_path.touch(mode=0o600, exist_ok=True)
+    secrets_path.chmod(0o600)
+    with secrets_path.open("w") as f:
         yaml.safe_dump(state, f, default_flow_style=False, sort_keys=True)
 
     return state
