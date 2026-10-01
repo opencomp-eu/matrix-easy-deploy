@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/lib.sh"
 
 ARCHIVE_NAME=""
+LATEST="false"
 PORTABLE_FILE=""
 ASSUME_YES="false"
 KEEP_STOPPED="false"
@@ -25,11 +26,13 @@ print_help() {
     cat <<EOF
 Usage:
   bash restore.sh --archive <archive-name> [--yes] [--keep-stopped]
+  bash restore.sh --latest [--yes] [--keep-stopped]
   bash restore.sh --file <portable-archive> [--encrypt] [--passphrase-file PATH] [--yes] [--keep-stopped]
   bash restore.sh --list
 
 Options:
   --archive NAME        Archive name to restore, or a unique archive ID prefix.
+  --latest              Restore the newest archive in the repository.
   --file PATH           Restore from a portable .tar.gz or .tar.gz.age archive.
   --list                List available archive names in the configured repository.
   --encrypt             Decrypt an age-encrypted portable archive (.tar.gz.age).
@@ -170,6 +173,9 @@ main() {
                 [[ -n "$ARCHIVE_NAME" ]] || die "--archive requires a value"
                 shift
                 ;;
+            --latest)
+                LATEST="true"
+                ;;
             --file)
                 PORTABLE_FILE="${2:-}"
                 [[ -n "$PORTABLE_FILE" ]] || die "--file requires a value"
@@ -206,8 +212,11 @@ main() {
     require_command python3
     require_command docker
 
-    if [[ -n "${PORTABLE_FILE}" && -n "${ARCHIVE_NAME}" ]]; then
-        die "Provide either --archive or --file, not both."
+    if [[ -n "${PORTABLE_FILE}" && ( -n "${ARCHIVE_NAME}" || "${LATEST}" == "true" ) ]]; then
+        die "Provide either --file or --archive/--latest, not both."
+    fi
+    if [[ -n "${ARCHIVE_NAME}" && "${LATEST}" == "true" ]]; then
+        die "Provide either --archive or --latest, not both."
     fi
     [[ -z "${PASSPHRASE_FILE}" ]] || export PASSPHRASE_FILE
 
@@ -244,7 +253,7 @@ main() {
         exit 0
     fi
 
-    [[ -n "${ARCHIVE_NAME}" ]] || die "Provide --archive <archive-name>, --file <portable-archive>, or use --list"
+    [[ -n "${ARCHIVE_NAME}" || "${LATEST}" == "true" ]] || die "Provide --archive <archive-name>, --latest, --file <portable-archive>, or use --list"
 
     require_command borg
     require_command borgmatic
@@ -254,7 +263,12 @@ main() {
     easydeploy_backup_repo_env "${SECRETS_FILE_PATH}"
     write_borgmatic_config
 
-    ARCHIVE_NAME="$(easydeploy_backup_resolve_archive "${BACKUP_REPO_URL}" "${ARCHIVE_NAME}")"
+    if [[ "${LATEST}" == "true" ]]; then
+        ARCHIVE_NAME="$(borg list --short --last 1 "${BACKUP_REPO_URL}")"
+        [[ -n "${ARCHIVE_NAME}" ]] || die "No archives found in ${BACKUP_REPO_URL}."
+    else
+        ARCHIVE_NAME="$(easydeploy_backup_resolve_archive "${BACKUP_REPO_URL}" "${ARCHIVE_NAME}")"
+    fi
 
     confirm_restore || {
         info "Restore cancelled."
