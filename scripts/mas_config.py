@@ -808,7 +808,7 @@ def _generate_mas_signing_material_docker() -> dict[str, Any]:
             "docker",
             "run",
             "--rm",
-            "ghcr.io/element-hq/matrix-authentication-service:latest",
+            "ghcr.io/element-hq/matrix-authentication-service:1.26.0@sha256:e089f1048a1d4a9a492ed17b9fe759100f1bd619407b001f5927928d88b780c4",
             "config",
             "generate",
         ],

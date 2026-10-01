@@ -68,11 +68,10 @@ class SmokeWorkflowTests(unittest.TestCase):
         with patch("scripts.apply.subprocess.run") as mock_run:
             apply.run_runtime_reconcile(ctx)
 
-        self.assertEqual(mock_run.call_count, 2)
-        first = mock_run.call_args_list[0].args[0]
-        second = mock_run.call_args_list[1].args[0]
-        self.assertTrue(str(first[1]).endswith("stop.sh"))
-        self.assertTrue(str(second[1]).endswith("start.sh"))
+        scripts = [call.args[0] for call in mock_run.call_args_list if call.args[0][0] == "bash"]
+        self.assertEqual(len(scripts), 2)
+        self.assertTrue(str(scripts[0][1]).endswith("stop.sh"))
+        self.assertTrue(str(scripts[1][1]).endswith("start.sh"))
 
     def test_smoke_repeated_module_reapply(self):
         self._write_config(modules={"hookshot": {"enabled": True, "domain": "hookshot.example.com"}})

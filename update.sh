@@ -33,4 +33,8 @@ if [[ "$ensure_dependencies" == "true" ]]; then
 	bash "${SCRIPT_DIR}/ensure_dependencies.sh"
 fi
 
+# System python3 often lacks PyYAML on a fresh server; uv brings the project's own.
+if ! python3 -c 'import yaml' >/dev/null 2>&1 && command -v uv >/dev/null 2>&1; then
+	exec uv run --project "${SCRIPT_DIR}" python "${SCRIPT_DIR}/scripts/update.py" "${python_args[@]}"
+fi
 python3 "${SCRIPT_DIR}/scripts/update.py" "${python_args[@]}"

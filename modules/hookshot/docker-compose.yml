@@ -1,6 +1,6 @@
 services:
   hookshot:
-    image: halfshot/matrix-hookshot:latest
+    image: halfshot/matrix-hookshot:latest@sha256:8e6c1f9d2a949bb1025f01bf175ab9dde7e6650d39aa8781f3837d40af5b3484
     container_name: matrix-hookshot
     restart: unless-stopped
     # No host-port bindings needed — all traffic flows through the shared

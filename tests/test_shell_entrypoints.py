@@ -180,10 +180,52 @@ class ShellEntrypointTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            lines = events.read_text().splitlines()
+            lines = [line for line in events.read_text().splitlines() if "import yaml" not in line]
             self.assertEqual(lines[0], "ensure")
             self.assertIn("scripts/apply.py --project-root /srv/med --rotate-secrets", lines[1])
             self.assertNotIn("--ensure-dependencies", lines[1])
+
+    def test_apply_uses_uv_when_system_python_lacks_pyyaml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "events.log"
+
+            self._copy_executable(self.apply_script, root / "apply.sh")
+            (root / "scripts").mkdir(parents=True, exist_ok=True)
+            (root / "scripts/apply.py").write_text("print('stub')\n")
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir(parents=True, exist_ok=True)
+            self._write_executable(
+                fake_bin / "python3",
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$1\" == \"-c\" ]]; then exit 1; fi\n"
+                "echo python3:$* >> \"$EVENTS\"\n",
+            )
+            self._write_executable(
+                fake_bin / "uv",
+                "#!/usr/bin/env bash\n"
+                "echo uv:$* >> \"$EVENTS\"\n",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            env["EVENTS"] = str(events)
+
+            result = subprocess.run(
+                ["bash", "apply.sh", "--rotate-secrets"],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            lines = events.read_text().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertTrue(lines[0].startswith("uv:run --project "), lines[0])
+            self.assertIn("scripts/apply.py --rotate-secrets", lines[0])
 
     def test_create_account_noninteractive_keeps_nonce_output_clean(self):
         with tempfile.TemporaryDirectory() as tmp:

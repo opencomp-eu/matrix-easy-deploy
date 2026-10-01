@@ -37,7 +37,7 @@ CORE_SYNAPSE_DATA_DIR="${PROJECT_ROOT}/modules/core/synapse_data"
 HOMESERVER_CONFIG=""
 CADDYFILE="${PROJECT_ROOT}/caddy/Caddyfile"
 
-BRIDGE_IMAGE="dock.mau.dev/mautrix/whatsapp:latest"
+BRIDGE_IMAGE="dock.mau.dev/mautrix/whatsapp:latest@sha256:e73b19ee8c7069468afbcdee59fa9f60ea884e73106f50c3ce52661140b26564"
 BRIDGE_CONTAINER="mautrix-whatsapp"
 BRIDGE_PORT="29318"
 APP_SERVICE_CHANGED="0"

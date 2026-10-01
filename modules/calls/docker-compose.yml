@@ -1,7 +1,7 @@
 # Compose env: modules/calls/.env is symlinked to ../../.env by apply.sh.
 services:
   coturn:
-    image: coturn/coturn:latest
+    image: coturn/coturn:4.18.0@sha256:bbefd3e1fdfdc0d58770fe01b581fd8b00d9f3a5580d00acb77cf719a6bc78e3
     container_name: matrix_coturn
     restart: unless-stopped
     # host networking is required so coturn can bind UDP relay ports directly
@@ -11,7 +11,7 @@ services:
       - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
 
   livekit:
-    image: livekit/livekit-server:latest
+    image: livekit/livekit-server:v1.13.7@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3
     container_name: matrix_livekit
     restart: unless-stopped
     # Host networking binds WebRTC UDP ports on the host directly (no per-port
@@ -22,7 +22,7 @@ services:
       - ./livekit/livekit.yaml:/livekit.yaml:ro
 
   lk-jwt-service:
-    image: ghcr.io/element-hq/lk-jwt-service:latest
+    image: ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e2342a3e79d47e1d4ab4bd228fe05b1a4dc4ba7f807686b0c214b
     container_name: matrix_lk_jwt_service
     restart: unless-stopped
     environment:
@@ -40,7 +40,7 @@ services:
       - caddy_net
 
   guest-tuwunel:
-    image: ghcr.io/matrix-construct/tuwunel:latest
+    image: ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0
     container_name: matrix_guest_tuwunel
     profiles:
       - guest-calls

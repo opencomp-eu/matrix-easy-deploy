@@ -37,7 +37,7 @@ CORE_SYNAPSE_DATA_DIR="${PROJECT_ROOT}/modules/core/synapse_data"
 HOMESERVER_CONFIG=""
 CADDYFILE="${PROJECT_ROOT}/caddy/Caddyfile"
 
-BRIDGE_IMAGE="dock.mau.dev/mautrix/slack:latest"
+BRIDGE_IMAGE="dock.mau.dev/mautrix/slack:latest@sha256:1546a64a65e2719a845640b0535afdb48f52b9b9b7dfcd0bce18b6548a7da214"
 BRIDGE_CONTAINER="mautrix-slack"
 BRIDGE_PORT="29335"
 APP_SERVICE_CHANGED="0"

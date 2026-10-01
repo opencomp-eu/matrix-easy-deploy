@@ -3,6 +3,7 @@
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -283,7 +284,6 @@ def render_integrate_compose_overlays(ctx: ApplyContext, config: dict) -> None:
 
     core = _network_overlay(
         {
-            "redis": {"networks": list(dual_internal)},
             "synapse": {"networks": list(dual_internal)},
             "tuwunel": {"networks": list(dual_internal)},
             "element": {"networks": list(dual)},
@@ -2764,10 +2764,79 @@ def reconcile_auto_join_rooms(ctx: ApplyContext, config: dict, *, after_restart:
     print("Auto-join rooms: provisioning complete.")
 
 
-def run_runtime_reconcile(ctx: ApplyContext) -> None:
-    # Reconcile running services to match current desired state.
-    subprocess.run(["bash", str(ctx.project_root / "stop.sh")], check=True)
+RUNTIME_FINGERPRINT_SUFFIXES = frozenset(
+    {".env", ".yaml", ".yml", ".json", ".toml", ".conf", ".pem", ".key"}
+)
+RUNTIME_FINGERPRINT_NAMES = frozenset({".env", "Caddyfile"})
+# Container data, tooling, and our own state never decide whether services need a bounce.
+RUNTIME_FINGERPRINT_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".github",
+        ".venv",
+        ".pycache",
+        ".pytest_cache",
+        "__pycache__",
+        ".matrix-easy-deploy",
+        "easydeploy-lib",
+        "tests",
+        "node_modules",
+        "synapse_data",
+        "tuwunel_data",
+        "cryptostore",
+    }
+)
+
+
+def runtime_config_files(project_root: Path) -> list[Path]:
+    files: list[Path] = []
+    for directory, subdirs, names in os.walk(project_root):
+        subdirs[:] = sorted(name for name in subdirs if name not in RUNTIME_FINGERPRINT_SKIP_DIRS)
+        for name in sorted(names):
+            path = Path(directory) / name
+            if name in RUNTIME_FINGERPRINT_NAMES or path.suffix in RUNTIME_FINGERPRINT_SUFFIXES:
+                files.append(path)
+    return files
+
+
+def runtime_config_fingerprint(ctx: ApplyContext) -> str:
+    """Hash the rendered config containers read; compose cannot see edits to bind-mounted files."""
+    digest = hashlib.sha256()
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(ctx.project_root),
+        capture_output=True,
+        text=True,
+    )
+    digest.update(f"git:{head.stdout.strip() if head.returncode == 0 else ''}\0".encode())
+    for path in runtime_config_files(ctx.project_root):
+        digest.update(f"{path.relative_to(ctx.project_root)}\0".encode())
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(b"<unreadable>")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def runtime_fingerprint_path(ctx: ApplyContext) -> Path:
+    return ctx.state_dir / "runtime-config.sha256"
+
+
+def run_runtime_reconcile(ctx: ApplyContext, *, force_restart: bool = False) -> bool:
+    """Bring services to the desired state; returns True when the stack was bounced."""
+    fingerprint = runtime_config_fingerprint(ctx)
+    marker = runtime_fingerprint_path(ctx)
+    previous = marker.read_text().strip() if marker.is_file() else ""
+    bounce = force_restart or fingerprint != previous
+    if bounce:
+        subprocess.run(["bash", str(ctx.project_root / "stop.sh")], check=True)
+    else:
+        print("Configuration unchanged; starting any stopped services without a restart.")
     subprocess.run(["bash", str(ctx.project_root / "start.sh")], check=True)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(fingerprint + "\n")
+    return bounce
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -2827,19 +2896,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     restarted = False
     if args.reconcile_runtime:
-        run_runtime_reconcile(ctx)
-        restarted = True
+        restarted = run_runtime_reconcile(ctx, force_restart=args.rotate_secrets)
         from scripts.update import record_current_lock
 
         record_current_lock(project_root=ctx.project_root)
     if not args.skip_auto_join_provision:
         config = load_config(ctx)
-        reconcile_auto_join_rooms(ctx, config, after_restart=restarted)
+        # start.sh may still recreate services whose image or compose definition changed.
+        reconcile_auto_join_rooms(ctx, config, after_restart=args.reconcile_runtime)
     if not edlog.is_quiet():
         print("Configuration applied successfully.")
         print("Generated .env file and rendered templates.")
-        if args.reconcile_runtime:
+        if restarted:
             print("Runtime reconciled via stop/start.")
+        elif args.reconcile_runtime:
+            print("Runtime reconciled without a restart.")
     return 0
 
 

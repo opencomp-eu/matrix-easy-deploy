@@ -29,7 +29,7 @@ class TuwunelAdmin:
         base_url: str = "",
         registration_token: str = "",
         project_root: Path | None = None,
-        image: str = "ghcr.io/matrix-construct/tuwunel:latest",
+        image: str = "ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0",
     ) -> None:
         self.container = container
         self.binary = binary

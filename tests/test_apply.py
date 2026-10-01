@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from io import StringIO
@@ -1448,11 +1449,10 @@ class ApplyTests(unittest.TestCase):
         with patch("scripts.apply.subprocess.run") as mock_run:
             apply.run_runtime_reconcile(ctx)
 
-        self.assertEqual(mock_run.call_count, 2)
-        first_args = mock_run.call_args_list[0].args[0]
-        second_args = mock_run.call_args_list[1].args[0]
-        self.assertTrue(str(first_args[1]).endswith("stop.sh"))
-        self.assertTrue(str(second_args[1]).endswith("start.sh"))
+        scripts = [call.args[0] for call in mock_run.call_args_list if call.args[0][0] == "bash"]
+        self.assertEqual(len(scripts), 2)
+        self.assertTrue(str(scripts[0][1]).endswith("stop.sh"))
+        self.assertTrue(str(scripts[1][1]).endswith("start.sh"))
 
     def test_parse_args_reconciles_runtime_by_default(self):
         args = apply.parse_args([])
@@ -1752,3 +1752,77 @@ class ApplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _runtime_project(tmp_path):
+    (tmp_path / "modules" / "core" / "synapse").mkdir(parents=True)
+    (tmp_path / "modules" / "core" / "synapse_data").mkdir()
+    (tmp_path / ".env").write_text("HOOKSHOT_ENABLED=false\n")
+    (tmp_path / "modules" / "core" / "synapse" / "homeserver.yaml").write_text("server_name: a\n")
+    (tmp_path / "modules" / "core" / "synapse_data" / "homeserver.log").write_text("noise\n")
+    return apply.ApplyContext(tmp_path)
+
+
+def test_runtime_reconcile_only_bounces_when_rendered_config_changes(monkeypatch, tmp_path):
+    ctx = _runtime_project(tmp_path)
+    calls: list[str] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[0] == "bash":
+            calls.append(Path(cmd[1]).name)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 1, "", "not a git repo")
+
+    monkeypatch.setattr(apply.subprocess, "run", fake_run)
+
+    assert apply.run_runtime_reconcile(ctx) is True
+    assert calls == ["stop.sh", "start.sh"]
+
+    calls.clear()
+    (tmp_path / "modules" / "core" / "synapse_data" / "homeserver.log").write_text("more noise\n")
+    assert apply.run_runtime_reconcile(ctx) is False
+    assert calls == ["start.sh"]
+
+    calls.clear()
+    (tmp_path / "modules" / "core" / "synapse" / "homeserver.yaml").write_text("server_name: b\n")
+    assert apply.run_runtime_reconcile(ctx) is True
+    assert calls == ["stop.sh", "start.sh"]
+
+    calls.clear()
+    (tmp_path / ".env").write_text("HOOKSHOT_ENABLED=true\n")
+    assert apply.run_runtime_reconcile(ctx) is True
+    assert calls == ["stop.sh", "start.sh"]
+
+
+def test_runtime_reconcile_force_restart(monkeypatch, tmp_path):
+    ctx = _runtime_project(tmp_path)
+    calls: list[str] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[0] == "bash":
+            calls.append(Path(cmd[1]).name)
+        return subprocess.CompletedProcess(cmd, 0, "abc123\n", "")
+
+    monkeypatch.setattr(apply.subprocess, "run", fake_run)
+    apply.run_runtime_reconcile(ctx)
+    calls.clear()
+    assert apply.run_runtime_reconcile(ctx, force_restart=True) is True
+    assert calls == ["stop.sh", "start.sh"]
+
+
+def test_runtime_reconcile_bounces_after_kit_code_update(monkeypatch, tmp_path):
+    ctx = _runtime_project(tmp_path)
+    calls: list[str] = []
+    head = {"sha": "commit-1"}
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[0] == "bash":
+            calls.append(Path(cmd[1]).name)
+        return subprocess.CompletedProcess(cmd, 0, head["sha"] + "\n", "")
+
+    monkeypatch.setattr(apply.subprocess, "run", fake_run)
+    apply.run_runtime_reconcile(ctx)
+    head["sha"] = "commit-2"
+    calls.clear()
+    assert apply.run_runtime_reconcile(ctx) is True
+    assert calls == ["stop.sh", "start.sh"]
