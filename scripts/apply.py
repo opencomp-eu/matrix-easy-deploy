@@ -2608,6 +2608,20 @@ def reconcile_hookshot_caddy(ctx: ApplyContext, config: dict, derived: dict) -> 
             print("Hookshot Caddy reconciliation: removed managed block")
 
 
+def ensure_audit_spool(ctx: ApplyContext) -> None:
+    """Directory Synapse appends login and membership events to.
+
+    The engine may replace this path with a symlink into its private audit
+    directory. mkdir on an existing symlink is a no-op.
+    """
+    spool = ctx.project_root / "modules" / "core" / "audit-spool"
+    spool.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(spool, 0o1733)
+    except OSError:
+        pass
+
+
 def apply_configuration(
     ctx: ApplyContext,
     server_ip: str | None = None,
@@ -2615,6 +2629,7 @@ def apply_configuration(
     reconcile_modules: bool = True,
 ) -> None:
     config = load_config(ctx)
+    ensure_audit_spool(ctx)
     if mas_config.ensure_sso_provider_ids(config):
         save_config(ctx, config)
         print("Assigned stable upstream SSO provider IDs in deploy.yaml")

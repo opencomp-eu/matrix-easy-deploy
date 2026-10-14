@@ -43,6 +43,12 @@ services:
       - ./synapse_data:/data
       - ./synapse/homeserver.yaml:/data/homeserver.yaml:ro
       - ./synapse/log.config:/data/log.config:ro
+      - ./audit-spool:/var/lib/easydeploy-audit
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     networks:
       - matrix_internal
       - caddy_net

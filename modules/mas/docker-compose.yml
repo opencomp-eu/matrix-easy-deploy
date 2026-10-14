@@ -8,6 +8,11 @@ services:
     command: ["server", "-c", "/config/config.yaml"]
     volumes:
       - ./config.yaml:/config/config.yaml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     networks:
       matrix_internal:
         aliases:
