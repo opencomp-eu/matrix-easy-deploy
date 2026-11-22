@@ -85,7 +85,7 @@ services:
       start_period: 30s
 
   element:
-    image: ghcr.io/element-hq/element-web:v1.12.30@sha256:3e7dbd4424de9e11c812bc740acf2725b2abe66ea0d0802023b56fd85d3fa09a
+    image: ghcr.io/element-hq/element-web:v1.12.35@sha256:406b48b80153818284a235fa3600b2a5b5b6b0aa0e4ef4896b36d8d3461352f3
     container_name: matrix_element
     restart: unless-stopped
     profiles:
