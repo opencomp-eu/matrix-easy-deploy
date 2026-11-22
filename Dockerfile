@@ -1,4 +1,4 @@
-FROM docker:27-cli
+FROM docker:28-cli
 
 RUN apk add --no-cache bash curl openssl python3 git
 
