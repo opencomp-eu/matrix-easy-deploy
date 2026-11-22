@@ -1,6 +1,6 @@
 services:
   draupnir:
-    image: gnuxie/draupnir:latest@sha256:73ec686da490a01e9cb6473ae186f73ab2bc399984f2979efa7c40152c2dbb2a
+    image: gnuxie/draupnir:latest@sha256:2b5e04b059df00c0de676ebbe86c710e6626c4639cd8a307164de9cbf76cf0ae
     container_name: matrix-draupnir
     restart: unless-stopped
     volumes:
