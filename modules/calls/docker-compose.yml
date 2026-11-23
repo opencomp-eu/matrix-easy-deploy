@@ -1,7 +1,7 @@
 # Compose env: modules/calls/.env is symlinked to ../../.env by apply.sh.
 services:
   coturn:
-    image: coturn/coturn:4.18.0@sha256:bbefd3e1fdfdc0d58770fe01b581fd8b00d9f3a5580d00acb77cf719a6bc78e3
+    image: coturn/coturn:4.19.2@sha256:ccdbc51e6f072130b0fc9eebda21f8d026d0a25581746c52557e887818011a3f
     container_name: matrix_coturn
     restart: unless-stopped
     # host networking is required so coturn can bind UDP relay ports directly
