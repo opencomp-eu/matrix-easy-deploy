@@ -1,6 +1,6 @@
 services:
   mautrix-whatsapp:
-    image: dock.mau.dev/mautrix/whatsapp:latest@sha256:2286305d5511597760eb6a03bf95675c7b135ebc73d13f725b2079d677d778f4
+    image: dock.mau.dev/mautrix/whatsapp:latest@sha256:3a09fe96a167a66577893966ae9f67b061ff580d1126ecad04b490c7908b0b01
     container_name: mautrix-whatsapp
     restart: unless-stopped
     # No host-port bindings needed — Synapse reaches the bridge via caddy_net
