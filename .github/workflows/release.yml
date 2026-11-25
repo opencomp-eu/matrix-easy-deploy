@@ -24,7 +24,7 @@ jobs:
       homebrew_enabled: ${{ steps.channels.outputs.homebrew_enabled }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
@@ -95,7 +95,7 @@ jobs:
           sha256sum "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: release-assets
           path: |
@@ -130,7 +130,7 @@ jobs:
     needs: prepare
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: release-assets
 
@@ -149,7 +149,7 @@ jobs:
     needs: prepare
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -181,7 +181,7 @@ jobs:
     if: ${{ needs.prepare.outputs.dockerhub_enabled == 'true' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -214,7 +214,7 @@ jobs:
     if: ${{ needs.prepare.outputs.homebrew_enabled == 'true' }}
     steps:
       - name: Download release archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: release-assets
 
