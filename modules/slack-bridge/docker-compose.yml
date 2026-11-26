@@ -1,6 +1,6 @@
 services:
   mautrix-slack:
-    image: dock.mau.dev/mautrix/slack:latest@sha256:83f538c26debefd63716ee6c6c37185dce28fb65de32d8d1bc12102151c52a4d
+    image: dock.mau.dev/mautrix/slack:latest@sha256:06eeb70e989d0e450535701dd9860aa0064e6a16d8ff033044239781973c63ad
     container_name: mautrix-slack
     restart: unless-stopped
     # No host-port bindings needed — Synapse reaches the bridge via caddy_net
